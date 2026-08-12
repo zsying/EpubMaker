@@ -31,12 +31,18 @@ go build ./...                 # 编译桌面后端
 go vet ./...                  # 静态检查
 go test ./...                 # 全部单测（e2e 需关闭沙箱，见下）
 go test ./internal/api/... -run TestE2ELifecycle   # 端到端冒烟（导入→阅读→拆分→导出→回收站）
-wails dev                     # 桌面开发：构建前端 + 启动 Go + 热更新
+wails dev                     # 桌面开发：后台起 vite watcher + 编译 Go + 窗口热更新
 wails build                   # 生产 exe（先构建前端）
 wails build -nsis             # Windows NSIS 安装包（含 .epub 文件关联，需本机装 NSIS）
-# 仅前端：
-npm run dev:web               # vite 开发服务器（7800）
+# 仓库根（推荐入口）：
+npm run dev:app               # = cd app && wails dev
+npm run build:app             # 生产构建
+npm run build:app:nsis        # 打安装包
+npm run dev:web               # 仅前端 vite（7800，无 Go 后端，不能调 /api）
 ```
+
+> `wails dev` 首次会静默编译 Go（含 modernc.org/sqlite）几十秒才弹窗，看到 vite `ready` 后**耐心等，别 Ctrl+C**。
+> 端口 7800 已设 `strictPort:true`：被上次残留的 vite 子进程占用时会直接报错而非静默死等，此时先 `taskkill /F /IM node.exe`。
 
 > 改动后端后**必须重启应用**，`/api/health` 只回 ok 不能证明新代码生效——发一个"只有新代码才支持"
 > 的请求确认，或核对进程启动时间。Go 是编译型，重建即生效。
@@ -129,3 +135,8 @@ cd app && go build ./... && go vet ./... && go test ./...
 | 拆分页左右一起滚 | Grid 行高按内容撑开 / 页面高度不确定 | 用 flex 分栏 + `min-height:0` + `overflow-y:auto`；页面高度用确定值（如 `calc(100vh - 56px)`） |
 | vite build 中断 | 沙箱 safe-delete 拦 `emptyOutDir` | 已设 `emptyOutDir:false`；必要时清掉 `web/dist` 里的旧哈希残留 |
 | `.epub` 双击打不开 | 没装 NSIS 安装包 / 没注册关联 | 用 `wails build -nsis` 安装；`main.go` 已解析命令行 .epub 并在 `Startup` 导入并 emit `epub:imported` 事件（前端需监听该事件刷新书架） |
+| `wails dev` 永久卡在 `Compiling frontend:` | `wails.json` 用了 `frontend:dev` 而非 `frontend:dev:watcher`。dev 模式下该字段被当"一次性构建命令"用 `cmd.Run()` **阻塞**执行，而 `npm run dev`(vite) 是长驻服务器永不退出 | 必须写 `"frontend:dev:watcher": "npm run dev"` + `"frontend:dev:serverUrl": "auto"`；注意键名是 `frontend:dev:serverUrl`（不是 `frontend:devserverurl`），写错会被静默忽略 |
+| `json: cannot unmarshal string into ... Project.Author` | Wails v2.11 起 `wails.json` 的 `author` 必须是对象 | 写成 `"author": { "name": "john" }` |
+| 打包报 `open epubFileIcon.png: file does not exist` | `info.fileAssociations[].iconName` 要求 `app/build/<iconName>.png` 存在，Wails 据此生成 `windows/<iconName>.ico` | 保证 `app/build/epubFileIcon.png` 在库（已提交）；换图标直接覆盖该 PNG（建议 ≥256×256） |
+| `wails build -nsis` 报创建安装包失败 | 本机没装 NSIS，`makensis` 不在 PATH | `winget install -e --id NSIS.NSIS` 后重跑 |
+| **整个目录凭空消失** | 对项目内目录执行 `rmdir`/`rm -rf` 时，删除会**级联蔓延到父目录**（实测 `rmdir app/installer` 把整个 `app/` 移进了回收站） | **禁止**对项目目录用 `rm`/`rmdir`。删文件只用 `git rm`（空目录 git 本来就不跟踪，不用管）。若已发生：跟踪文件用 `git checkout -- <dir>` 恢复，未跟踪文件去 `D:\$RECYCLE.BIN\<SID>\` 找 `$R*` 载荷（`$I*` 是元数据，内含原路径）拷回 |

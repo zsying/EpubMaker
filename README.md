@@ -82,7 +82,8 @@ EpubMaker/
 ├── app/
 │   ├── main.go              # Wails 入口：组装 mux、绑定原生能力、解析命令行 .epub
 │   ├── wails.json           # Wails 配置（前端目录、NSIS、.epub 文件关联）
-│   ├── installer/info.json  # NSIS 安装包元数据
+│   ├── build/               # Wails 构建资产：appicon.png、epubFileIcon.png（.epub 关联图标）、
+│   │                        # windows/{info.json,installer/*.nsi}（NSIS 模板，bin/ 不入库）
 │   ├── internal/
 │   │   ├── api/             # 所有 /api 路由（books/trash/chapters/assets/webdav）
 │   │   ├── epub/            # OCF/OPF/NCX/NAV 解析与流式构建（零依赖）
