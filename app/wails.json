@@ -1,0 +1,14 @@
+{
+  "name": "EpubMaker",
+  "outputfilename": "EpubMaker.exe",
+  "frontend:dir": "../web",
+  "frontend:install": "npm install",
+  "frontend:build": "npm run build",
+  "frontend:dev": "npm run dev",
+  "frontend:port": 7800,
+  "frontend:devserverurl": "http://localhost:7800",
+  "wailsjsdir": "../web/src",
+  "author": "john",
+  "description": "EpubMaker desktop app (Go + TS / Wails)",
+  "tags": "desktop,epub"
+}
