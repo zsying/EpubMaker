@@ -11,17 +11,17 @@ import (
 	"github.com/wailsapp/wails/v2/pkg/options/assetserver"
 
 	"epubmaker-desktop/internal/api"
+	"epubmaker-desktop/internal/app"
 	"epubmaker-desktop/internal/db"
 	"epubmaker-desktop/internal/server"
 )
 
 func main() {
 	webDist := resolveWebDist()
+	// All /api routes are now served by the Go service. EPUBMAKER_API_UPSTREAM
+	// is only used as a safety-net reverse proxy for any route not yet handled
+	// by Go (defaults to empty = no proxy).
 	apiUpstream := os.Getenv("EPUBMAKER_API_UPSTREAM")
-	if apiUpstream == "" {
-		// During migration the not-yet-ported /api routes still live in Express.
-		apiUpstream = "http://127.0.0.1:7802"
-	}
 
 	// Open + migrate the database up front so schema issues fail fast.
 	if _, err := db.Open(); err != nil {
@@ -35,18 +35,22 @@ func main() {
 	// Mount Go-handled routes; they take precedence over the /api proxy.
 	api.Register(mux, apiUpstream)
 
+	appObj := app.NewApp()
+
 	err := wails.Run(&options.App{
 		Title:  "EpubMaker",
 		Width:  1180,
 		Height: 820,
 		// Wails serves our handler (static frontend + /api proxy) directly to the
-		// webview. The frontend calls /api same-origin, which we proxy to Express
-		// until each route is ported to Go. Single-binary embedding of web/dist is
-		// deferred to Phase 5.
+		// webview. The frontend calls /api same-origin. Since every route is now
+		// implemented in Go, no external Express backend is required.
 		AssetServer: &assetserver.Options{
 			Handler: mux,
 		},
+		// Expose native OS integrations (file dialog, etc.) to the frontend.
+		Bind: []any{appObj},
 		OnStartup: func(ctx context.Context) {
+			appObj.Startup(ctx)
 			log.Printf("[desktop] EpubMaker ready (webDist=%s, apiUpstream=%s)", webDist, apiUpstream)
 		},
 	})

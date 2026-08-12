@@ -33,6 +33,16 @@ func Register(mux *http.ServeMux, apiUpstream string) {
 		}
 		fail(w, http.StatusBadGateway, "api upstream unavailable")
 	})
+	// Import via multipart upload (browser file picker).
+	mux.HandleFunc("/api/books/import", func(w http.ResponseWriter, r *http.Request) {
+		importHandler(w, r, rp)
+	})
+	// Import by local filesystem paths (desktop native file dialog).
+	mux.HandleFunc("/api/books/import-paths", func(w http.ResponseWriter, r *http.Request) {
+		importPathsHandler(w, r, rp)
+	})
+	// /api/books/<id> and all its sub-resources (chapters, assets, render,
+	// covers, split, export). Exact patterns above win over this subtree.
 	mux.HandleFunc("/api/books/", func(w http.ResponseWriter, r *http.Request) {
 		booksSubHandler(w, r, rp)
 	})
@@ -50,6 +60,17 @@ func Register(mux *http.ServeMux, apiUpstream string) {
 	})
 	mux.HandleFunc("/api/trash/", func(w http.ResponseWriter, r *http.Request) {
 		trashSubHandler(w, r, rp)
+	})
+
+	// WebDAV (ported from Express).
+	mux.HandleFunc("/api/webdav/test", func(w http.ResponseWriter, r *http.Request) {
+		webdavTestHandler(w, r, rp)
+	})
+	mux.HandleFunc("/api/webdav/list", func(w http.ResponseWriter, r *http.Request) {
+		webdavListHandler(w, r, rp)
+	})
+	mux.HandleFunc("/api/webdav/import", func(w http.ResponseWriter, r *http.Request) {
+		webdavImportHandler(w, r, rp)
 	})
 }
 
