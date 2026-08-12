@@ -17,7 +17,7 @@ func newTestServer(t *testing.T) (*httptest.Server, func()) {
 	mustWrite(t, dir, "app.js", "console.log(1)")
 	mustWrite(t, dir, "assets/style.css", "body{}")
 
-	h := NewMux(Config{WebDist: dir})
+	h := NewMux(Config{Assets: os.DirFS(dir)})
 	srv := httptest.NewServer(h)
 	return srv, func() { srv.Close() }
 }
@@ -98,7 +98,7 @@ func TestTraversalBlocked(t *testing.T) {
 	srv, done := newTestServer(t)
 	defer done()
 
-	// Encoded traversal must not escape webDist; expect SPA fallback (200, index).
+	// Encoded traversal must not escape the asset root; expect SPA fallback.
 	code, body := get(t, srv.URL+"/%2e%2e/%2e%2e/etc/passwd")
 	if code != 200 || body != "<html>app</html>" {
 		t.Fatalf("traversal: code=%d body=%q (expected fallback to index)", code, body)

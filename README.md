@@ -81,9 +81,12 @@ cd app && go test ./internal/api/... -run TestE2ELifecycle
 EpubMaker/
 ├── app/
 │   ├── main.go              # Wails 入口：组装 mux、绑定原生能力、解析命令行 .epub
+│   ├── main_test.go         # 校验前端产物已 embed
 │   ├── wails.json           # Wails 配置（前端目录、NSIS、.epub 文件关联）
 │   ├── build/               # Wails 构建资产：appicon.png、epubFileIcon.png（.epub 关联图标）、
 │   │                        # windows/{info.json,installer/*.nsi}（NSIS 模板，bin/ 不入库）
+│   ├── frontend/dist/       # 占位目录，仅 .gitkeep 入库；wails build 时由 scripts/sync-frontend-dist.js
+│   │                        # 从 web/dist 镜像内容，再被 //go:embed 打包进二进制
 │   ├── internal/
 │   │   ├── api/             # 所有 /api 路由（books/trash/chapters/assets/webdav）
 │   │   ├── epub/            # OCF/OPF/NCX/NAV 解析与流式构建（零依赖）
@@ -92,9 +95,11 @@ EpubMaker/
 │   │   ├── webdav/          # WebDAV 客户端（test/list/import）
 │   │   ├── storage/         # 内容文件映射 + 回收站（软删除）
 │   │   ├── app/             # Wails 绑定（原生文件对话框、命令行导入）
-│   │   ├── server/          # 桌面 HTTP 表面（静态托管 + SPA 回退，无代理）
+│   │   ├── server/          # 桌面 HTTP 表面（SPA 回退，无代理）；静态文件由 Wails embed 直供
 │   │   ├── db/  config/  mime/
 │   └── go.mod
+├── scripts/
+│   └── sync-frontend-dist.js  # wails build 时把 web/dist 镜像到 app/frontend/dist
 └── web/src/
     ├── pages/{Library,Reader,Editor,Split}.tsx
     ├── api.ts  toast.tsx  styles.css

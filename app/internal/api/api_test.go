@@ -5,6 +5,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"testing"
 
 	"epubmaker-desktop/internal/server"
@@ -14,7 +15,7 @@ func TestHealthAndConfig(t *testing.T) {
 	// Isolate the data dir so the test doesn't touch the real ~/.epubmaker.
 	t.Setenv("EPUBMAKER_HOME", t.TempDir())
 
-	mux := server.NewMux(server.Config{WebDist: t.TempDir()})
+	mux := server.NewMux(server.Config{Assets: os.DirFS(t.TempDir())})
 	Register(mux)
 
 	srv := httptest.NewServer(mux)

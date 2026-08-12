@@ -1,76 +1,88 @@
 // Package server builds the desktop app's HTTP surface:
-//   - static hosting of the built frontend (web/dist) with SPA fallback
-//   - /api/* reverse proxy to the legacy Express backend for not-yet-migrated routes
+//   - static hosting of the built frontend with SPA fallback
+//   - /api/* routes are mounted by the api package before the mux is handed to Wails
 //
-// Go-handled /api routes are mounted on the returned mux (via the api package)
-// BEFORE the proxy, so migrated routes take precedence. During Phase 0 every
-// /api route is proxied; each phase narrows the proxy as routes are ported.
+// In production the frontend assets come from an embedded FS (see main.go).
+// In tests a temp dir wrapped with os.DirFS can be substituted.
 package server
 
 import (
 	"io"
+	"io/fs"
 	"net/http"
-	"os"
-	"path/filepath"
+	"path"
 	"strings"
 )
 
 // Config configures the desktop HTTP handler.
 type Config struct {
-	// WebDist is the absolute path to the built frontend (web/dist).
-	WebDist string
+	// Assets is the fs.FS containing the built frontend (e.g. embed.FS or os.DirFS).
+	Assets fs.FS
 }
 
-// NewMux builds the desktop HTTP mux: static frontend hosting only. All /api
-// routes are served by the Go backend (see the api package), so no reverse
-// proxy to a legacy Express backend is needed.
+// NewMux builds the desktop HTTP mux: static frontend hosting plus whatever
+// /api routes the caller mounts on it before passing it to Wails.
 func NewMux(c Config) *http.ServeMux {
 	mux := http.NewServeMux()
-	mux.Handle("/", spaHandler(c.WebDist))
+	mux.Handle("/", spaHandler(c.Assets))
 	return mux
 }
 
-// spaHandler serves static files from webDist and falls back to index.html for
-// client-side routes. It blocks path traversal outside webDist.
-func spaHandler(webDist string) http.Handler {
-	fs := http.FileServer(http.Dir(webDist))
+// spaHandler serves static files from assets and falls back to index.html for
+// client-side routes. fs.FS itself prevents escaping the root.
+func spaHandler(assets fs.FS) http.Handler {
+	fileServer := http.FileServer(http.FS(assets))
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet && r.Method != http.MethodHead {
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 			return
 		}
 
-		clean := filepath.Clean(r.URL.Path)
-		if clean == "/" || clean == "." || clean == string(os.PathSeparator) {
-			serveIndex(w, webDist)
+		clean := path.Clean(r.URL.Path)
+		if clean == "/" || clean == "." {
+			serveIndex(w, assets)
 			return
 		}
 
-		fp := filepath.Join(webDist, clean)
-		// Traversal guard: the resolved path must stay inside webDist.
-		if rel, err := filepath.Rel(webDist, fp); err != nil || strings.HasPrefix(rel, "..") || filepath.IsAbs(rel) {
-			serveIndex(w, webDist)
+		// fs.FS paths have no leading slash.
+		fp := strings.TrimPrefix(clean, "/")
+		if hasTraversal(fp) {
+			serveIndex(w, assets)
 			return
 		}
 
-		info, err := os.Stat(fp)
-		if err != nil || info.IsDir() {
-			// Unknown path -> SPA fallback to index.html.
-			serveIndex(w, webDist)
+		f, err := assets.Open(fp)
+		if err != nil {
+			serveIndex(w, assets)
 			return
 		}
-		fs.ServeHTTP(w, r)
+		stat, err := f.Stat()
+		_ = f.Close()
+		if err != nil || stat.IsDir() {
+			serveIndex(w, assets)
+			return
+		}
+
+		fileServer.ServeHTTP(w, r)
 	})
 }
 
-func serveIndex(w http.ResponseWriter, webDist string) {
-	fp := filepath.Join(webDist, "index.html")
-	f, err := os.Open(fp)
+func serveIndex(w http.ResponseWriter, assets fs.FS) {
+	f, err := assets.Open("index.html")
 	if err != nil {
-		http.Error(w, "frontend not built (web/dist missing)", http.StatusInternalServerError)
+		http.Error(w, "frontend not built (index.html missing)", http.StatusInternalServerError)
 		return
 	}
 	defer f.Close()
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	io.Copy(w, f)
+}
+
+func hasTraversal(p string) bool {
+	for _, part := range strings.Split(p, "/") {
+		if part == ".." {
+			return true
+		}
+	}
+	return false
 }

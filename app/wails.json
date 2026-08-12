@@ -3,7 +3,7 @@
   "outputfilename": "EpubMaker.exe",
   "frontend:dir": "../web",
   "frontend:install": "npm install",
-  "frontend:build": "npm run build",
+  "frontend:build": "npm run build && node ../scripts/sync-frontend-dist.js",
   "frontend:dev:watcher": "npm run dev",
   "frontend:dev:serverUrl": "auto",
   "wailsjsdir": "../web/src",

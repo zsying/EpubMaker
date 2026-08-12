@@ -49,7 +49,7 @@ func TestBooksRoutes(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	mux := server.NewMux(server.Config{WebDist: t.TempDir()})
+	mux := server.NewMux(server.Config{Assets: os.DirFS(t.TempDir())})
 	Register(mux)
 	srv := httptest.NewServer(mux)
 	defer srv.Close()

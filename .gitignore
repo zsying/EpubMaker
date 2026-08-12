@@ -1,5 +1,5 @@
 node_modules/
-dist/
+/dist/
 *.log
 .DS_Store
 .env
@@ -13,3 +13,7 @@ web/dist/
 app/build/bin/
 web/package.json.md5
 web/src/wailsjs/
+# 前端产物由 web/dist 复制到 app/frontend/dist 用于 go:embed；只保留 .gitkeep
+app/frontend/dist/*
+!app/frontend/dist/
+!app/frontend/dist/.gitkeep

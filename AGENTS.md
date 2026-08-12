@@ -16,11 +16,11 @@
   - `internal/webdav`：WebDAV 客户端（test/list/import）
   - `internal/storage`：zip 内路径 ↔ 磁盘映射 + 回收站（软删除）
   - `internal/app`：Wails 绑定（原生文件对话框、命令行 .epub 导入）
-  - `internal/server`：桌面 HTTP 表面（静态托管 web/dist + SPA 回退），**不含任何代理**
+  - `internal/server`：桌面 HTTP 表面（SPA 回退），**不含任何代理**；静态文件由 Wails 从 embed 直接提供
   - `internal/db`：modernc.org/sqlite（`database/sql`，纯 Go 无 cgo）
   - `internal/config`、`internal/mime`
-- `web/`：React 18 + Vite + TS 前端，构建到 `web/dist`，由 `server.NewMux` 托管。
-  Wails 构建时执行 `frontend:build`（`npm run build`）产出 `web/dist`。
+- `web/`：React 18 + Vite + TS 前端，构建到 `web/dist`。
+  Wails 构建时执行 `frontend:build`：`npm run build` 产出 `web/dist`，再由 `scripts/sync-frontend-dist.js` 镜像到 `app/frontend/dist`，最后由 `//go:embed all:frontend/dist` 打包进二进制。
 - `app/wails.json`：Wails 配置（前端目录、构建命令、NSIS 安装包、`.epub` 文件关联）。
 
 ## 常用命令
@@ -138,5 +138,6 @@ cd app && go build ./... && go vet ./... && go test ./...
 | `wails dev` 永久卡在 `Compiling frontend:` | `wails.json` 用了 `frontend:dev` 而非 `frontend:dev:watcher`。dev 模式下该字段被当"一次性构建命令"用 `cmd.Run()` **阻塞**执行，而 `npm run dev`(vite) 是长驻服务器永不退出 | 必须写 `"frontend:dev:watcher": "npm run dev"` + `"frontend:dev:serverUrl": "auto"`；注意键名是 `frontend:dev:serverUrl`（不是 `frontend:devserverurl`），写错会被静默忽略 |
 | `json: cannot unmarshal string into ... Project.Author` | Wails v2.11 起 `wails.json` 的 `author` 必须是对象 | 写成 `"author": { "name": "john" }` |
 | 打包报 `open epubFileIcon.png: file does not exist` | `info.fileAssociations[].iconName` 要求 `app/build/<iconName>.png` 存在，Wails 据此生成 `windows/<iconName>.ico` | 保证 `app/build/epubFileIcon.png` 在库（已提交）；换图标直接覆盖该 PNG（建议 ≥256×256） |
+| 运行 `EpubMaker.exe` 报 `frontend not built (web/dist missing)` | 旧实现从磁盘读 `web/dist`，生产二进制移走后找不到 | 已改为 `//go:embed all:frontend/dist`：Wails 构建时 `scripts/sync-frontend-dist.js` 把 `web/dist` 镜像到 `app/frontend/dist`，Go 编译时直接打包进二进制，exe 自带前端 |
 | `wails build -nsis` 报创建安装包失败 | 本机没装 NSIS，`makensis` 不在 PATH | `winget install -e --id NSIS.NSIS` 后重跑 |
 | **整个目录凭空消失** | 对项目内目录执行 `rmdir`/`rm -rf` 时，删除会**级联蔓延到父目录**（实测 `rmdir app/installer` 把整个 `app/` 移进了回收站） | **禁止**对项目目录用 `rm`/`rmdir`。删文件只用 `git rm`（空目录 git 本来就不跟踪，不用管）。若已发生：跟踪文件用 `git checkout -- <dir>` 恢复，未跟踪文件去 `D:\$RECYCLE.BIN\<SID>\` 找 `$R*` 载荷（`$I*` 是元数据，内含原路径）拷回 |
