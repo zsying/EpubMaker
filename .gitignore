@@ -7,3 +7,5 @@ dist/
 server/dist/
 web/dist/
 .workbuddy/
+
+**/*.exe
