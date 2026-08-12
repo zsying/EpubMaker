@@ -9,6 +9,22 @@
   "frontend:devserverurl": "http://localhost:7800",
   "wailsjsdir": "../web/src",
   "author": "john",
-  "description": "EpubMaker desktop app (Go + TS / Wails)",
-  "tags": "desktop,epub"
+  "description": "EpubMaker desktop app (Go + Wails)",
+  "tags": "desktop,epub",
+  "info": {
+    "companyName": "EpubMaker",
+    "productName": "EpubMaker",
+    "productVersion": "0.1.0",
+    "copyright": "Copyright © 2026 john",
+    "comments": "EPUB 电子书维护与生成工具（本地桌面应用）",
+    "fileAssociations": [
+      {
+        "ext": "epub",
+        "name": "EPUB 电子书",
+        "description": "EPUB 电子书文件",
+        "iconName": "epubFileIcon",
+        "role": "Editor"
+      }
+    ]
+  }
 }

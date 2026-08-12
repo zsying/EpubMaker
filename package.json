@@ -2,22 +2,17 @@
   "name": "epubmaker",
   "version": "0.1.0",
   "private": true,
-  "description": "EPUB 电子书维护与生成工具（Web 应用）",
+  "description": "EPUB 电子书维护与生成工具（本地桌面应用，Go + Wails）",
   "workspaces": [
-    "server",
     "web"
   ],
   "scripts": {
-    "dev": "concurrently -n server,web -c cyan,magenta \"npm:dev:server\" \"npm:dev:web\"",
-    "dev:server": "npm run dev --workspace server",
     "dev:web": "npm run dev --workspace web",
-    "build": "npm run build --workspace web && npm run build --workspace server",
-    "start": "npm run start --workspace server",
-    "test:e2e": "node scripts/e2e.mjs",
-    "typecheck": "npm run typecheck --workspace server && npm run typecheck --workspace web"
-  },
-  "devDependencies": {
-    "concurrently": "^9.1.2"
+    "build:web": "npm run build --workspace web",
+    "dev:app": "cd app && wails dev",
+    "build:app": "cd app && wails build",
+    "build:app:nsis": "cd app && wails build -nsis",
+    "test:e2e": "cd app && go test ./internal/api/... -run TestE2ELifecycle"
   },
   "engines": {
     "node": ">=20"

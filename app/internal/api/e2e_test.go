@@ -78,7 +78,7 @@ func TestE2ELifecycle(t *testing.T) {
 	}
 	defer db.Close()
 	mux := server.NewMux(server.Config{})
-	api.Register(mux, "")
+	api.Register(mux)
 
 	epubBytes := buildSampleEpub(t)
 

@@ -9,12 +9,8 @@ import (
 )
 
 // webdavTestHandler handles POST /api/webdav/test.
-func webdavTestHandler(w http.ResponseWriter, r *http.Request, rp http.Handler) {
+func webdavTestHandler(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
-		if rp != nil {
-			rp.ServeHTTP(w, r)
-			return
-		}
 		fail(w, http.StatusMethodNotAllowed, "方法不允许")
 		return
 	}
@@ -34,12 +30,8 @@ func webdavTestHandler(w http.ResponseWriter, r *http.Request, rp http.Handler) 
 }
 
 // webdavListHandler handles POST /api/webdav/list.
-func webdavListHandler(w http.ResponseWriter, r *http.Request, rp http.Handler) {
+func webdavListHandler(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
-		if rp != nil {
-			rp.ServeHTTP(w, r)
-			return
-		}
 		fail(w, http.StatusMethodNotAllowed, "方法不允许")
 		return
 	}
@@ -62,12 +54,8 @@ func webdavListHandler(w http.ResponseWriter, r *http.Request, rp http.Handler) 
 }
 
 // webdavImportHandler handles POST /api/webdav/import.
-func webdavImportHandler(w http.ResponseWriter, r *http.Request, rp http.Handler) {
+func webdavImportHandler(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
-		if rp != nil {
-			rp.ServeHTTP(w, r)
-			return
-		}
 		fail(w, http.StatusMethodNotAllowed, "方法不允许")
 		return
 	}

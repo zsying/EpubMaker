@@ -5,6 +5,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/wailsapp/wails/v2"
 	"github.com/wailsapp/wails/v2/pkg/options"
@@ -18,32 +19,28 @@ import (
 
 func main() {
 	webDist := resolveWebDist()
-	// All /api routes are now served by the Go service. EPUBMAKER_API_UPSTREAM
-	// is only used as a safety-net reverse proxy for any route not yet handled
-	// by Go (defaults to empty = no proxy).
-	apiUpstream := os.Getenv("EPUBMAKER_API_UPSTREAM")
 
 	// Open + migrate the database up front so schema issues fail fast.
 	if _, err := db.Open(); err != nil {
 		log.Fatalf("[desktop] open database: %v", err)
 	}
 
-	mux := server.NewMux(server.Config{
-		WebDist:     webDist,
-		APIUpstream: apiUpstream,
-	})
-	// Mount Go-handled routes; they take precedence over the /api proxy.
-	api.Register(mux, apiUpstream)
+	mux := server.NewMux(server.Config{WebDist: webDist})
+	// Mount Go-handled routes. The desktop backend serves every /api route
+	// directly, so no external Express backend is required.
+	api.Register(mux)
 
 	appObj := app.NewApp()
+	// .epub files passed on the command line (e.g. double-click / file
+	// association) are queued for import on startup.
+	appObj.QueueOpen(epubArgs(os.Args[1:]))
 
 	err := wails.Run(&options.App{
 		Title:  "EpubMaker",
 		Width:  1180,
 		Height: 820,
-		// Wails serves our handler (static frontend + /api proxy) directly to the
-		// webview. The frontend calls /api same-origin. Since every route is now
-		// implemented in Go, no external Express backend is required.
+		// Wails serves our handler (static frontend) directly to the webview.
+		// The frontend calls /api same-origin and the Go backend answers.
 		AssetServer: &assetserver.Options{
 			Handler: mux,
 		},
@@ -51,7 +48,7 @@ func main() {
 		Bind: []any{appObj},
 		OnStartup: func(ctx context.Context) {
 			appObj.Startup(ctx)
-			log.Printf("[desktop] EpubMaker ready (webDist=%s, apiUpstream=%s)", webDist, apiUpstream)
+			log.Printf("[desktop] EpubMaker ready (webDist=%s)", webDist)
 		},
 	})
 	if err != nil {
@@ -73,4 +70,16 @@ func resolveWebDist() string {
 		}
 	}
 	return "../web/dist"
+}
+
+// epubArgs returns the command-line arguments that look like .epub file paths,
+// supporting double-click-to-open / Windows file association.
+func epubArgs(args []string) []string {
+	out := make([]string, 0, len(args))
+	for _, a := range args {
+		if strings.EqualFold(filepath.Ext(a), ".epub") {
+			out = append(out, a)
+		}
+	}
+	return out
 }

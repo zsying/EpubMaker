@@ -1,6 +1,6 @@
 # EpubMaker
 
-EPUB 电子书维护与生成工具。本地运行的 Web 应用，用来把手上的 epub 导进来，读、改、拆、再导出去。
+EPUB 电子书维护与生成工具。本地运行的**桌面应用**（Wails v2，Go 后端 + TypeScript 前端），用来把手上的 epub 导进来，读、改、拆、再导出去。后端已用 Go 重写，不再依赖 Node 服务。
 
 - **导入** —— 拖入 epub，自动解析元数据、目录、章节与全部资源
 - **阅读** —— 侧栏目录 + 排版干净的阅读器，记住上次读到哪一章，方向键翻章
@@ -12,29 +12,32 @@ EPUB 电子书维护与生成工具。本地运行的 Web 应用，用来把手�
 
 | 层 | 选型 |
 | --- | --- |
-| 语言 | TypeScript（前后端统一） |
-| 后端 | Node.js + Express |
-| 数据库 | SQLite（`better-sqlite3`，缺原生模块时自动回退到内置 `node:sqlite`） |
-| EPUB 引擎 | 自研解析/生成（JSZip + fast-xml-parser），无第三方 epub 库 |
+| 语言 | Go（后端）+ TypeScript（前端） |
+| 桌面框架 | Wails v2（WebView2，单可执行文件） |
+| 后端 | Go（`app/internal/*`，零依赖 EPUB/XML/WebDAV，仅标准库 + Wails） |
+| 数据库 | SQLite（modernc.org/sqlite，纯 Go 无 cgo） |
+| EPUB 引擎 | 自研解析/生成（`app/internal/epub`），无第三方 epub 库 |
 | 前端 | React 18 + Vite + React Router，DOMPurify 净化正文 |
 
 ## 快速开始
 
 ```bash
-npm install
+# 桌面应用（需要 Go 工具链与 Wails CLI）
+cd app
+go build ./...          # 先确保后端编译通过
+wails dev               # 构建前端 + 启动桌面应用 + 热更新
+wails build             # 产出 EpubMaker.exe
+wails build -nsis       # 产出 Windows 安装包（含 .epub 文件关联，需本机装 NSIS）
 
-# 开发模式：后端 7801，前端 7800（自动代理 /api）
-npm run dev
-
-# 生产模式：构建后由后端一并托管前端
-npm run build
-npm start        # 打开 http://127.0.0.1:7801
+# 仅前端（可选）
+npm run dev:web         # vite 开发服务器
 ```
 
-端到端冒烟测试（隔离在临时目录里跑，不影响真实数据）：
+后端单元 / 端到端测试（隔离在临时目录里跑，不影响真实数据；涉及 SQLite 需关闭沙箱）：
 
 ```bash
-npm run build && npm run test:e2e
+cd app && go test ./...
+cd app && go test ./internal/api/... -run TestE2ELifecycle
 ```
 
 ## 存储位置
@@ -76,23 +79,24 @@ npm run build && npm run test:e2e
 
 ```
 EpubMaker/
-├── server/src/
-│   ├── config.ts            # 配置加载 + 目录初始化
-│   ├── logger.ts            # 按天切分的文件日志
-│   ├── db.ts                # SQLite 适配层（双驱动）+ 建表
-│   ├── routes.ts            # REST API
-│   ├── epub/
-│   │   ├── parse.ts         # container.xml / OPF / NCX / nav 解析
-│   │   ├── build.ts         # EPUB 3 生成
-│   │   ├── html.ts          # 正文抽取、链接改写、引用收集
-│   │   └── mime.ts
-│   └── services/
-│       ├── library.ts       # 导入 / 整理 / 拆分 / 导出业务逻辑
-│       └── storage.ts       # 内容文件读写（含路径穿越防护）
-├── web/src/
-│   ├── pages/{Library,Reader,Editor,Split}.tsx
-│   ├── api.ts  toast.tsx  styles.css
-└── scripts/e2e.mjs
+├── app/
+│   ├── main.go              # Wails 入口：组装 mux、绑定原生能力、解析命令行 .epub
+│   ├── wails.json           # Wails 配置（前端目录、NSIS、.epub 文件关联）
+│   ├── installer/info.json  # NSIS 安装包元数据
+│   ├── internal/
+│   │   ├── api/             # 所有 /api 路由（books/trash/chapters/assets/webdav）
+│   │   ├── epub/            # OCF/OPF/NCX/NAV 解析与流式构建（零依赖）
+│   │   ├── html/            # 正文抽取、链接改写、引用收集
+│   │   ├── library/         # 导入 / 渲染 / 导出 / 封面 / 拆分
+│   │   ├── webdav/          # WebDAV 客户端（test/list/import）
+│   │   ├── storage/         # 内容文件映射 + 回收站（软删除）
+│   │   ├── app/             # Wails 绑定（原生文件对话框、命令行导入）
+│   │   ├── server/          # 桌面 HTTP 表面（静态托管 + SPA 回退，无代理）
+│   │   ├── db/  config/  mime/
+│   └── go.mod
+└── web/src/
+    ├── pages/{Library,Reader,Editor,Split}.tsx
+    ├── api.ts  toast.tsx  styles.css
 ```
 
 ## API 一览

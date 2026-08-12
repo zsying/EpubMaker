@@ -17,12 +17,8 @@ import (
 /* ------------------------- import ------------------------- */
 
 // importHandler handles POST /api/books/import (multipart, field "files").
-func importHandler(w http.ResponseWriter, r *http.Request, rp http.Handler) {
+func importHandler(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
-		if rp != nil {
-			rp.ServeHTTP(w, r)
-			return
-		}
 		fail(w, http.StatusMethodNotAllowed, "方法不允许")
 		return
 	}
@@ -62,12 +58,8 @@ func importHandler(w http.ResponseWriter, r *http.Request, rp http.Handler) {
 
 // importPathsHandler handles POST /api/books/import-paths (JSON {paths:[]}) for
 // the desktop native file dialog — imports directly from local filesystem paths.
-func importPathsHandler(w http.ResponseWriter, r *http.Request, rp http.Handler) {
+func importPathsHandler(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
-		if rp != nil {
-			rp.ServeHTTP(w, r)
-			return
-		}
 		fail(w, http.StatusMethodNotAllowed, "方法不允许")
 		return
 	}
@@ -133,12 +125,8 @@ func readMultipartBytes(fh *multipart.FileHeader) ([]byte, error) {
 /* ------------------------- covers ------------------------- */
 
 // coversHandler handles POST /api/books/<id>/covers (multipart, field "cover").
-func coversHandler(w http.ResponseWriter, r *http.Request, id string, rp http.Handler) {
+func coversHandler(w http.ResponseWriter, r *http.Request, id string) {
 	if r.Method != http.MethodPost {
-		if rp != nil {
-			rp.ServeHTTP(w, r)
-			return
-		}
 		fail(w, http.StatusMethodNotAllowed, "方法不允许")
 		return
 	}
@@ -169,12 +157,8 @@ func coversHandler(w http.ResponseWriter, r *http.Request, id string, rp http.Ha
 /* ------------------------- split ------------------------- */
 
 // splitHandler handles POST /api/books/<id>/split.
-func splitHandler(w http.ResponseWriter, r *http.Request, id string, rp http.Handler) {
+func splitHandler(w http.ResponseWriter, r *http.Request, id string) {
 	if r.Method != http.MethodPost {
-		if rp != nil {
-			rp.ServeHTTP(w, r)
-			return
-		}
 		fail(w, http.StatusMethodNotAllowed, "方法不允许")
 		return
 	}
@@ -200,12 +184,8 @@ func splitHandler(w http.ResponseWriter, r *http.Request, id string, rp http.Han
 /* ------------------------- export ------------------------- */
 
 // exportHandler handles GET /api/books/<id>/export, streaming the built EPUB.
-func exportHandler(w http.ResponseWriter, r *http.Request, id string, rp http.Handler) {
+func exportHandler(w http.ResponseWriter, r *http.Request, id string) {
 	if r.Method != http.MethodGet {
-		if rp != nil {
-			rp.ServeHTTP(w, r)
-			return
-		}
 		fail(w, http.StatusMethodNotAllowed, "方法不允许")
 		return
 	}
@@ -227,12 +207,8 @@ func exportHandler(w http.ResponseWriter, r *http.Request, id string, rp http.Ha
 /* ------------------------- render ------------------------- */
 
 // renderHandler handles GET /api/books/<id>/chapters/<cid>/render.
-func renderHandler(w http.ResponseWriter, r *http.Request, id, cid string, rp http.Handler) {
+func renderHandler(w http.ResponseWriter, r *http.Request, id, cid string) {
 	if r.Method != http.MethodGet {
-		if rp != nil {
-			rp.ServeHTTP(w, r)
-			return
-		}
 		fail(w, http.StatusMethodNotAllowed, "方法不允许")
 		return
 	}

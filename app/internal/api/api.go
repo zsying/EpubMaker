@@ -6,45 +6,37 @@ package api
 import (
 	"encoding/json"
 	"net/http"
-	"net/http/httputil"
-	"net/url"
 	"time"
 
 	"epubmaker-desktop/internal/config"
 )
 
-// Register mounts the Go-handled API routes on mux. Exact/more-specific
-// patterns win over the /api proxy, so ported routes take precedence and the
-// rest are forwarded to apiUpstream (Express).
-func Register(mux *http.ServeMux, apiUpstream string) {
+// Register mounts the Go-handled API routes on mux. The desktop backend now
+// serves every /api route directly, so no reverse proxy to a legacy Express
+// backend is required.
+func Register(mux *http.ServeMux) {
 	mux.HandleFunc("/api/health", healthHandler)
 	mux.HandleFunc("/api/config", configHandler)
-
-	rp := buildProxy(apiUpstream)
 
 	mux.HandleFunc("/api/books", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodGet {
 			listBooksHandler(w, r)
 			return
 		}
-		if rp != nil {
-			rp.ServeHTTP(w, r)
-			return
-		}
-		fail(w, http.StatusBadGateway, "api upstream unavailable")
+		fail(w, http.StatusMethodNotAllowed, "方法不允许")
 	})
 	// Import via multipart upload (browser file picker).
 	mux.HandleFunc("/api/books/import", func(w http.ResponseWriter, r *http.Request) {
-		importHandler(w, r, rp)
+		importHandler(w, r)
 	})
 	// Import by local filesystem paths (desktop native file dialog).
 	mux.HandleFunc("/api/books/import-paths", func(w http.ResponseWriter, r *http.Request) {
-		importPathsHandler(w, r, rp)
+		importPathsHandler(w, r)
 	})
 	// /api/books/<id> and all its sub-resources (chapters, assets, render,
 	// covers, split, export). Exact patterns above win over this subtree.
 	mux.HandleFunc("/api/books/", func(w http.ResponseWriter, r *http.Request) {
-		booksSubHandler(w, r, rp)
+		booksSubHandler(w, r)
 	})
 
 	mux.HandleFunc("/api/trash", func(w http.ResponseWriter, r *http.Request) {
@@ -52,41 +44,22 @@ func Register(mux *http.ServeMux, apiUpstream string) {
 			trashListHandler(w, r)
 			return
 		}
-		if rp != nil {
-			rp.ServeHTTP(w, r)
-			return
-		}
-		fail(w, http.StatusBadGateway, "api upstream unavailable")
+		fail(w, http.StatusMethodNotAllowed, "方法不允许")
 	})
 	mux.HandleFunc("/api/trash/", func(w http.ResponseWriter, r *http.Request) {
-		trashSubHandler(w, r, rp)
+		trashSubHandler(w, r)
 	})
 
 	// WebDAV (ported from Express).
 	mux.HandleFunc("/api/webdav/test", func(w http.ResponseWriter, r *http.Request) {
-		webdavTestHandler(w, r, rp)
+		webdavTestHandler(w, r)
 	})
 	mux.HandleFunc("/api/webdav/list", func(w http.ResponseWriter, r *http.Request) {
-		webdavListHandler(w, r, rp)
+		webdavListHandler(w, r)
 	})
 	mux.HandleFunc("/api/webdav/import", func(w http.ResponseWriter, r *http.Request) {
-		webdavImportHandler(w, r, rp)
+		webdavImportHandler(w, r)
 	})
-}
-
-func buildProxy(upstream string) http.Handler {
-	if upstream == "" {
-		return nil
-	}
-	u, err := url.Parse(upstream)
-	if err != nil {
-		return nil
-	}
-	rp := httputil.NewSingleHostReverseProxy(u)
-	rp.ErrorHandler = func(w http.ResponseWriter, r *http.Request, err error) {
-		fail(w, http.StatusBadGateway, "api upstream unavailable: "+err.Error())
-	}
-	return rp
 }
 
 func ok(w http.ResponseWriter, data any) {

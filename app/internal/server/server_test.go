@@ -12,28 +12,14 @@ import (
 func newTestServer(t *testing.T) (*httptest.Server, func()) {
 	t.Helper()
 
-	// Fake "Express" upstream.
-	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch r.URL.Path {
-		case "/api/health":
-			w.Header().Set("Content-Type", "application/json")
-			w.Write([]byte(`{"ok":true,"data":{"status":"ok"}}`))
-		case "/api/books":
-			w.Header().Set("Content-Type", "application/json")
-			w.Write([]byte(`{"ok":true,"data":[]}`))
-		default:
-			w.WriteHeader(http.StatusNotFound)
-		}
-	}))
-
 	dir := t.TempDir()
 	mustWrite(t, dir, "index.html", "<html>app</html>")
 	mustWrite(t, dir, "app.js", "console.log(1)")
 	mustWrite(t, dir, "assets/style.css", "body{}")
 
-	h := NewMux(Config{WebDist: dir, APIUpstream: up.URL})
+	h := NewMux(Config{WebDist: dir})
 	srv := httptest.NewServer(h)
-	return srv, func() { srv.Close(); up.Close() }
+	return srv, func() { srv.Close() }
 }
 
 func mustWrite(t *testing.T, dir, name, content string) {
@@ -83,18 +69,17 @@ func TestStaticAsset(t *testing.T) {
 	}
 }
 
-func TestAPIProxy(t *testing.T) {
+// TestAPIRoutesServed reports that /api/* is owned by the Go backend, not a
+// proxy: an unregistered API path falls through to the SPA (index.html).
+func TestAPIRoutesServed(t *testing.T) {
 	srv, done := newTestServer(t)
 	defer done()
 
+	// No API route is mounted on this bare mux, so /api/health falls back to
+	// the SPA index (the real binary mounts the Go API via api.Register).
 	code, body := get(t, srv.URL+"/api/health")
-	if code != 200 || body == "" {
-		t.Fatalf("api/health: code=%d body=%q", code, body)
-	}
-
-	code, body = get(t, srv.URL+"/api/books")
-	if code != 200 || body == "" {
-		t.Fatalf("api/books: code=%d body=%q", code, body)
+	if code != 200 || body != "<html>app</html>" {
+		t.Fatalf("api fallback: code=%d body=%q (expected SPA index)", code, body)
 	}
 }
 

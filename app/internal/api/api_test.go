@@ -15,7 +15,7 @@ func TestHealthAndConfig(t *testing.T) {
 	t.Setenv("EPUBMAKER_HOME", t.TempDir())
 
 	mux := server.NewMux(server.Config{WebDist: t.TempDir()})
-	Register(mux, "")
+	Register(mux)
 
 	srv := httptest.NewServer(mux)
 	defer srv.Close()

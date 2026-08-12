@@ -13,8 +13,7 @@ import (
 
 /* ------------------------- /api/books ------------------------- */
 
-// listBooksHandler serves GET /api/books (ported). Other methods fall through
-// to the Express proxy.
+// listBooksHandler serves GET /api/books.
 func listBooksHandler(w http.ResponseWriter, r *http.Request) {
 	kw := strings.TrimSpace(r.URL.Query().Get("keyword"))
 	books, err := library.ListBooks(kw)
@@ -25,15 +24,13 @@ func listBooksHandler(w http.ResponseWriter, r *http.Request) {
 	ok(w, books)
 }
 
-// booksSubHandler dispatches the /api/books/<...> subtree. Everything that is
-// part of the library layer is handled in Go; EPUB-engine routes (import,
-// render, split, export, covers) are still served by Express and fall through
-// to the proxy.
-func booksSubHandler(w http.ResponseWriter, r *http.Request, rp http.Handler) {
+// booksSubHandler dispatches the /api/books/<...> subtree. Every route is
+// served by the Go backend; unknown sub-paths return 404.
+func booksSubHandler(w http.ResponseWriter, r *http.Request) {
 	rest := strings.TrimPrefix(r.URL.Path, "/api/books/")
 	segs := strings.Split(strings.Trim(rest, "/"), "/")
 	if len(segs) == 0 || segs[0] == "" {
-		rp.ServeHTTP(w, r)
+		fail(w, http.StatusNotFound, "资源不存在")
 		return
 	}
 	id := segs[0]
@@ -80,7 +77,7 @@ func booksSubHandler(w http.ResponseWriter, r *http.Request, rp http.Handler) {
 			}
 			ok(w, map[string]any{"deleted": true, "movedToTrash": moved})
 		default:
-			rp.ServeHTTP(w, r)
+			fail(w, http.StatusNotFound, "资源不存在")
 		}
 		return
 	}
@@ -113,7 +110,7 @@ func booksSubHandler(w http.ResponseWriter, r *http.Request, rp http.Handler) {
 				}
 				ok(w, ch)
 			default:
-				rp.ServeHTTP(w, r)
+				fail(w, http.StatusNotFound, "资源不存在")
 			}
 			return
 		}
@@ -186,7 +183,7 @@ func booksSubHandler(w http.ResponseWriter, r *http.Request, rp http.Handler) {
 				}
 				ok(w, map[string]any{"deleted": true})
 			default:
-				rp.ServeHTTP(w, r)
+				fail(w, http.StatusNotFound, "资源不存在")
 			}
 			return
 		}
@@ -207,11 +204,11 @@ func booksSubHandler(w http.ResponseWriter, r *http.Request, rp http.Handler) {
 				return
 			}
 			if sub[2] == "render" {
-				renderHandler(w, r, id, sub[1], rp)
+				renderHandler(w, r, id, sub[1])
 				return
 			}
 		}
-		rp.ServeHTTP(w, r)
+		fail(w, http.StatusNotFound, "资源不存在")
 		return
 
 	case "images":
@@ -225,7 +222,7 @@ func booksSubHandler(w http.ResponseWriter, r *http.Request, rp http.Handler) {
 			ok(w, imgs)
 			return
 		}
-		rp.ServeHTTP(w, r)
+		fail(w, http.StatusNotFound, "资源不存在")
 		return
 
 	case "assets":
@@ -253,30 +250,29 @@ func booksSubHandler(w http.ResponseWriter, r *http.Request, rp http.Handler) {
 			io.Copy(w, f)
 			return
 		}
-		rp.ServeHTTP(w, r)
+		fail(w, http.StatusNotFound, "资源不存在")
 		return
 
 	case "covers":
-		coversHandler(w, r, id, rp)
+		coversHandler(w, r, id)
 		return
 
 	case "split":
-		splitHandler(w, r, id, rp)
+		splitHandler(w, r, id)
 		return
 
 	case "export":
-		exportHandler(w, r, id, rp)
+		exportHandler(w, r, id)
 		return
 
 	default:
-		rp.ServeHTTP(w, r)
+		fail(w, http.StatusNotFound, "资源不存在")
 	}
 }
 
 /* ------------------------- /api/trash ------------------------- */
 
-// trashListHandler serves GET /api/trash (ported). Other methods fall through
-// to the Express proxy.
+// trashListHandler serves GET /api/trash.
 func trashListHandler(w http.ResponseWriter, r *http.Request) {
 	items, err := library.ListTrash()
 	if err != nil {
@@ -287,12 +283,12 @@ func trashListHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 // trashSubHandler dispatches /api/trash/<id>/restore and /api/trash/<id>.
-// The restore/purge logic is ported; anything else proxied.
-func trashSubHandler(w http.ResponseWriter, r *http.Request, rp http.Handler) {
+// Unknown sub-paths return 404.
+func trashSubHandler(w http.ResponseWriter, r *http.Request) {
 	rest := strings.TrimPrefix(r.URL.Path, "/api/trash/")
 	segs := strings.Split(strings.Trim(rest, "/"), "/")
 	if len(segs) == 0 || segs[0] == "" {
-		rp.ServeHTTP(w, r)
+		fail(w, http.StatusNotFound, "资源不存在")
 		return
 	}
 	id := segs[0]
@@ -325,7 +321,7 @@ func trashSubHandler(w http.ResponseWriter, r *http.Request, rp http.Handler) {
 		return
 	}
 
-	rp.ServeHTTP(w, r)
+	fail(w, http.StatusNotFound, "资源不存在")
 }
 
 /* ------------------------- helpers ------------------------- */

@@ -9,10 +9,7 @@ package server
 
 import (
 	"io"
-	"log"
 	"net/http"
-	"net/http/httputil"
-	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -22,33 +19,13 @@ import (
 type Config struct {
 	// WebDist is the absolute path to the built frontend (web/dist).
 	WebDist string
-	// APIUpstream is the base URL the /api proxy forwards to (e.g. http://127.0.0.1:7802).
-	// Empty disables the proxy (used once Express is fully removed in Phase 5).
-	APIUpstream string
 }
 
-// NewMux builds the desktop HTTP mux: static frontend + /api proxy fallback.
-// Mount Go-handled /api routes on the returned mux before serving.
+// NewMux builds the desktop HTTP mux: static frontend hosting only. All /api
+// routes are served by the Go backend (see the api package), so no reverse
+// proxy to a legacy Express backend is needed.
 func NewMux(c Config) *http.ServeMux {
 	mux := http.NewServeMux()
-
-	if c.APIUpstream != "" {
-		up, err := url.Parse(c.APIUpstream)
-		if err != nil {
-			log.Printf("[server] invalid API_UPSTREAM %q: %v (proxy disabled)", c.APIUpstream, err)
-		} else {
-			rp := httputil.NewSingleHostReverseProxy(up)
-			rp.ErrorHandler = func(w http.ResponseWriter, r *http.Request, err error) {
-				log.Printf("[server] api proxy error %s %s: %v", r.Method, r.URL.Path, err)
-				http.Error(w, "api upstream unavailable", http.StatusBadGateway)
-			}
-			// Mount both "/api" and "/api/" so the proxy owns the whole namespace.
-			// More specific Go-registered routes (e.g. /api/health) win over this.
-			mux.Handle("/api", rp)
-			mux.Handle("/api/", rp)
-		}
-	}
-
 	mux.Handle("/", spaHandler(c.WebDist))
 	return mux
 }
