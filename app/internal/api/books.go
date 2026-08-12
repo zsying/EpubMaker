@@ -207,8 +207,7 @@ func booksSubHandler(w http.ResponseWriter, r *http.Request, rp http.Handler) {
 				return
 			}
 			if sub[2] == "render" {
-				// renderChapter is part of the EPUB-engine (Phase 3).
-				rp.ServeHTTP(w, r)
+				renderHandler(w, r, id, sub[1], rp)
 				return
 			}
 		}
@@ -258,18 +257,15 @@ func booksSubHandler(w http.ResponseWriter, r *http.Request, rp http.Handler) {
 		return
 
 	case "covers":
-		// uploadCover is part of the EPUB-engine (Phase 4).
-		rp.ServeHTTP(w, r)
+		coversHandler(w, r, id, rp)
 		return
 
 	case "split":
-		// splitBook is part of the EPUB-engine (Phase 3).
-		rp.ServeHTTP(w, r)
+		splitHandler(w, r, id, rp)
 		return
 
 	case "export":
-		// exportBook is part of the EPUB-engine (Phase 3).
-		rp.ServeHTTP(w, r)
+		exportHandler(w, r, id, rp)
 		return
 
 	default:

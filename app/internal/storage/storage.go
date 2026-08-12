@@ -181,3 +181,14 @@ func SanitizeFileName(name string) string {
 	}
 	return out
 }
+
+// TempPath returns a temp file path under the configured tmp dir for a
+// downloaded/uploaded file named name. Callers are responsible for cleanup.
+func TempPath(name string) string {
+	base := SanitizeFileName(name)
+	if base == "" {
+		base = "download.tmp"
+	}
+	return filepath.Join(config.Get().Paths.Tmp,
+		fmt.Sprintf("%d-%s", time.Now().UnixNano(), base))
+}

@@ -44,3 +44,13 @@ func GuessMediaType(name string) string {
 	}
 	return "application/octet-stream"
 }
+
+// IsDocument reports whether the media type is a readable XHTML/HTML document.
+func IsDocument(mediaType string) bool {
+	return mediaType == "application/xhtml+xml" || mediaType == "text/html"
+}
+
+// IsImage reports whether the media type is an image.
+func IsImage(mediaType string) bool {
+	return strings.HasPrefix(mediaType, "image/")
+}

@@ -1,16 +1,29 @@
-// Package html holds tiny HTML helpers needed by the book/chapter logic:
-// extract/replace the <body>, wrap content into a minimal XHTML document, and
-// encode an href for use inside a URL. These mirror server/src/epub/html.ts
-// for the subset used outside the full EPUB render/export engine.
+// Package html holds tiny HTML/XML string helpers used across the book,
+// chapter, and EPUB-engine logic. They mirror server/src/epub/html.ts.
 package html
 
 import (
 	"fmt"
+	"net/url"
+	"path"
 	"regexp"
 	"strings"
 )
 
 var bodyRe = regexp.MustCompile(`(?is)(<body[^>]*>)(.*?)(</body>)`)
+
+var tagRe = regexp.MustCompile(`<[^>]*>`)
+var wsRe = regexp.MustCompile(`\s+`)
+var urlSchemeRe = regexp.MustCompile(`^[a-zA-Z][a-zA-Z0-9+.\-]*:`)
+var titleRe = regexp.MustCompile(`(?is)<title[^>]*>(.*?)</title>`)
+var hRe = regexp.MustCompile(`(?is)<h[1-3][^>]*>(.*?)</h[1-3]>`)
+var svgHrefRe = regexp.MustCompile(`(?i)xlink:href\s*=\s*["']([^"']+)["']`)
+var cssUrlRe = regexp.MustCompile(`(?i)url\(\s*['"]?([^'"()]+?)['"]?\s*\)`)
+
+// urlAttrRe matches src/href/poster/data attributes. RE2 has no backreferences
+// so we capture both quotes as separate groups and require them to match
+// (q1 == q2) in the calling code before rewriting.
+var urlAttrRe = regexp.MustCompile(`(\s(?:src|href|poster|data)\s*=\s*)(["'])([^"']*?)(["'])`)
 
 // ExtractBody returns the content of <body>…</body>, or the whole input if no
 // body element is present.
@@ -55,6 +68,164 @@ func EncodeHrefForURL(href string) string {
 		segs[i] = encodeURIComponent(s)
 	}
 	return strings.Join(segs, "/")
+}
+
+// NormalizeHref cleans a forward-slash href: drop fragment/query, decode
+// percent-encoding, convert backslashes, collapse "."/"..", strip leading
+// slashes and leading "../". Mirrors server/src/epub/html.ts normalizeHref.
+func NormalizeHref(href string) string {
+	if i := strings.IndexByte(href, '#'); i >= 0 {
+		href = href[:i]
+	}
+	if i := strings.IndexByte(href, '?'); i >= 0 {
+		href = href[:i]
+	}
+	if dec, err := url.PathUnescape(href); err == nil {
+		href = dec
+	}
+	href = strings.ReplaceAll(href, "\\", "/")
+	href = path.Clean(href)
+	href = strings.TrimPrefix(href, "/")
+	for strings.HasPrefix(href, "../") {
+		href = href[3:]
+	}
+	return href
+}
+
+// ResolveHref resolves a (possibly relative) href against the file it appears
+// in, returning a normalized zip-internal path. Absolute URLs, protocol-
+// relative, and fragment-only references are returned unchanged.
+func ResolveHref(fromFile, rel string) string {
+	if isAbsURL(rel) || strings.HasPrefix(rel, "//") || strings.HasPrefix(rel, "#") {
+		return rel
+	}
+	dir := path.Dir(fromFile)
+	if dir == "." || dir == "" {
+		return NormalizeHref(rel)
+	}
+	return NormalizeHref(path.Join(dir, rel))
+}
+
+func isAbsURL(s string) bool {
+	return urlSchemeRe.MatchString(s)
+}
+
+// StripTags removes tags and decodes the common HTML entities, then collapses
+// whitespace — matching server/src/epub/html.ts.
+func StripTags(s string) string {
+	s = tagRe.ReplaceAllString(s, "")
+	s = strings.NewReplacer(
+		"&nbsp;", " ",
+		"&amp;", "&",
+		"&lt;", "<",
+		"&gt;", ">",
+		"&quot;", "\"",
+	).Replace(s)
+	s = wsRe.ReplaceAllString(s, " ")
+	return strings.TrimSpace(s)
+}
+
+// ExtractTitle guesses a title from <title> then the first h1-h3.
+func ExtractTitle(xhtml string) string {
+	if m := titleRe.FindStringSubmatch(xhtml); m != nil {
+		if t := StripTags(m[1]); t != "" {
+			return t
+		}
+	}
+	if m := hRe.FindStringSubmatch(xhtml); m != nil {
+		if t := StripTags(m[1]); t != "" {
+			return t
+		}
+	}
+	return ""
+}
+
+// EscapeXml escapes the five XML predefined entities.
+func EscapeXml(s string) string {
+	return strings.NewReplacer(
+		"&", "&amp;",
+		"<", "&lt;",
+		">", "&gt;",
+		`"`, "&quot;",
+		"'", "&apos;",
+	).Replace(s)
+}
+
+// RewriteResourceUrls rewrites relative resource URLs in htmlStr to absolute
+// (served) URLs via resolver. resolver returns "" to keep the original link
+// (e.g. when the target resource is missing). Fragment-only suffixes are
+// preserved.
+func RewriteResourceUrls(htmlStr, fromFile string, resolver func(string) string) string {
+	var b strings.Builder
+	last := 0
+	for _, idx := range urlAttrRe.FindAllStringSubmatchIndex(htmlStr, -1) {
+		full := htmlStr[idx[0]:idx[1]]
+		prefix := htmlStr[idx[2]:idx[3]]
+		q1 := htmlStr[idx[4]:idx[5]]
+		val := htmlStr[idx[6]:idx[7]]
+		q2 := htmlStr[idx[8]:idx[9]]
+		b.WriteString(htmlStr[last:idx[0]])
+		if q1 == q2 && val != "" && !isAbsURL(val) && !strings.HasPrefix(val, "//") && !strings.HasPrefix(val, "#") {
+			target := ResolveHref(fromFile, val)
+			if mapped := resolver(target); mapped != "" {
+				hash := ""
+				if i := strings.IndexByte(val, '#'); i >= 0 {
+					hash = val[i:]
+				}
+				b.WriteString(prefix + q1 + mapped + hash + q1)
+				last = idx[1]
+				continue
+			}
+		}
+		b.WriteString(full)
+		last = idx[1]
+	}
+	b.WriteString(htmlStr[last:])
+	return b.String()
+}
+
+// CollectReferences returns the set of internal resource paths referenced by
+// src/href/poster/data and xlink:href attributes in htmlStr.
+func CollectReferences(htmlStr, fromFile string) []string {
+	seen := map[string]bool{}
+	add := func(val string) {
+		if val == "" || isAbsURL(val) || strings.HasPrefix(val, "//") || strings.HasPrefix(val, "#") {
+			return
+		}
+		seen[ResolveHref(fromFile, val)] = true
+	}
+	for _, idx := range urlAttrRe.FindAllStringSubmatchIndex(htmlStr, -1) {
+		if htmlStr[idx[4]:idx[5]] != htmlStr[idx[8]:idx[9]] {
+			continue
+		}
+		add(htmlStr[idx[6]:idx[7]])
+	}
+	for _, m := range svgHrefRe.FindAllStringSubmatch(htmlStr, -1) {
+		add(m[1])
+	}
+	out := make([]string, 0, len(seen))
+	for k := range seen {
+		out = append(out, k)
+	}
+	return out
+}
+
+// CollectCssReferences returns the set of internal resources referenced by
+// url(...) expressions in a CSS string.
+func CollectCssReferences(css, fromFile string) []string {
+	seen := map[string]bool{}
+	for _, m := range cssUrlRe.FindAllStringSubmatch(css, -1) {
+		val := m[1]
+		if val == "" || isAbsURL(val) || strings.HasPrefix(val, "//") {
+			continue
+		}
+		seen[ResolveHref(fromFile, val)] = true
+	}
+	out := make([]string, 0, len(seen))
+	for k := range seen {
+		out = append(out, k)
+	}
+	return out
 }
 
 func encodeURIComponent(s string) string {
