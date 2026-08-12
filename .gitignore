@@ -4,8 +4,12 @@ dist/
 .DS_Store
 .env
 .epubmaker-data/
-server/dist/
 web/dist/
 .workbuddy/
 
 **/*.exe
+
+# Wails 生成物（每次 wails dev/build 自动重建，不入库）
+app/build/bin/
+web/package.json.md5
+web/src/wailsjs/
