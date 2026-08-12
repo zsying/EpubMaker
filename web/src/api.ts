@@ -49,6 +49,29 @@ export interface AppPaths {
   dbFile: string;
 }
 
+export interface WebDavConn {
+  baseUrl: string;
+  username?: string;
+  password?: string;
+  /** 忽略 TLS 证书错误（自签证书用） */
+  insecure?: boolean;
+}
+
+export interface WebDavEntry {
+  name: string;
+  /** 相对 baseUrl 的路径；目录以 / 结尾 */
+  path: string;
+  isDirectory: boolean;
+  size: number;
+  lastModified: string | null;
+}
+
+export interface WebDavTestResult {
+  connected: boolean;
+  server?: string;
+  error?: string;
+}
+
 async function req<T>(url: string, init?: RequestInit): Promise<T> {
   const res = await fetch(url, init);
   let payload: { ok?: boolean; data?: T; error?: string };
@@ -134,5 +157,15 @@ export const api = {
     deleteSource: boolean
   ) => req<Book[]>(`/api/books/${bookId}/split`, json({ parts, deleteSource })),
 
-  exportUrl: (bookId: string) => `/api/books/${bookId}/export`
+  exportUrl: (bookId: string) => `/api/books/${bookId}/export`,
+
+  /* ---------------- WebDAV ---------------- */
+  webdavTest: (conn: WebDavConn) =>
+    req<WebDavTestResult>('/api/webdav/test', json(conn)),
+
+  webdavList: (conn: WebDavConn, dirPath: string) =>
+    req<WebDavEntry[]>('/api/webdav/list', json({ ...conn, path: dirPath })),
+
+  webdavImport: (conn: WebDavConn, items: { path: string; name: string }[]) =>
+    req<{ books: Book[]; errors: string[] }>('/api/webdav/import', json({ ...conn, items }))
 };

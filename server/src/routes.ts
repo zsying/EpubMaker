@@ -6,6 +6,7 @@ import { config } from './config';
 import { logger } from './logger';
 import { guessMediaType } from './epub/mime';
 import * as lib from './services/library';
+import * as wd from './services/webdav';
 
 const upload = multer({
   // 落地到 tmp 目录，避免整本（可能数百 MB）epub 驻留内存
@@ -245,6 +246,70 @@ export function createRouter(): Router {
       res.setHeader('Content-Type', guessMediaType(href));
       res.setHeader('Cache-Control', 'public, max-age=3600');
       fs.createReadStream(file).pipe(res);
+    })
+  );
+
+  /* ---------------- WebDAV ---------------- */
+
+  // 测试连接：总是返回 ok:true，结果在 data.connected 中（便于前端友好提示）
+  r.post('/webdav/test', async (req, res) => {
+    let conn: wd.WebDavConnection;
+    try {
+      conn = wd.normalizeConn(req.body);
+    } catch (err) {
+      return ok(res, { connected: false, error: (err as Error).message });
+    }
+    try {
+      const info = await wd.testWebDav(conn);
+      ok(res, info);
+    } catch (err) {
+      ok(res, { connected: false, error: (err as Error).message });
+    }
+  });
+
+  r.post(
+    '/webdav/list',
+    wrap(async (req, res) => {
+      const conn = wd.normalizeConn(req.body);
+      const dirPath = String((req.body?.path as string | undefined) ?? '');
+      ok(res, await wd.listWebDav(conn, dirPath));
+    })
+  );
+
+  r.post(
+    '/webdav/import',
+    wrap(async (req, res) => {
+      let conn: wd.WebDavConnection;
+      try {
+        conn = wd.normalizeConn(req.body);
+      } catch (err) {
+        return fail(res, 400, (err as Error).message);
+      }
+      const items = Array.isArray(req.body?.items) ? (req.body.items as any[]) : [];
+      if (!items.length) return fail(res, 400, '未选择要导入的文件');
+      const created = [];
+      const errors: string[] = [];
+      for (const it of items) {
+        const filePath = String(it?.path ?? '');
+        const name =
+          String(it?.name ?? '') || path.basename(filePath) || 'book.epub';
+        if (!/\.epub$/i.test(name) && !/\.epub$/i.test(filePath)) {
+          errors.push(`${name || filePath}：不是 EPUB 文件`);
+          continue;
+        }
+        const tmp = wd.webdavTempPath(name);
+        try {
+          await wd.downloadWebDavFile(conn, filePath, tmp);
+          created.push(await lib.importEpub(tmp, name));
+        } catch (err) {
+          logger.error(`WebDAV 导入失败 ${name}:`, err as Error);
+          errors.push(`${name}: ${(err as Error).message}`);
+        } finally {
+          fs.promises.unlink(tmp).catch(() => {});
+        }
+      }
+      if (!created.length) return fail(res, 400, errors.join('\n') || '导入失败');
+      ok(res, { books: created, errors });
     })
   );
 

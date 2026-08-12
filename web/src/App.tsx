@@ -4,6 +4,7 @@ import Reader from './pages/Reader';
 import Editor from './pages/Editor';
 import Split from './pages/Split';
 import Trash from './pages/Trash';
+import WebDav from './pages/WebDav';
 import { Toaster } from './toast';
 
 export default function App() {
@@ -21,6 +22,9 @@ export default function App() {
         <Link to="/" className="btn ghost">
           书架
         </Link>
+        <Link to="/webdav" className="btn ghost">
+          WebDAV
+        </Link>
       </header>
 
       {isReader ? (
@@ -32,6 +36,7 @@ export default function App() {
         <Routes>
           <Route path="/" element={<Library />} />
           <Route path="/trash" element={<Trash />} />
+          <Route path="/webdav" element={<WebDav />} />
           <Route path="/books/:id/edit" element={<Editor />} />
           <Route path="/books/:id/split" element={<Split />} />
           <Route path="*" element={<div className="page empty">页面不存在</div>} />
