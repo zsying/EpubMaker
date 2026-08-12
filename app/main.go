@@ -33,7 +33,7 @@ func main() {
 		APIUpstream: apiUpstream,
 	})
 	// Mount Go-handled routes; they take precedence over the /api proxy.
-	api.Register(mux)
+	api.Register(mux, apiUpstream)
 
 	err := wails.Run(&options.App{
 		Title:  "EpubMaker",

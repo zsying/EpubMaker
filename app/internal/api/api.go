@@ -1,21 +1,71 @@
 // Package api registers Go-handled /api routes on the desktop mux.
-// In Phase 1 it owns /api/health and /api/config; later phases add more and
-// the proxy in server.NewMux only catches the remaining un-migrated routes.
+// Each phase adds more routes here; anything not yet ported falls through to
+// the legacy Express backend via the reverse proxy passed to Register.
 package api
 
 import (
 	"encoding/json"
 	"net/http"
+	"net/http/httputil"
+	"net/url"
 	"time"
 
 	"epubmaker-desktop/internal/config"
 )
 
-// Register mounts the Go-handled API routes on mux. Must be called before the
-// mux is served; these exact patterns take precedence over the /api/ proxy.
-func Register(mux *http.ServeMux) {
+// Register mounts the Go-handled API routes on mux. Exact/more-specific
+// patterns win over the /api proxy, so ported routes take precedence and the
+// rest are forwarded to apiUpstream (Express).
+func Register(mux *http.ServeMux, apiUpstream string) {
 	mux.HandleFunc("/api/health", healthHandler)
 	mux.HandleFunc("/api/config", configHandler)
+
+	rp := buildProxy(apiUpstream)
+
+	mux.HandleFunc("/api/books", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet {
+			listBooksHandler(w, r)
+			return
+		}
+		if rp != nil {
+			rp.ServeHTTP(w, r)
+			return
+		}
+		fail(w, http.StatusBadGateway, "api upstream unavailable")
+	})
+	mux.HandleFunc("/api/books/", func(w http.ResponseWriter, r *http.Request) {
+		booksSubHandler(w, r, rp)
+	})
+
+	mux.HandleFunc("/api/trash", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet {
+			trashListHandler(w, r)
+			return
+		}
+		if rp != nil {
+			rp.ServeHTTP(w, r)
+			return
+		}
+		fail(w, http.StatusBadGateway, "api upstream unavailable")
+	})
+	mux.HandleFunc("/api/trash/", func(w http.ResponseWriter, r *http.Request) {
+		trashSubHandler(w, r, rp)
+	})
+}
+
+func buildProxy(upstream string) http.Handler {
+	if upstream == "" {
+		return nil
+	}
+	u, err := url.Parse(upstream)
+	if err != nil {
+		return nil
+	}
+	rp := httputil.NewSingleHostReverseProxy(u)
+	rp.ErrorHandler = func(w http.ResponseWriter, r *http.Request, err error) {
+		fail(w, http.StatusBadGateway, "api upstream unavailable: "+err.Error())
+	}
+	return rp
 }
 
 func ok(w http.ResponseWriter, data any) {
