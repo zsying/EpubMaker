@@ -10,6 +10,8 @@ import (
 	"github.com/wailsapp/wails/v2/pkg/options"
 	"github.com/wailsapp/wails/v2/pkg/options/assetserver"
 
+	"epubmaker-desktop/internal/api"
+	"epubmaker-desktop/internal/db"
 	"epubmaker-desktop/internal/server"
 )
 
@@ -21,10 +23,17 @@ func main() {
 		apiUpstream = "http://127.0.0.1:7802"
 	}
 
-	h := server.NewHandler(server.Config{
+	// Open + migrate the database up front so schema issues fail fast.
+	if _, err := db.Open(); err != nil {
+		log.Fatalf("[desktop] open database: %v", err)
+	}
+
+	mux := server.NewMux(server.Config{
 		WebDist:     webDist,
 		APIUpstream: apiUpstream,
 	})
+	// Mount Go-handled routes; they take precedence over the /api proxy.
+	api.Register(mux)
 
 	err := wails.Run(&options.App{
 		Title:  "EpubMaker",
@@ -35,7 +44,7 @@ func main() {
 		// until each route is ported to Go. Single-binary embedding of web/dist is
 		// deferred to Phase 5.
 		AssetServer: &assetserver.Options{
-			Handler: h,
+			Handler: mux,
 		},
 		OnStartup: func(ctx context.Context) {
 			log.Printf("[desktop] EpubMaker ready (webDist=%s, apiUpstream=%s)", webDist, apiUpstream)

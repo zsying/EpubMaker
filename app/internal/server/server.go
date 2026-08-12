@@ -1,10 +1,10 @@
 // Package server builds the desktop app's HTTP surface:
 //   - static hosting of the built frontend (web/dist) with SPA fallback
-//   - /api/* reverse proxy to the legacy Express backend during migration
+//   - /api/* reverse proxy to the legacy Express backend for not-yet-migrated routes
 //
-// In Phase 0 EVERY /api route is proxied to Express (default :7802). As routes
-// are ported to Go (Phase 1+), they are mounted before the proxy and the proxy
-// only catches the not-yet-migrated ones.
+// Go-handled /api routes are mounted on the returned mux (via the api package)
+// BEFORE the proxy, so migrated routes take precedence. During Phase 0 every
+// /api route is proxied; each phase narrows the proxy as routes are ported.
 package server
 
 import (
@@ -27,8 +27,9 @@ type Config struct {
 	APIUpstream string
 }
 
-// NewHandler returns an http.Handler serving the frontend and proxying /api.
-func NewHandler(c Config) http.Handler {
+// NewMux builds the desktop HTTP mux: static frontend + /api proxy fallback.
+// Mount Go-handled /api routes on the returned mux before serving.
+func NewMux(c Config) *http.ServeMux {
 	mux := http.NewServeMux()
 
 	if c.APIUpstream != "" {
@@ -42,6 +43,7 @@ func NewHandler(c Config) http.Handler {
 				http.Error(w, "api upstream unavailable", http.StatusBadGateway)
 			}
 			// Mount both "/api" and "/api/" so the proxy owns the whole namespace.
+			// More specific Go-registered routes (e.g. /api/health) win over this.
 			mux.Handle("/api", rp)
 			mux.Handle("/api/", rp)
 		}

@@ -31,7 +31,7 @@ func newTestServer(t *testing.T) (*httptest.Server, func()) {
 	mustWrite(t, dir, "app.js", "console.log(1)")
 	mustWrite(t, dir, "assets/style.css", "body{}")
 
-	h := NewHandler(Config{WebDist: dir, APIUpstream: up.URL})
+	h := NewMux(Config{WebDist: dir, APIUpstream: up.URL})
 	srv := httptest.NewServer(h)
 	return srv, func() { srv.Close(); up.Close() }
 }
