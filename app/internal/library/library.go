@@ -8,6 +8,7 @@ package library
 import (
 	"crypto/rand"
 	"database/sql"
+	"encoding/base64"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -18,6 +19,7 @@ import (
 
 	"epubmaker-desktop/internal/db"
 	"epubmaker-desktop/internal/html"
+	"epubmaker-desktop/internal/mime"
 	"epubmaker-desktop/internal/storage"
 )
 
@@ -189,11 +191,23 @@ func scanAsset(s scanner) (AssetRow, error) {
 	return a, err
 }
 
+// DataURL builds an inline data: URL for binary content (cover images,
+// chapter assets). With Wails bindings there is no asset HTTP server, so every
+// binary the frontend needs must be embedded directly in the JSON payload.
+func DataURL(mediaType string, data []byte) string {
+	if mediaType == "" {
+		mediaType = "application/octet-stream"
+	}
+	return "data:" + mediaType + ";base64," + base64.StdEncoding.EncodeToString(data)
+}
+
 func toBookDTO(r BookRow, chapterCount int) BookDTO {
 	var coverURL *string
 	if r.CoverHref.Valid && r.CoverHref.String != "" {
-		u := fmt.Sprintf("/api/books/%s/assets/%s", r.ID, html.EncodeHrefForURL(r.CoverHref.String))
-		coverURL = &u
+		if buf, err := storage.ReadContent(r.ID, r.CoverHref.String); err == nil {
+			u := DataURL(mime.GuessMediaType(r.CoverHref.String), buf)
+			coverURL = &u
+		}
 	}
 	return BookDTO{
 		ID:           r.ID,
@@ -383,10 +397,14 @@ func ListImages(bookID string) ([]ImageAsset, error) {
 		if !strings.HasPrefix(a.MediaType, "image/") {
 			continue
 		}
+		url := ""
+		if buf, err := storage.ReadContent(bookID, a.Href); err == nil {
+			url = DataURL(a.MediaType, buf)
+		}
 		out = append(out, ImageAsset{
 			Href: a.Href,
 			Size: a.Size,
-			URL:  fmt.Sprintf("/api/books/%s/assets/%s", bookID, html.EncodeHrefForURL(a.Href)),
+			URL:  url,
 		})
 	}
 	return out, nil

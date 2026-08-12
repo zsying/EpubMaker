@@ -1,3 +1,14 @@
+// Wails v2 in-process bindings — there is no HTTP layer and no port.
+//
+// Every data call proxies to window.go.app.Backend.<Method>(...args), which
+// returns a Promise. Binary responses (cover images, chapter render, exported
+// EPUB) arrive inline as base64 data URLs / data strings, so the WebView never
+// needs a separate asset server.
+//
+// Import and cover upload go through native OS file dialogs exposed on
+// window.go.app.App (SelectEpubFiles / SelectCoverFile); the chosen filesystem
+// path is read on the Go side, so no multipart upload is required.
+
 export interface Book {
   id: string;
   title: string;
@@ -7,6 +18,7 @@ export interface Book {
   description: string;
   identifier: string;
   coverHref: string | null;
+  /** Inline base64 data URL (no HTTP). null when the book has no cover. */
   coverUrl: string | null;
   sourceName: string | null;
   chapterCount: number;
@@ -27,6 +39,7 @@ export interface Chapter {
 export interface ImageAsset {
   href: string;
   size: number;
+  /** Inline base64 data URL (no HTTP). */
   url: string;
 }
 
@@ -72,82 +85,94 @@ export interface WebDavTestResult {
   error?: string;
 }
 
-async function req<T>(url: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(url, init);
-  let payload: { ok?: boolean; data?: T; error?: string };
-  try {
-    payload = await res.json();
-  } catch {
-    throw new Error(`请求失败 (${res.status})`);
+/** Calls a bound backend method: window.go.app.Backend.<method>(...args). */
+async function call<T>(method: string, ...args: unknown[]): Promise<T> {
+  const fn = (window as any).go?.app?.Backend?.[method];
+  if (typeof fn !== 'function') {
+    throw new Error('后端尚未就绪，请稍候重试');
   }
-  if (!res.ok || payload.ok === false) throw new Error(payload.error || `请求失败 (${res.status})`);
-  return payload.data as T;
+  return (await fn(...args)) as T;
 }
 
-const json = (body: unknown): RequestInit => ({
-  method: 'POST',
-  headers: { 'Content-Type': 'application/json' },
-  body: JSON.stringify(body)
-});
+/** Calls a bound App (native integration) method: window.go.app.App.<method>. */
+async function callApp<T>(method: string, ...args: unknown[]): Promise<T> {
+  const fn = (window as any).go?.app?.App?.[method];
+  if (typeof fn !== 'function') {
+    throw new Error('无法打开系统文件选择框，请通过 Wails 启动应用');
+  }
+  return (await fn(...args)) as T;
+}
+
+/** Triggers a browser download from an inline data: URL. */
+export function downloadDataUrl(filename: string, dataUrl: string): void {
+  const a = document.createElement('a');
+  a.href = dataUrl;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+}
 
 export const api = {
-  paths: () => req<AppPaths>('/api/config'),
+  paths: () => call<AppPaths>('Paths'),
 
-  listBooks: (keyword?: string) =>
-    req<Book[]>(`/api/books${keyword ? `?keyword=${encodeURIComponent(keyword)}` : ''}`),
+  listBooks: (keyword?: string) => call<Book[]>('ListBooks', keyword ?? ''),
 
-  importBooks: async (files: File[]) => {
-    const fd = new FormData();
-    files.forEach((f) => fd.append('files', f));
-    return req<{ books: Book[]; errors: string[] }>('/api/books/import', { method: 'POST', body: fd });
+  /** Opens the native EPUB multi-select dialog, then imports the chosen files. */
+  importBooks: async (): Promise<{ books: Book[]; errors: string[] }> => {
+    const paths = await callApp<string[]>('SelectEpubFiles');
+    if (!paths || paths.length === 0) return { books: [], errors: [] };
+    return call('ImportPaths', paths);
   },
 
-  getBook: (id: string) => req<Book>(`/api/books/${id}`),
+  getBook: (id: string) => call<Book>('GetBook', id),
 
   updateBook: (id: string, patch: Partial<Book> & { coverHref?: string | null }) =>
-    req<Book>(`/api/books/${id}`, { ...json(patch), method: 'PATCH' }),
+    call<Book>('UpdateBook', id, patch),
 
   deleteBook: (id: string) =>
-    req<{ deleted: boolean; movedToTrash: boolean }>(`/api/books/${id}`, { method: 'DELETE' }),
+    call<{ deleted: boolean; movedToTrash: boolean }>('DeleteBook', id),
 
-  trash: () => req<TrashItem[]>('/api/trash'),
+  trash: () => call<TrashItem[]>('ListTrash'),
 
-  restoreTrash: (id: string) => req<Book>(`/api/trash/${id}/restore`, { method: 'POST' }),
+  restoreTrash: (id: string) => call<Book>('RestoreBook', id),
 
   purgeTrash: (id: string) =>
-    req<{ purged: boolean; dataKept: boolean }>(`/api/trash/${id}`, { method: 'DELETE' }),
+    call<{ purged: boolean; dataKept: boolean }>('PurgeBook', id),
 
-  listChapters: (bookId: string) => req<Chapter[]>(`/api/books/${bookId}/chapters`),
+  listChapters: (bookId: string) => call<Chapter[]>('ListChapters', bookId),
 
   renderChapter: (bookId: string, cid: string) =>
-    req<{ title: string; html: string }>(`/api/books/${bookId}/chapters/${cid}/render`),
+    call<{ title: string; html: string }>('RenderChapter', bookId, cid),
 
   chapterSource: (bookId: string, cid: string) =>
-    req<{ title: string; html: string }>(`/api/books/${bookId}/chapters/${cid}/source`),
+    call<{ title: string; html: string }>('ChapterSource', bookId, cid),
 
   updateChapter: (bookId: string, cid: string, patch: { title?: string; html?: string }) =>
-    req<Chapter>(`/api/books/${bookId}/chapters/${cid}`, { ...json(patch), method: 'PATCH' }),
+    call<Chapter>('UpdateChapter', bookId, cid, patch),
 
-  createChapter: (bookId: string, body: { title?: string; html?: string; afterChapterId?: string | null }) =>
-    req<Chapter>(`/api/books/${bookId}/chapters`, json(body)),
+  createChapter: (
+    bookId: string,
+    body: { title?: string; html?: string; afterChapterId?: string | null }
+  ) => call<Chapter>('CreateChapter', bookId, body),
 
   deleteChapter: (bookId: string, cid: string) =>
-    req<{ deleted: boolean }>(`/api/books/${bookId}/chapters/${cid}`, { method: 'DELETE' }),
+    call<{ deleted: boolean }>('DeleteChapter', bookId, cid),
 
   reorderChapters: (bookId: string, chapterIds: string[]) =>
-    req<Chapter[]>(`/api/books/${bookId}/chapters/reorder`, json({ chapterIds })),
+    call<Chapter[]>('ReorderChapters', bookId, chapterIds),
 
   mergeChapters: (bookId: string, targetId: string, sourceIds: string[]) =>
-    req<Chapter[]>(`/api/books/${bookId}/chapters/merge`, json({ targetId, sourceIds })),
+    call<Chapter[]>('MergeChapters', bookId, targetId, sourceIds),
 
-  images: (bookId: string) => req<ImageAsset[]>(`/api/books/${bookId}/images`),
+  images: (bookId: string) => call<ImageAsset[]>('ListImages', bookId),
 
-  uploadCover: (bookId: string, file: File) => {
-    const fd = new FormData();
-    fd.append('cover', file);
-    return req<{ href: string; url: string; mediaType: string }>(`/api/books/${bookId}/covers`, {
-      method: 'POST',
-      body: fd
+  /** Opens the native image dialog, then uploads the chosen file as the cover. */
+  uploadCover: (bookId: string) => {
+    const path = callApp<string>('SelectCoverFile');
+    return path.then((p) => {
+      if (!p) throw new Error('未选择封面文件');
+      return call<{ href: string; url: string; mediaType: string }>('UploadCoverPath', bookId, p);
     });
   },
 
@@ -155,17 +180,18 @@ export const api = {
     bookId: string,
     parts: { title: string; author?: string; chapterIds: string[]; coverHref?: string | null }[],
     deleteSource: boolean
-  ) => req<Book[]>(`/api/books/${bookId}/split`, json({ parts, deleteSource })),
+  ) => call<Book[]>('SplitBook', bookId, parts, deleteSource),
 
-  exportUrl: (bookId: string) => `/api/books/${bookId}/export`,
+  /** Builds the EPUB and returns it inline as { filename, dataUrl }. */
+  exportBook: (bookId: string) =>
+    call<{ filename: string; dataUrl: string }>('ExportBook', bookId),
 
   /* ---------------- WebDAV ---------------- */
-  webdavTest: (conn: WebDavConn) =>
-    req<WebDavTestResult>('/api/webdav/test', json(conn)),
+  webdavTest: (conn: WebDavConn) => call<WebDavTestResult>('WebdavTest', conn),
 
   webdavList: (conn: WebDavConn, dirPath: string) =>
-    req<WebDavEntry[]>('/api/webdav/list', json({ ...conn, path: dirPath })),
+    call<WebDavEntry[]>('WebdavList', conn, dirPath),
 
   webdavImport: (conn: WebDavConn, items: { path: string; name: string }[]) =>
-    req<{ books: Book[]; errors: string[] }>('/api/webdav/import', json({ ...conn, items }))
+    call<{ books: Book[]; errors: string[] }>('WebdavImport', conn, items)
 };

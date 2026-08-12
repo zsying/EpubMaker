@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import DOMPurify from 'dompurify';
 import { api, Book, Chapter, ImageAsset } from '../api';
@@ -207,7 +207,6 @@ export default function Split() {
   const [uploading, setUploading] = useState(false);
   const [openCoverFor, setOpenCoverFor] = useState<number | null>(null);
   const [preview, setPreview] = useState<Chapter | null>(null);
-  const coverInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     (async () => {
@@ -276,13 +275,15 @@ export default function Split() {
     setAssign(a);
   }
 
-  async function onPickCoverFile(e: React.ChangeEvent<HTMLInputElement>) {
-    const file = e.target.files?.[0];
-    e.target.value = '';
-    if (!file) return;
+  // Opens the native image picker and uploads the chosen file as a cover.
+  async function pickCover() {
     setUploading(true);
     try {
-      const up = await api.uploadCover(id, file);
+      const up = await api.uploadCover(id).catch((e) => {
+        if (String((e as Error)?.message ?? e).includes('未选择')) return null;
+        throw e;
+      });
+      if (!up) return; // user cancelled the dialog
       const asset: ImageAsset = { href: up.href, size: 0, url: up.url };
       setImages((prev) => [...prev, asset]);
       // 自动把新封面上到所有分卷（用户可单独覆盖）
@@ -493,19 +494,12 @@ export default function Split() {
             </div>
 
             <div className="toolbar" style={{ marginTop: 8 }}>
-              <button className="btn sm" disabled={uploading} onClick={() => coverInputRef.current?.click()}>
+              <button className="btn sm" disabled={uploading} onClick={() => void pickCover()}>
                 {uploading ? '上传中…' : '+ 上传新封面'}
               </button>
               <span className="muted" style={{ fontSize: 11.5 }}>
                 上传后自动应用到各分卷，可单独改；原书图片也在相册中可选
               </span>
-              <input
-                ref={coverInputRef}
-                type="file"
-                accept="image/*"
-                style={{ display: 'none' }}
-                onChange={onPickCoverFile}
-              />
             </div>
           </div>
 

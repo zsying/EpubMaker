@@ -78,3 +78,16 @@ func (a *App) SelectEpubFiles() []string {
 	})
 	return paths
 }
+
+// SelectCoverFile opens a native single-select image dialog and returns the
+// chosen path (empty if cancelled). The path is read on the Go side, so no
+// binary upload over HTTP is required.
+func (a *App) SelectCoverFile() string {
+	path, _ := runtime.OpenFileDialog(a.ctx, runtime.OpenDialogOptions{
+		Title: "选择封面图片",
+		Filters: []runtime.FileFilter{
+			{DisplayName: "图片文件", Pattern: "*.png;*.jpg;*.jpeg;*.gif;*.webp;*.bmp"},
+		},
+	})
+	return path
+}

@@ -9,14 +9,14 @@
 不再依赖 Node 服务，无反向代理。
 
 - `app/`：Go + Wails v2 桌面应用（模块 `epubmaker-desktop`）。后端全部在 `app/internal/*`：
-  - `internal/api`：所有 `/api/*` 路由（books / trash / chapters / assets / render / covers / split / export / webdav）
+  - `internal/app`：Wails 绑定——
+    - `Backend`：全部数据操作，经 `window.go.app.Backend.*` **进程内直连（无 HTTP、无端口）**
+    - `App`：原生集成（文件对话框、命令行 .epub 导入）
   - `internal/epub`：OCF/OPF/NCX/NAV 解析与 EPUB 流式构建（零依赖，只用标准库）
   - `internal/html`：属性改写 / 引用收集等字符串助手
-  - `internal/library`：导入 / 渲染 / 导出 / 上传封面 / 拆分
+  - `internal/library`：导入 / 渲染 / 导出 / 上传封面 / 拆分；封面、图片、渲染、导出均**内联 base64**返回，无资源 HTTP 服务
   - `internal/webdav`：WebDAV 客户端（test/list/import）
   - `internal/storage`：zip 内路径 ↔ 磁盘映射 + 回收站（软删除）
-  - `internal/app`：Wails 绑定（原生文件对话框、命令行 .epub 导入）
-  - `internal/server`：桌面 HTTP 表面（SPA 回退），**不含任何代理**；静态文件由 Wails 从 embed 直接提供
   - `internal/db`：modernc.org/sqlite（`database/sql`，纯 Go 无 cgo）
   - `internal/config`、`internal/mime`
 - `web/`：React 18 + Vite + TS 前端，构建到 `web/dist`。
@@ -27,10 +27,9 @@
 
 ```bash
 cd app
-go build ./...                 # 编译桌面后端
+go build ./...                 # 编译桌面后端（含 embed 前端）
 go vet ./...                  # 静态检查
-go test ./...                 # 全部单测（e2e 需关闭沙箱，见下）
-go test ./internal/api/... -run TestE2ELifecycle   # 端到端冒烟（导入→阅读→拆分→导出→回收站）
+go test ./...                 # 全部单测
 wails dev                     # 桌面开发：后台起 vite watcher + 编译 Go + 窗口热更新
 wails build                   # 生产 exe（先构建前端）
 wails build -nsis             # Windows NSIS 安装包（含 .epub 文件关联，需本机装 NSIS）
@@ -38,14 +37,14 @@ wails build -nsis             # Windows NSIS 安装包（含 .epub 文件关联�
 npm run dev:app               # = cd app && wails dev
 npm run build:app             # 生产构建
 npm run build:app:nsis        # 打安装包
-npm run dev:web               # 仅前端 vite（7800，无 Go 后端，不能调 /api）
+npm run dev:web               # 仅前端 vite（7800）；**无 Go 后端、window.go 不存在**，只能做纯样式/组件调试，不能跑通业务
 ```
 
 > `wails dev` 首次会静默编译 Go（含 modernc.org/sqlite）几十秒才弹窗，看到 vite `ready` 后**耐心等，别 Ctrl+C**。
 > 端口 7800 已设 `strictPort:true`：被上次残留的 vite 子进程占用时会直接报错而非静默死等，此时先 `taskkill /F /IM node.exe`。
 
-> 改动后端后**必须重启应用**，`/api/health` 只回 ok 不能证明新代码生效——发一个"只有新代码才支持"
-> 的请求确认，或核对进程启动时间。Go 是编译型，重建即生效。
+> 前端与 Go 之间**只有 Wails 进程内绑定**（`window.go.app.Backend.*`），无 HTTP、无端口、dev 与生产一致。
+> 改动后端后必须重建并重启应用才生效（Go 是编译型）。验证新代码是否生效，发一个"只有新代码才支持"的绑定调用即可。
 
 ## 运行时数据布局（都在 `~/.epubmaker`）
 
@@ -78,19 +77,24 @@ npm run dev:web               # 仅前端 vite（7800，无 Go 后端，不能�
 6. 所有 content 目录内的文件访问都走 `internal/storage` 的 `ContentPath()`（含路径穿越防护），
    不要在业务代码里自己拼路径。
 7. 阅读/预览用 `library.RenderChapter` 返回已改写过资源链接的 HTML，前端一律 **DOMPurify 净化**后渲染。
+8. **没有 HTTP、没有端口**：前端↔Go 只走 Wails 进程内绑定 `window.go.app.Backend.*`（dev 与生产一致）。
+   二进制响应（封面/书内图片/渲染章节/导出 EPUB）一律内联 base64 data URL/string；文件选择走原生对话框
+   拿路径、`os.ReadFile` 直读，无 multipart、**无资源 HTTP 服务**。禁止再引入 `/api` 路由或 TCP 端口。
 
 ## 开发规则与约定
 
 ### 大文件与内存
-- 上传用 multer 风格的**磁盘暂存**：`internal/api/engine.go` 的 `saveUploadTo` 把 multipart 落到
-  `storage.TempPath(name)`（`tmp/`），导入后 `os.Remove` 清理，不要改回内存暂存。
+- **不再有 HTTP 上传**：导入 EPUB、上传封面都走原生文件对话框拿本地路径，Go 端 `os.ReadFile` 直接读
+  （`app.Backend.ImportPaths` / `UploadCoverPath`），没有 multipart、没有磁盘暂存，也**没有资源 HTTP 服务**。
+- 封面 / 书内图片 / 渲染章节 / 导出 EPUB 这类二进制，全部**内联为 base64 data URL/data string**随绑定返回
+  （`library.DataURL`）；前端拿到即渲染 / 触发下载，无需再发请求取资源。
 - 导入/导出必须**流式**：`epub.ParseEpub` 只保留 zip 条目句柄、按需解压；
   `epub.BuildEpub` 资源以 `io.Reader` 懒流交给打包器（`io.Copy`）。不要整本 epub 或全部资源一次进内存。
 - 图片全程**字节级无损**：不转码、不重压（`internal/library` 原样写 content 目录）。
 
 ### 删除与回收站（软删除模型）
 - `books.deleted_at` 非空 = 在回收站；`listBooks`/`getBook` 一律过滤 `deleted_at IS NULL`。
-- `DELETE /api/books/:id` 是**软删除**：目录 rename 进 `data/trash/<id>-<ts>` + 置 `deleted_at`
+- `Backend.DeleteBook(id)` 是**软删除**：目录 rename 进 `data/trash/<id>-<ts>` + 置 `deleted_at`
   （`storage.MoveBookDirToTrash`）。
 - 恢复 = 目录 rename 回 `books/<id>` + 清 `deleted_at`；彻底删除 = 删 DB 行 + 物理删目录
   （`storage.RemoveBookDir`，失败 rename 进 `_purged`）。
@@ -106,10 +110,10 @@ npm run dev:web               # 仅前端 vite（7800，无 Go 后端，不能�
 
 ### 其它
 - **git commit 信息必须用英文**（标题+正文都英文，按 Conventional Commits 风格：`feat:` / `fix:` / `refactor:` / `docs:` 等）。
-- 上传文件名：Go 的 `multipart.FileHeader.Filename` 已是 UTF-8，无需再做 latin1→utf8 还原。
+- 上传文件名：现在走原生对话框拿的是本地**完整路径**，`filepath.Base` 取文件名即得 UTF-8，无 multipart/latin1 问题。
 - web 构建：`vite.config.ts` 已设 `emptyOutDir:false`（规避沙箱清空 dist 限制）。本机正常 `rm` 不受影响。
-- 改 EPUB 引擎或 API 后必须跑 `cd app && go build ./... && go vet ./... && go test ./...`
-  （e2e 用 `go test ./internal/api/... -run TestE2ELifecycle`，需关闭沙箱）。
+- 改动后端后必须跑 `cd app && go build ./... && go vet ./... && go test ./...`
+  （涉及 SQLite 的测试在沙箱里会卡，必要时加 `dangerouslyDisableSandbox: true`）。
 - 新增依赖尽量只用标准库 + Wails + modernc.org/sqlite；不要为了 XML/WebDAV/EPUB 引入重量级第三方库
   （当前 `epub/xml.go` 是手写命名空间剥离解析器，匹配 fast-xml-parser 的 find/findAll 递归语义）。
 
@@ -119,9 +123,9 @@ npm run dev:web               # 仅前端 vite（7800，无 Go 后端，不能�
 cd app && go build ./... && go vet ./... && go test ./...
 ```
 
-`TestE2ELifecycle`（`internal/api/e2e_test.go`）在系统临时目录造隔离 `EPUBMAKER_HOME`，
-完整跑通 导入 → 列出章节 → 渲染（图片 URL 改写）→ 导出回环解析 → 拆分（每卷封面）→ 上传封面 →
-删除/回收站/恢复/彻底删除 全流程。涉及 SQLite，**必须关闭沙箱运行**。
+> 端到端冒烟此前由 `internal/api/e2e_test.go` 覆盖；迁移到 Wails 绑定后 HTTP 层与 e2e 测试已删除。
+> 绑定逻辑的正确性由 `internal/library` 各函数与 `internal/app/backend.go` 保证。手动冒烟：
+> `wails dev` 后导入一本 EPUB → 阅读 → 整理 → 拆分 → 导出，确认封面/图片以 data URL 渲染、导出能下载。
 
 ## 常见坑速查
 
@@ -140,4 +144,5 @@ cd app && go build ./... && go vet ./... && go test ./...
 | 打包报 `open epubFileIcon.png: file does not exist` | `info.fileAssociations[].iconName` 要求 `app/build/<iconName>.png` 存在，Wails 据此生成 `windows/<iconName>.ico` | 保证 `app/build/epubFileIcon.png` 在库（已提交）；换图标直接覆盖该 PNG（建议 ≥256×256） |
 | 运行 `EpubMaker.exe` 报 `frontend not built (web/dist missing)` | 旧实现从磁盘读 `web/dist`，生产二进制移走后找不到 | 已改为 `//go:embed all:frontend/dist`：Wails 构建时 `scripts/sync-frontend-dist.js` 把 `web/dist` 镜像到 `app/frontend/dist`，Go 编译时直接打包进二进制，exe 自带前端 |
 | `wails build -nsis` 报创建安装包失败 | 本机没装 NSIS，`makensis` 不在 PATH | `winget install -e --id NSIS.NSIS` 后重跑 |
+| 前端空白 / 资源加载失败 / `window.go.app.Backend is not a function` | 误以为还有 `/api` HTTP 服务或资源端口 | 本应用**无 HTTP、无端口**：前端所有数据调用走 `window.go.app.Backend.*` 进程内绑定；二进制（封面/图片/渲染/导出）已内联 base64。`web/vite.config.ts` 已无 `/api` proxy。**`window.go` 仅在使用 `wails dev`/`wails build` 启动的 WebView 内存在**，单独跑 `npm run dev:web` 不会有它 |
 | **整个目录凭空消失** | 对项目内目录执行 `rmdir`/`rm -rf` 时，删除会**级联蔓延到父目录**（实测 `rmdir app/installer` 把整个 `app/` 移进了回收站） | **禁止**对项目目录用 `rm`/`rmdir`。删文件只用 `git rm`（空目录 git 本来就不跟踪，不用管）。若已发生：跟踪文件用 `git checkout -- <dir>` 恢复，未跟踪文件去 `D:\$RECYCLE.BIN\<SID>\` 找 `$R*` 载荷（`$I*` 是元数据，内含原路径）拷回 |

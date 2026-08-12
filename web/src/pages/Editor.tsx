@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import DOMPurify from 'dompurify';
-import { api, Book, Chapter, ImageAsset } from '../api';
+import { api, Book, Chapter, ImageAsset, downloadDataUrl } from '../api';
 import { toast, toastError } from '../toast';
 
 type Tab = 'book' | 'chapter';
@@ -195,6 +195,15 @@ export default function Editor() {
 
   const safePreview = useMemo(() => DOMPurify.sanitize(chHtml), [chHtml]);
 
+  async function exportBook() {
+    try {
+      const { filename, dataUrl } = await api.exportBook(id);
+      downloadDataUrl(filename, dataUrl);
+    } catch (e) {
+      toastError(e);
+    }
+  }
+
   if (loading) return <div className="loading">加载中…</div>;
   if (!book) return <div className="page empty">书籍不存在</div>;
 
@@ -209,9 +218,9 @@ export default function Editor() {
         <Link className="btn" to={`/books/${id}/split`}>
           拆分
         </Link>
-        <a className="btn primary" href={api.exportUrl(id)}>
+        <button className="btn primary" onClick={() => void exportBook()}>
           导出 EPUB
-        </a>
+        </button>
       </div>
 
       <div className="editor-grid">

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
 	"regexp"
 	"strings"
 
@@ -104,15 +105,43 @@ func parseNav(xmlStr, navPath string) map[string]string {
 	return out
 }
 
+const zipLocalHeader = "PK\x03\x04"
+
+// findZipOffset returns the index of the first ZIP local file header.
+// Some downloaded EPUBs carry a small leading stub (BOM, HTML redirect,
+// downloader watermark, etc.); this lets us tolerate such junk.
+func findZipOffset(data []byte) int {
+	return bytes.Index(data, []byte(zipLocalHeader))
+}
+
 // ParseEpub reads an EPUB byte slice and extracts its metadata, reading order,
-// resources, table of contents, and cover. It streams zip entries lazily and
-// keeps only the entry handles (the file is never fully buffered in memory).
+// resources, table of contents, and cover.
 func ParseEpub(data []byte) (*ParsedEpub, error) {
-	zr, err := zip.NewReader(bytes.NewReader(data), int64(len(data)))
+	if len(data) < 4 {
+		return nil, errors.New("文件为空，不是有效的 EPUB")
+	}
+	offset := findZipOffset(data)
+	if offset < 0 {
+		return nil, fmt.Errorf("不是有效的 EPUB（文件头不是 ZIP 格式），前 16 字节: %x", data[:min(len(data), 16)])
+	}
+	zr, err := zip.NewReader(bytes.NewReader(data[offset:]), int64(len(data)-offset))
 	if err != nil {
 		return nil, fmt.Errorf("不是有效的 EPUB（zip 解析失败）: %w", err)
 	}
+	return parseZip(zr)
+}
 
+// ParseEpubFile reads an EPUB from disk and tolerates a small leading stub
+// before the ZIP signature (e.g. BOM or downloader watermark).
+func ParseEpubFile(path string) (*ParsedEpub, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	return ParseEpub(data)
+}
+
+func parseZip(zr *zip.Reader) (*ParsedEpub, error) {
 	byName := map[string]*zip.File{}
 	for _, f := range zr.File {
 		if f.FileInfo().IsDir() {

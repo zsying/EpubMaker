@@ -44,7 +44,11 @@ func RenderChapter(bookID, chapterID string) (*ChapterRender, error) {
 		if !storage.ContentExists(bookID, target) {
 			return ""
 		}
-		return fmt.Sprintf("/api/books/%s/assets/%s", bookID, html.EncodeHrefForURL(target))
+		buf, err := storage.ReadContent(bookID, target)
+		if err != nil {
+			return ""
+		}
+		return DataURL(mime.GuessMediaType(target), buf)
 	})
 	return &ChapterRender{Title: ch.Title, HTML: out}, nil
 }
@@ -329,7 +333,7 @@ func UploadCover(bookID, name string, buf []byte) (*UploadedCover, error) {
 	}
 	return &UploadedCover{
 		Href:      href,
-		URL:       fmt.Sprintf("/api/books/%s/assets/%s", bookID, html.EncodeHrefForURL(href)),
+		URL:       DataURL(mt, buf),
 		MediaType: mt,
 	}, nil
 }

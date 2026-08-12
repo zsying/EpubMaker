@@ -1,6 +1,6 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import { api, AppPaths, Book } from '../api';
+import { api, AppPaths, Book, downloadDataUrl } from '../api';
 import { toast, toastError } from '../toast';
 
 export default function Library() {
@@ -10,7 +10,6 @@ export default function Library() {
   const [importing, setImporting] = useState(false);
   const [over, setOver] = useState(false);
   const [paths, setPaths] = useState<AppPaths | null>(null);
-  const fileRef = useRef<HTMLInputElement>(null);
   const nav = useNavigate();
 
   const load = useCallback(async (kw?: string) => {
@@ -34,12 +33,12 @@ export default function Library() {
     return () => clearTimeout(t);
   }, [keyword, load]);
 
-  async function doImport(files: FileList | File[] | null) {
-    const list = Array.from(files ?? []).filter((f) => /\.epub$/i.test(f.name));
-    if (!list.length) return toast('请选择 .epub 文件', 'error');
+  // Opens the native EPUB picker and imports the chosen files via bindings.
+  async function doImport() {
     setImporting(true);
     try {
-      const res = await api.importBooks(list);
+      const res = await api.importBooks();
+      if (!res.books.length && !res.errors.length) return; // user cancelled
       toast(`成功导入 ${res.books.length} 本书籍`, 'success');
       if (res.errors?.length) toast(res.errors.join('\n'), 'error', 6000);
       await load(keyword.trim() || undefined);
@@ -47,7 +46,15 @@ export default function Library() {
       toastError(e);
     } finally {
       setImporting(false);
-      if (fileRef.current) fileRef.current.value = '';
+    }
+  }
+
+  async function exportBook(book: Book) {
+    try {
+      const { filename, dataUrl } = await api.exportBook(book.id);
+      downloadDataUrl(filename, dataUrl);
+    } catch (e) {
+      toastError(e);
     }
   }
 
@@ -78,17 +85,9 @@ export default function Library() {
           value={keyword}
           onChange={(e) => setKeyword(e.target.value)}
         />
-        <button className="btn primary" disabled={importing} onClick={() => fileRef.current?.click()}>
+        <button className="btn primary" disabled={importing} onClick={() => void doImport()}>
           {importing ? '导入中…' : '导入 EPUB'}
         </button>
-        <input
-          ref={fileRef}
-          type="file"
-          accept=".epub,application/epub+zip"
-          multiple
-          hidden
-          onChange={(e) => void doImport(e.target.files)}
-        />
       </div>
 
       <div
@@ -101,9 +100,9 @@ export default function Library() {
         onDrop={(e) => {
           e.preventDefault();
           setOver(false);
-          void doImport(e.dataTransfer.files);
+          void doImport();
         }}
-        onClick={() => fileRef.current?.click()}
+        onClick={() => void doImport()}
       >
         {importing ? '正在解析 EPUB…' : '把 .epub 文件拖到这里，或点击选择文件（支持多选）'}
       </div>
@@ -143,9 +142,9 @@ export default function Library() {
                 <Link className="btn sm" to={`/books/${b.id}/split`}>
                   拆分
                 </Link>
-                <a className="btn sm" href={api.exportUrl(b.id)}>
+                <button className="btn sm" onClick={() => void exportBook(b)}>
                   导出
-                </a>
+                </button>
                 <button className="btn sm danger" onClick={() => void remove(b)}>
                   删除
                 </button>
