@@ -7,7 +7,10 @@ export default defineConfig({
   plugins: [react()],
   server: {
     port: 7800,
-    strictPort: false,
+    // strictPort: true —— 端口被占时直接报错，避免 wails dev 静默死等 dev server。
+    // 注：wails dev 启动的 vite 子进程若被 Ctrl-C 残留，会赖在 7800 上导致后续 wails dev 卡死，
+    // 此时应先 taskkill /F /IM node.exe 清掉残留进程。
+    strictPort: true,
     proxy: {
       '/api': { target: API_TARGET, changeOrigin: true }
     }

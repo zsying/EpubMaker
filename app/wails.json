@@ -4,11 +4,12 @@
   "frontend:dir": "../web",
   "frontend:install": "npm install",
   "frontend:build": "npm run build",
-  "frontend:dev": "npm run dev",
-  "frontend:port": 7800,
-  "frontend:devserverurl": "http://localhost:7800",
+  "frontend:dev:watcher": "npm run dev",
+  "frontend:dev:serverUrl": "auto",
   "wailsjsdir": "../web/src",
-  "author": "john",
+  "author": {
+    "name": "john"
+  },
   "description": "EpubMaker desktop app (Go + Wails)",
   "tags": "desktop,epub",
   "info": {
