@@ -43,6 +43,48 @@ export interface ImageAsset {
   url: string;
 }
 
+export interface ReadingProgress {
+  bookId: string;
+  chapterId: string;
+  pageIndex: number;
+  pageCount: number;
+  updatedAt: string;
+}
+
+export interface Bookmark {
+  id: string;
+  bookId: string;
+  chapterId: string;
+  /** Page index within the chapter. */
+  anchor: number;
+  label: string;
+  createdAt: string;
+}
+
+export interface Annotation {
+  id: string;
+  bookId: string;
+  chapterId: string;
+  startOffset: number;
+  endOffset: number;
+  text: string;
+  /** Highlight color key, e.g. "yellow" | "green" | "red". */
+  color: string;
+  note: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface BookmarkListItem extends Bookmark {
+  bookTitle: string;
+  chapterTitle: string;
+}
+
+export interface AnnotationListItem extends Annotation {
+  bookTitle: string;
+  chapterTitle: string;
+}
+
 export interface TrashItem {
   id: string;
   title: string;
@@ -166,6 +208,41 @@ export const api = {
     call<Chapter[]>('MergeChapters', bookId, targetId, sourceIds),
 
   images: (bookId: string) => call<ImageAsset[]>('ListImages', bookId),
+
+  /* ---------------- reading: progress / bookmarks / annotations ---------------- */
+
+  getProgress: (bookId: string) => call<ReadingProgress | null>('GetProgress', bookId),
+
+  saveProgress: (bookId: string, chapterId: string, pageIndex: number, pageCount: number) =>
+    call<ReadingProgress>('SaveProgress', bookId, chapterId, pageIndex, pageCount),
+
+  listBookmarks: (bookId: string) => call<Bookmark[]>('ListBookmarks', bookId),
+
+  addBookmark: (bookId: string, chapterId: string, anchor: number, label: string) =>
+    call<Bookmark>('AddBookmark', bookId, chapterId, anchor, label),
+
+  deleteBookmark: (id: string) => call<boolean>('DeleteBookmark', id),
+
+  listAnnotations: (bookId: string) => call<Annotation[]>('ListAnnotations', bookId),
+
+  addAnnotation: (
+    bookId: string,
+    chapterId: string,
+    startOffset: number,
+    endOffset: number,
+    text: string,
+    color: string,
+    note: string
+  ) => call<Annotation>('AddAnnotation', bookId, chapterId, startOffset, endOffset, text, color, note),
+
+  updateAnnotation: (id: string, color: string, note: string) =>
+    call<Annotation>('UpdateAnnotation', id, color, note),
+
+  deleteAnnotation: (id: string) => call<boolean>('DeleteAnnotation', id),
+
+  listAllBookmarks: () => call<BookmarkListItem[]>('ListAllBookmarks'),
+
+  listAllAnnotations: () => call<AnnotationListItem[]>('ListAllAnnotations'),
 
   /** Opens the native image dialog, then uploads the chosen file as the cover. */
   uploadCover: (bookId: string) => {
