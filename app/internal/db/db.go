@@ -77,11 +77,14 @@ CREATE TABLE IF NOT EXISTS assets (
 CREATE INDEX IF NOT EXISTS idx_assets_book ON assets(book_id);
 
 -- Reading progress: one row per book, the last paged position.
+-- position_offset is the layout-independent anchor (source character offset);
+-- page_index is kept only for backwards compatibility / quick display.
 CREATE TABLE IF NOT EXISTS reading_progress (
   book_id TEXT PRIMARY KEY REFERENCES books(id) ON DELETE CASCADE,
   chapter_id TEXT NOT NULL,
   page_index INTEGER NOT NULL DEFAULT 0,
   page_count INTEGER NOT NULL DEFAULT 0,
+  position_offset INTEGER NOT NULL DEFAULT 0,
   updated_at TEXT NOT NULL
 );
 
@@ -106,6 +109,7 @@ CREATE TABLE IF NOT EXISTS annotations (
   text TEXT NOT NULL DEFAULT '',
   color TEXT NOT NULL DEFAULT 'yellow',
   note TEXT NOT NULL DEFAULT '',
+  page_index INTEGER NOT NULL DEFAULT 0,
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL
 );
@@ -118,6 +122,10 @@ func migrate(d *sql.DB) error {
 	}
 	// Migration: older DBs may lack the soft-delete column.
 	_, _ = d.Exec(`ALTER TABLE books ADD COLUMN deleted_at TEXT`)
+	// Migration: older DBs may lack the annotation page index.
+	_, _ = d.Exec(`ALTER TABLE annotations ADD COLUMN page_index INTEGER NOT NULL DEFAULT 0`)
+	// Migration: older DBs may lack the layout-independent progress anchor.
+	_, _ = d.Exec(`ALTER TABLE reading_progress ADD COLUMN position_offset INTEGER NOT NULL DEFAULT 0`)
 	return nil
 }
 

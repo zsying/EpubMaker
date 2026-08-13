@@ -183,8 +183,8 @@ func (b *Backend) GetProgress(bookID string) (*library.ReadingProgress, error) {
 	return library.GetProgress(bookID)
 }
 
-func (b *Backend) SaveProgress(bookID, chapterID string, pageIndex, pageCount int) (*library.ReadingProgress, error) {
-	return library.SaveProgress(bookID, chapterID, pageIndex, pageCount)
+func (b *Backend) SaveProgress(bookID, chapterID string, positionOffset, pageCount int) (*library.ReadingProgress, error) {
+	return library.SaveProgress(bookID, chapterID, positionOffset, pageCount)
 }
 
 func (b *Backend) ListBookmarks(bookID string) ([]library.Bookmark, error) {
@@ -203,8 +203,8 @@ func (b *Backend) ListAnnotations(bookID string) ([]library.Annotation, error) {
 	return library.ListAnnotations(bookID)
 }
 
-func (b *Backend) AddAnnotation(bookID, chapterID string, startOffset, endOffset int, text, color, note string) (*library.Annotation, error) {
-	return library.AddAnnotation(bookID, chapterID, startOffset, endOffset, text, color, note)
+func (b *Backend) AddAnnotation(bookID, chapterID string, startOffset, endOffset, pageIndex int, text, color, note string) (*library.Annotation, error) {
+	return library.AddAnnotation(bookID, chapterID, startOffset, endOffset, pageIndex, text, color, note)
 }
 
 func (b *Backend) UpdateAnnotation(id, color, note string) (*library.Annotation, error) {
