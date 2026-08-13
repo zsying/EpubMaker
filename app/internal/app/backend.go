@@ -177,6 +177,52 @@ func (b *Backend) RenderChapter(bookID, cid string) (*library.ChapterRender, err
 	return out, nil
 }
 
+/* ----------------------------- reading: progress / bookmarks / annotations ----------------------------- */
+
+func (b *Backend) GetProgress(bookID string) (*library.ReadingProgress, error) {
+	return library.GetProgress(bookID)
+}
+
+func (b *Backend) SaveProgress(bookID, chapterID string, pageIndex, pageCount int) (*library.ReadingProgress, error) {
+	return library.SaveProgress(bookID, chapterID, pageIndex, pageCount)
+}
+
+func (b *Backend) ListBookmarks(bookID string) ([]library.Bookmark, error) {
+	return library.ListBookmarks(bookID)
+}
+
+func (b *Backend) AddBookmark(bookID, chapterID string, anchor int, label string) (*library.Bookmark, error) {
+	return library.AddBookmark(bookID, chapterID, anchor, label)
+}
+
+func (b *Backend) DeleteBookmark(id string) error {
+	return library.DeleteBookmark(id)
+}
+
+func (b *Backend) ListAnnotations(bookID string) ([]library.Annotation, error) {
+	return library.ListAnnotations(bookID)
+}
+
+func (b *Backend) AddAnnotation(bookID, chapterID string, startOffset, endOffset int, text, color, note string) (*library.Annotation, error) {
+	return library.AddAnnotation(bookID, chapterID, startOffset, endOffset, text, color, note)
+}
+
+func (b *Backend) UpdateAnnotation(id, color, note string) (*library.Annotation, error) {
+	return library.UpdateAnnotation(id, color, note)
+}
+
+func (b *Backend) DeleteAnnotation(id string) error {
+	return library.DeleteAnnotation(id)
+}
+
+func (b *Backend) ListAllBookmarks() ([]library.BookmarkListItem, error) {
+	return library.ListAllBookmarks()
+}
+
+func (b *Backend) ListAllAnnotations() ([]library.AnnotationListItem, error) {
+	return library.ListAllAnnotations()
+}
+
 /* ----------------------------- assets / covers / split / export ----------------------------- */
 
 func (b *Backend) ListImages(bookID string) ([]library.ImageAsset, error) {

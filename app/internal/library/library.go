@@ -265,10 +265,17 @@ func ListBooks(keyword string) ([]BookDTO, error) {
 	if keyword != "" {
 		kw := "%" + keyword + "%"
 		rows, err = d.Query(
-			`SELECT * FROM books WHERE deleted_at IS NULL AND (title LIKE ? OR author LIKE ?) ORDER BY updated_at DESC`,
+			`SELECT b.* FROM books b
+			 LEFT JOIN reading_progress r ON r.book_id = b.id
+			 WHERE b.deleted_at IS NULL AND (b.title LIKE ? OR b.author LIKE ?)
+			 ORDER BY COALESCE(r.updated_at, b.updated_at) DESC`,
 			kw, kw)
 	} else {
-		rows, err = d.Query(`SELECT * FROM books WHERE deleted_at IS NULL ORDER BY updated_at DESC`)
+		rows, err = d.Query(
+			`SELECT b.* FROM books b
+			 LEFT JOIN reading_progress r ON r.book_id = b.id
+			 WHERE b.deleted_at IS NULL
+			 ORDER BY COALESCE(r.updated_at, b.updated_at) DESC`)
 	}
 	if err != nil {
 		return nil, err
