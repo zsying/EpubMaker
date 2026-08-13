@@ -239,18 +239,34 @@ export default function Reader() {
     if (!stage || !col) return;
 
     const MARGIN = 34;
-    const GAP = 28;
-    const PAD_X = 44;
-    const PAD_Y = 24;
+    const GAP = 32;
+    const OUTER_PAD_X = 44;
+    const OUTER_PAD_Y = 22;
+    const MIN_PAGE_W = 260;
     const PAGE_RATIO = 0.72; // typical Chinese paperback width/height
+    const BASE_H = 1000;
+    const BASE_W = BASE_H * PAGE_RATIO;
 
-    const availH = Math.max(240, stage.clientHeight - PAD_Y * 2);
-    const sh = Math.min(Math.round(availH), 900);
-    const sw = Math.round(sh * PAGE_RATIO);
+    const availW = Math.max(320, stage.clientWidth - OUTER_PAD_X * 2);
+    const availH = Math.max(260, stage.clientHeight - OUTER_PAD_Y * 2);
+
+    // Largest single page that fits the available rectangle.
+    const singleScale = Math.min(availW / BASE_W, availH / BASE_H);
+    const singleW = Math.max(MIN_PAGE_W, Math.round(BASE_W * singleScale));
+    const singleH = Math.round(singleW / PAGE_RATIO);
+
+    // Largest page when two are placed side-by-side with a gutter.
+    const doubleScale = Math.min(availW / (BASE_W * 2 + GAP), availH / BASE_H);
+    const doubleW = Math.round(BASE_W * doubleScale);
+    const doubleH = Math.round(doubleW / PAGE_RATIO);
+
+    // Use a two-page spread only if the window is wide enough AND each page
+    // would still be comfortably readable. Otherwise scale a single page up.
+    const ppv = stage.clientWidth >= 900 && doubleW >= MIN_PAGE_W ? 2 : 1;
+    const sw = ppv === 2 ? doubleW : singleW;
+    const sh = ppv === 2 ? doubleH : singleH;
     const cw = Math.max(160, sw - MARGIN * 2);
     const ch = sh - MARGIN * 2;
-
-    const ppv = stage.clientWidth >= sw * 2 + GAP + PAD_X * 2 ? 2 : 1;
 
     setSheetWidth(sw);
     setSheetHeight(sh);
@@ -260,7 +276,10 @@ export default function Reader() {
     setMarginPx(MARGIN);
     setPagesPerView(ppv);
 
-    const columnGap = sw + GAP - cw; // = GAP + 2*MARGIN, aligns columns with sheets
+    // The column gap must position each text column exactly over the printable
+    // area of the corresponding sheet: sheet + gap - content width.
+    const columnGap = sw + GAP - cw;
+
     // Measure how many columns the content naturally fills at this geometry.
     col.style.width = 'auto';
     col.style.columnWidth = `${cw}px`;
@@ -270,15 +289,17 @@ export default function Reader() {
     setPageCount(pc);
     col.style.width = `${pc * cw + (pc - 1) * columnGap}px`;
 
+    const maxIdx = Math.max(0, pc - ppv);
     const intent = pageIntentRef.current;
     let nextPage = 0;
-    if (intent?.type === 'last') nextPage = pc - 1;
+    if (intent?.type === 'last') nextPage = maxIdx;
     else if (intent?.type === 'first') nextPage = 0;
-    else if (intent?.type === 'restore') nextPage = Math.min(intent.page ?? 0, pc - 1);
-    else nextPage = Math.min(pageIndex, pc - 1);
-    // Align to spread boundary when using a two-page spread.
+    else if (intent?.type === 'restore') nextPage = Math.min(intent.page ?? 0, maxIdx);
+    else nextPage = Math.min(pageIndex, maxIdx);
+
+    // In two-page mode align the open spread to a physical page boundary.
     if (ppv > 1 && nextPage > 0 && nextPage % ppv !== 0) {
-      nextPage = Math.max(0, Math.min(pc - ppv, nextPage - (nextPage % ppv)));
+      nextPage = Math.max(0, Math.min(maxIdx, nextPage - (nextPage % ppv)));
     }
     setPageIndex(nextPage);
     pageIntentRef.current = null;
@@ -315,17 +336,24 @@ export default function Reader() {
   }
 
   const turnStep = Math.max(1, pagesPerView);
+  const maxPageIndex = Math.max(0, pageCount - pagesPerView);
 
   function turn(delta: number) {
     const step = turnStep;
     if (delta > 0) {
-      if (pageIndex + step < pageCount) setPageIndex(pageIndex + step);
+      if (pageIndex + step <= maxPageIndex) setPageIndex(pageIndex + step);
       else if (next) openChapter(next.id, { type: 'first' });
     } else {
       if (pageIndex - step >= 0) setPageIndex(pageIndex - step);
       else if (prev) openChapter(prev.id, { type: 'last' });
     }
   }
+
+  /* keep the current view inside the book when switching 1<->2 page mode */
+  useEffect(() => {
+    if (mode !== 'paged') return;
+    if (pageIndex > maxPageIndex) setPageIndex(maxPageIndex);
+  }, [mode, pageCount, pagesPerView]);
 
   function onStageClick(e: ReactMouseEvent) {
     // Ignore clicks on interactive content and active text selections.
@@ -588,9 +616,7 @@ export default function Reader() {
 
   /* ---- paged immersive mode ---- */
   const innerWidth = pageCount > 0 ? pageCount * sheetWidth + (pageCount - 1) * pageGap : 0;
-  const spreadWidth = innerWidth + 2 * marginPx;
-  const spreadHeight = sheetHeight + 2 * marginPx;
-  const viewWidth = Math.max(sheetWidth, pagesPerView * sheetWidth + (pagesPerView - 1) * pageGap);
+  const viewWidth = pagesPerView * sheetWidth + (pagesPerView - 1) * pageGap;
   const spreadLeft = Math.round((stageWidth - viewWidth) / 2);
   const spreadTop = Math.round((stageHeight - sheetHeight) / 2);
   const columnGap = sheetWidth + pageGap - contentWidth;
@@ -605,8 +631,8 @@ export default function Reader() {
           style={{
             left: spreadLeft,
             top: spreadTop,
-            width: Math.max(0, spreadWidth),
-            height: Math.max(0, spreadHeight),
+            width: Math.max(0, innerWidth),
+            height: Math.max(0, sheetHeight),
             transform: `translate3d(-${pageIndex * (sheetWidth + pageGap)}px, 0, 0)`,
           }}
         >
@@ -616,17 +642,27 @@ export default function Reader() {
                 key={i}
                 className={`page-sheet${i % 2 === 0 ? ' left' : ' right'}`}
                 style={{
-                  left: marginPx + i * (sheetWidth + pageGap),
+                  left: i * (sheetWidth + pageGap),
                   width: sheetWidth,
                   height: sheetHeight,
                 }}
               />
             ))}
+          {geometryReady && pagesPerView === 2 && (
+            <div
+              className="book-fold"
+              style={{
+                left: sheetWidth,
+                width: pageGap,
+                height: sheetHeight,
+              }}
+            />
+          )}
           <div
             className="reader-columns"
             ref={columnsRef}
             style={{
-              left: marginPx,
+              left: 0,
               top: marginPx,
               width: pageCount > 0 ? pageCount * contentWidth + (pageCount - 1) * columnGap : 0,
               height: Math.max(0, contentHeight),
@@ -684,7 +720,7 @@ export default function Reader() {
             <span className="muted" style={{ fontSize: 12 }}>
               第 {pageIndex + 1} / {pageCount} 页
             </span>
-            <button className="btn" disabled={pageIndex >= pageCount - 1 && !next} onClick={() => turn(1)}>
+            <button className="btn" disabled={pageIndex >= maxPageIndex && !next} onClick={() => turn(1)}>
               下一页 →
             </button>
           </div>
