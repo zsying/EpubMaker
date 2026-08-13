@@ -34,6 +34,7 @@ export default function Editor() {
   const [chDirty, setChDirty] = useState(false);
   const [preview, setPreview] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [uploading, setUploading] = useState(false);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const dragId = useRef<string | null>(null);
 
@@ -88,6 +89,26 @@ export default function Editor() {
       toastError(e);
     } finally {
       setSaving(false);
+    }
+  }
+
+  // Opens the native image picker and uploads the chosen file as the book cover.
+  async function pickCover() {
+    setUploading(true);
+    try {
+      const up = await api.uploadCover(id).catch((e) => {
+        if (String((e as Error)?.message ?? e).includes('未选择')) return null;
+        throw e;
+      });
+      if (!up) return; // user cancelled the dialog
+      const asset: ImageAsset = { href: up.href, size: 0, url: up.url };
+      setImages((prev) => [...prev.filter((i) => i.href !== up.href), asset]);
+      setForm((f) => ({ ...f, coverHref: up.href }));
+      toast('已上传并设为封面', 'success');
+    } catch (err) {
+      toastError(err);
+    } finally {
+      setUploading(false);
     }
   }
 
@@ -369,7 +390,17 @@ export default function Editor() {
               </div>
 
               <div className="field">
-                <label>封面（从书内图片中选择）</label>
+                <label>
+                  封面
+                  <button
+                    className="btn sm"
+                    style={{ marginLeft: 8 }}
+                    disabled={uploading}
+                    onClick={() => void pickCover()}
+                  >
+                    {uploading ? '上传中…' : '+ 上传外部封面'}
+                  </button>
+                </label>
                 {images.length ? (
                   <div className="cover-picker">
                     <button
@@ -393,7 +424,7 @@ export default function Editor() {
                   </div>
                 ) : (
                   <div className="muted" style={{ fontSize: 12 }}>
-                    这本书里没有图片资源
+                    这本书里没有图片资源，可点击上方「上传外部封面」
                   </div>
                 )}
               </div>
