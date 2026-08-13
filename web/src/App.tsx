@@ -27,21 +27,23 @@ export default function App() {
         </Link>
       </header>
 
-      {isReader ? (
-        <Routes>
-          <Route path="/books/:id/read" element={<Reader />} />
-          <Route path="/books/:id/read/:chapterId" element={<Reader />} />
-        </Routes>
-      ) : (
-        <Routes>
-          <Route path="/" element={<Library />} />
-          <Route path="/trash" element={<Trash />} />
-          <Route path="/webdav" element={<WebDav />} />
-          <Route path="/books/:id/edit" element={<Editor />} />
-          <Route path="/books/:id/split" element={<Split />} />
-          <Route path="*" element={<div className="page empty">页面不存在</div>} />
-        </Routes>
-      )}
+      <main className="main">
+        {isReader ? (
+          <Routes>
+            <Route path="/books/:id/read" element={<Reader />} />
+            <Route path="/books/:id/read/:chapterId" element={<Reader />} />
+          </Routes>
+        ) : (
+          <Routes>
+            <Route path="/" element={<Library />} />
+            <Route path="/trash" element={<Trash />} />
+            <Route path="/webdav" element={<WebDav />} />
+            <Route path="/books/:id/edit" element={<Editor />} />
+            <Route path="/books/:id/split" element={<Split />} />
+            <Route path="*" element={<div className="page empty">页面不存在</div>} />
+          </Routes>
+        )}
+      </main>
 
       <Toaster />
     </div>

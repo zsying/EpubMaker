@@ -70,7 +70,7 @@ export default function Library() {
   }
 
   return (
-    <div className="page">
+    <div className="page library">
       <div className="lib-head">
         <h1>书架</h1>
         <span className="tag">{books.length} 本</span>
@@ -90,81 +90,83 @@ export default function Library() {
         </button>
       </div>
 
-      <div
-        className={`dropzone${over ? ' over' : ''}`}
-        onDragOver={(e) => {
-          e.preventDefault();
-          setOver(true);
-        }}
-        onDragLeave={() => setOver(false)}
-        onDrop={(e) => {
-          e.preventDefault();
-          setOver(false);
-          void doImport();
-        }}
-        onClick={() => void doImport()}
-      >
-        {importing ? '正在解析 EPUB…' : '把 .epub 文件拖到这里，或点击选择文件（支持多选）'}
-      </div>
-
-      {loading ? (
-        <div className="loading">加载中…</div>
-      ) : books.length === 0 ? (
-        <div className="empty">
-          <p style={{ fontSize: 15, marginBottom: 6 }}>书架还是空的</p>
-          <p>导入第一本 EPUB 开始整理吧</p>
+      <div className="lib-scroll">
+        <div
+          className={`dropzone${over ? ' over' : ''}`}
+          onDragOver={(e) => {
+            e.preventDefault();
+            setOver(true);
+          }}
+          onDragLeave={() => setOver(false)}
+          onDrop={(e) => {
+            e.preventDefault();
+            setOver(false);
+            void doImport();
+          }}
+          onClick={() => void doImport()}
+        >
+          {importing ? '正在解析 EPUB…' : '把 .epub 文件拖到这里，或点击选择文件（支持多选）'}
         </div>
-      ) : (
-        <div className="grid">
-          {books.map((b) => (
-            <div className="book-card" key={b.id}>
-              <div className="cover" onClick={() => nav(`/books/${b.id}/read`)} style={{ cursor: 'pointer' }}>
-                {b.coverUrl ? (
-                  <img src={b.coverUrl} alt={b.title} loading="lazy" />
-                ) : (
-                  <div className="placeholder">{b.title}</div>
-                )}
-              </div>
-              <div className="book-body">
-                <div className="book-title" title={b.title}>
-                  {b.title}
-                </div>
-                <div className="book-meta">{b.author || '未知作者'}</div>
-                <div className="book-meta">{b.chapterCount} 章</div>
-              </div>
-              <div className="book-actions">
-                <Link className="btn sm" to={`/books/${b.id}/read`}>
-                  阅读
-                </Link>
-                <Link className="btn sm" to={`/books/${b.id}/edit`}>
-                  整理
-                </Link>
-                <Link className="btn sm" to={`/books/${b.id}/split`}>
-                  拆分
-                </Link>
-                <button className="btn sm" onClick={() => void exportBook(b)}>
-                  导出
-                </button>
-                <button className="btn sm danger" onClick={() => void remove(b)}>
-                  删除
-                </button>
-              </div>
-            </div>
-          ))}
-        </div>
-      )}
 
-      {paths && (
-        <div style={{ marginTop: 40, fontSize: 12, color: 'var(--text-3)', lineHeight: 1.9 }}>
-          <div>
-            <strong style={{ color: 'var(--text-2)' }}>存储位置</strong>（可在 config.json 中修改）
+        {loading ? (
+          <div className="loading">加载中…</div>
+        ) : books.length === 0 ? (
+          <div className="empty">
+            <p style={{ fontSize: 15, marginBottom: 6 }}>书架还是空的</p>
+            <p>导入第一本 EPUB 开始整理吧</p>
           </div>
-          <div>配置文件：{paths.configFile}</div>
-          <div>数据目录：{paths.dataDir}</div>
-          <div>导出目录：{paths.exportDir}</div>
-          <div>日志目录：{paths.logDir}</div>
-        </div>
-      )}
+        ) : (
+          <div className="grid">
+            {books.map((b) => (
+              <div className="book-card" key={b.id}>
+                <div className="cover" onClick={() => nav(`/books/${b.id}/read`)} style={{ cursor: 'pointer' }}>
+                  {b.coverUrl ? (
+                    <img src={b.coverUrl} alt={b.title} loading="lazy" />
+                  ) : (
+                    <div className="placeholder">{b.title}</div>
+                  )}
+                </div>
+                <div className="book-body">
+                  <div className="book-title" title={b.title}>
+                    {b.title}
+                  </div>
+                  <div className="book-meta">{b.author || '未知作者'}</div>
+                  <div className="book-meta">{b.chapterCount} 章</div>
+                </div>
+                <div className="book-actions">
+                  <Link className="btn sm" to={`/books/${b.id}/read`}>
+                    阅读
+                  </Link>
+                  <Link className="btn sm" to={`/books/${b.id}/edit`}>
+                    整理
+                  </Link>
+                  <Link className="btn sm" to={`/books/${b.id}/split`}>
+                    拆分
+                  </Link>
+                  <button className="btn sm" onClick={() => void exportBook(b)}>
+                    导出
+                  </button>
+                  <button className="btn sm danger" onClick={() => void remove(b)}>
+                    删除
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+
+        {paths && (
+          <div style={{ marginTop: 40, fontSize: 12, color: 'var(--text-3)', lineHeight: 1.9 }}>
+            <div>
+              <strong style={{ color: 'var(--text-2)' }}>存储位置</strong>（可在 config.json 中修改）
+            </div>
+            <div>配置文件：{paths.configFile}</div>
+            <div>数据目录：{paths.dataDir}</div>
+            <div>导出目录：{paths.exportDir}</div>
+            <div>日志目录：{paths.logDir}</div>
+          </div>
+        )}
+      </div>
     </div>
   );
 }
