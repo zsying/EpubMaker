@@ -33,7 +33,7 @@ export default function Bookmarks() {
   }
 
   function jump(b: BookmarkListItem) {
-    nav(`/books/${b.bookId}/read/${b.chapterId}`, { state: { page: b.anchor } });
+    nav(`/books/${b.bookId}/read/${b.chapterId}`, { state: { offset: b.anchor } });
   }
 
   return (
@@ -54,7 +54,7 @@ export default function Bookmarks() {
               <button className="note-card-main" onClick={() => jump(b)}>
                 <div className="note-card-title">{b.bookTitle}</div>
                 <div className="note-card-meta">
-                  {b.chapterTitle} · 第 {b.anchor + 1} 页
+                  {b.chapterTitle}
                   {b.label ? ' · ' + b.label : ''}
                 </div>
               </button>

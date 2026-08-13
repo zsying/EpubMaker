@@ -33,7 +33,7 @@ export default function Annotations() {
   }
 
   function jump(a: AnnotationListItem) {
-    nav(`/books/${a.bookId}/read/${a.chapterId}`);
+    nav(`/books/${a.bookId}/read/${a.chapterId}`, { state: { offset: a.startOffset } });
   }
 
   return (

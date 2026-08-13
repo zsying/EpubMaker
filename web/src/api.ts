@@ -48,6 +48,8 @@ export interface ReadingProgress {
   chapterId: string;
   pageIndex: number;
   pageCount: number;
+  /** Layout-independent anchor: source character offset within the chapter. */
+  positionOffset: number;
   updatedAt: string;
 }
 
@@ -71,6 +73,8 @@ export interface Annotation {
   /** Highlight color key, e.g. "yellow" | "green" | "red". */
   color: string;
   note: string;
+  /** Page index within the chapter where the highlight was created. */
+  pageIndex: number;
   createdAt: string;
   updatedAt: string;
 }
@@ -213,8 +217,8 @@ export const api = {
 
   getProgress: (bookId: string) => call<ReadingProgress | null>('GetProgress', bookId),
 
-  saveProgress: (bookId: string, chapterId: string, pageIndex: number, pageCount: number) =>
-    call<ReadingProgress>('SaveProgress', bookId, chapterId, pageIndex, pageCount),
+  saveProgress: (bookId: string, chapterId: string, positionOffset: number, pageCount: number) =>
+    call<ReadingProgress>('SaveProgress', bookId, chapterId, positionOffset, pageCount),
 
   listBookmarks: (bookId: string) => call<Bookmark[]>('ListBookmarks', bookId),
 
@@ -230,10 +234,11 @@ export const api = {
     chapterId: string,
     startOffset: number,
     endOffset: number,
+    pageIndex: number,
     text: string,
     color: string,
     note: string
-  ) => call<Annotation>('AddAnnotation', bookId, chapterId, startOffset, endOffset, text, color, note),
+  ) => call<Annotation>('AddAnnotation', bookId, chapterId, startOffset, endOffset, pageIndex, text, color, note),
 
   updateAnnotation: (id: string, color: string, note: string) =>
     call<Annotation>('UpdateAnnotation', id, color, note),

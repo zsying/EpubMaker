@@ -9,7 +9,9 @@ const MODE_KEY = 'epubmaker.readMode';
 const posKey = (id: string) => `epubmaker.pos.${id}`;
 
 type ReadMode = 'scroll' | 'paged';
-type PageIntent = { type: 'first' | 'last' | 'restore'; page?: number } | null;
+// restore carries a layout-independent source character offset (not a page
+// number), so the target page is re-derived from the current layout.
+type PageIntent = { type: 'first' | 'last' | 'restore'; offset?: number } | null;
 
 type SelState = { x: number; y: number; start: number; end: number; text: string } | null;
 type PopoverState = { x: number; y: number; ann: Annotation } | null;
@@ -93,6 +95,12 @@ export default function Reader() {
   const [pagesPerView, setPagesPerView] = useState(1);
   const [chromeOpen, setChromeOpen] = useState(false);
 
+  // page-turn cross-dissolve: while true the whole spread is faded out so the
+  // page (or next/prev chapter) can be swapped with zero lateral motion.
+  const [fxOut, setFxOut] = useState(false);
+  const fxRef = useRef(false);
+  const awaitingChapterRef = useRef(false);
+
   // book-page geometry (proportions like a real paperback)
   const [stageWidth, setStageWidth] = useState(0);
   const [stageHeight, setStageHeight] = useState(0);
@@ -121,7 +129,33 @@ export default function Reader() {
   const columnsRef = useRef<HTMLDivElement>(null);
   const contentRef = useRef<HTMLDivElement>(null);
   const pageIntentRef = useRef<PageIntent>(null);
+  // Layout-independent restore target: a source character offset to land on.
+  // Kept in a ref (not a one-shot intent) so it survives across measure passes
+  // — e.g. when the first measurement happens before the stage is laid out.
+  const restoreOffsetRef = useRef<number | null>(null);
   const locationUsedRef = useRef(false);
+  // Layout-independent map: sampled source character offsets -> visual page.
+  // Used to derive a page number from a stored offset (bookmark / annotation /
+  // progress) and vice-versa, so layout changes (font size / window) don't drift.
+  const offsetMapRef = useRef<Array<{ offset: number; page: number }>>([]);
+  // Always holds the latest measureAndLayout so callbacks captured in long-lived
+  // effects (e.g. the ResizeObserver, which only re-binds on mode change) never
+  // run a stale closure with outdated state.
+  const measureRef = useRef<() => void>(() => {});
+  // Guards scheduleMeasure so a burst of resize events (window drag, DPR change)
+  // collapses into a single rAF re-measure instead of one per frame.
+  const rafRef = useRef<number | null>(null);
+  // The geometry source for pagination. We read the WINDOW size (kept fresh on
+  // every resize event) rather than an element's clientWidth: inside the Wails
+  // WebView2 shell the inner element's clientWidth can lag the native window
+  // resize (it updates a frame too late, or not at all), which left the 1<->2
+  // page spread frozen at whatever width it first measured. The window object
+  // is always current at resize-event time, so we snapshot it here synchronously
+  // and let measureAndLayout read from this ref.
+  const winSizeRef = useRef<{ w: number; h: number }>({
+    w: typeof window !== 'undefined' ? window.innerWidth : 1280,
+    h: typeof window !== 'undefined' ? window.innerHeight : 800,
+  });
 
   /* ---- load book / chapters / persisted data ---- */
   useEffect(() => {
@@ -145,13 +179,16 @@ export default function Reader() {
           (prog && exists(prog.chapterId) && prog.chapterId) ||
           cs[0]?.id ||
           null;
-        if (prog && prog.chapterId === target) {
-          pageIntentRef.current = { type: 'restore', page: prog.pageIndex };
+        if (prog && prog.chapterId === target && prog.positionOffset > 0) {
+          restoreOffsetRef.current = prog.positionOffset;
         }
-        const restorePage = (loc.state as { page?: number } | null)?.page;
-        if (restorePage !== undefined && !locationUsedRef.current) {
-          pageIntentRef.current = { type: 'restore', page: restorePage };
+        const restoreOffset = (loc.state as { offset?: number } | null)?.offset;
+        if (restoreOffset !== undefined && !locationUsedRef.current) {
+          restoreOffsetRef.current = restoreOffset;
           locationUsedRef.current = true;
+        }
+        if (restoreOffsetRef.current === null) {
+          pageIntentRef.current = { type: 'first' };
         }
         setCurrent(target);
       } catch (e) {
@@ -218,25 +255,140 @@ export default function Reader() {
     const stage = stageRef.current;
     if (!stage) return;
     const update = () => {
-      setStageWidth(stage.clientWidth);
-      setStageHeight(stage.clientHeight);
+      // Snapshot the window size synchronously so measureAndLayout reads a
+      // fresh value even if the inner element's clientWidth lags the resize.
+      winSizeRef.current = { w: window.innerWidth, h: window.innerHeight };
+      setStageWidth(winSizeRef.current.w);
+      setStageHeight(winSizeRef.current.h);
+      // Re-measure on every size change so the page count (1 vs 2) and sheet
+      // geometry adapt to the window.
+      scheduleMeasure();
     };
+    // The ResizeObserver catches layout changes of the stage element. In the
+    // Wails WebView2 shell a window resize does NOT reliably re-fire a
+    // ResizeObserver callback for the inner element, but Wails always dispatches
+    // a `window` resize event on window resize — so listen to both.
     const ro = new ResizeObserver(update);
     ro.observe(stage);
+    window.addEventListener('resize', update);
     update();
-    return () => ro.disconnect();
+    return () => {
+      ro.disconnect();
+      window.removeEventListener('resize', update);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [mode]);
 
   useLayoutEffect(() => {
     if (mode !== 'paged') return;
     measureAndLayout();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [html, fontSize, mode, stageWidth]);
+  }, [html, fontSize, mode, stageWidth, stageHeight]);
+
+  // Builds a layout-independent map: source character offset -> visual page.
+  //
+  // Measurement happens in the LIVE multi-column layout — the exact same
+  // pagination the reader displays — so there is zero drift between what we
+  // measure and what is on screen. For each sampled character we read its
+  // horizontal position and derive its COLUMN INDEX:
+  //     page = floor((charCenterX - columnsLeft) / stride)
+  // where stride = contentWidth + columnGap = sheetWidth + pageGap. The column
+  // index IS the visual page number.
+  //
+  // We deliberately measure the live multi-column layout (NOT a single-column
+  // stand-in): a single-column stand-in paginates differently from the real
+  // multi-column box (per-column bottom rounding drifts), which previously
+  // sent every restore to page 1. Measuring the live layout is exact.
+  // Whitespace-only text nodes (newlines/indentation between block elements)
+  // are never laid out and report a (0,0) rect — those inherit the nearest
+  // preceding rendered page (see lastValidPage below) so they don't force a
+  // bogus page 1.
+  function buildOffsetMap(stride: number) {
+    const content = contentRef.current;
+    const col = columnsRef.current;
+    if (!content || !col || stride <= 0) return;
+    const colLeft = col.getBoundingClientRect().left;
+    const samples: Array<{ offset: number; page: number }> = [];
+    const STEP = 48;
+    const walker = document.createTreeWalker(content, NodeFilter.SHOW_TEXT);
+    // Whitespace-only text nodes (the newlines/indentation between block
+    // elements) are present in the tree walker and counted in the offset
+    // stream, but they are NOT laid out — their Range rect is (0, 0). If we
+    // recorded a bogus page 0 for them, a stored offset that happens to fall on
+    // one would jump to the first page. Instead inherit the page of the nearest
+    // preceding rendered character (whitespace never crosses a page boundary).
+    let lastValidPage = 0;
+    const pageOf = (node: Text, local: number): number => {
+      const len = node.textContent?.length ?? 0;
+      const lo = Math.max(0, Math.min(local, len - 1));
+      const range = document.createRange();
+      range.setStart(node, lo);
+      range.setEnd(node, Math.min(lo + 1, len));
+      const r = range.getBoundingClientRect();
+      if (r.width > 0) {
+        const cx = r.left + r.width / 2;
+        let page = Math.floor((cx - colLeft) / stride);
+        if (page < 0) page = 0;
+        lastValidPage = page;
+        return page;
+      }
+      return lastValidPage;
+    };
+    let cum = 0;
+    let n: Node | null;
+    while ((n = walker.nextNode())) {
+      const len = (n.textContent || '').length;
+      samples.push({ offset: cum, page: pageOf(n as Text, 0) });
+      for (let o = STEP; o < len; o += STEP) {
+        samples.push({ offset: cum + o, page: pageOf(n as Text, o) });
+      }
+      cum += len;
+    }
+    offsetMapRef.current = samples;
+  }
+
+  // Maps a layout-independent source character offset to the visual page it
+  // currently lands on, by binary-searching the offset->page map built by
+  // buildOffsetMap() from the live multi-column layout. The map is re-derived
+  // from the current geometry on every measure, so font-size / window / DPI
+  // changes land on the same text rather than the same (now-wrong) page.
+  //
+  // We look the offset up in the pre-built map rather than re-measuring the
+  // character directly: a direct re-measure walks the text-node stream (which
+  // includes whitespace-only nodes between block elements that are never laid
+  // out and report a (0,0) rect), and would land on such a node for many
+  // offsets, sending the restore to page 1.
+  function pageIndexForOffset(offset: number): number {
+    const map = offsetMapRef.current;
+    if (map.length === 0) return 0;
+    if (offset <= map[0].offset) return map[0].page;
+    const last = map[map.length - 1];
+    if (offset >= last.offset) return last.page;
+    let lo = 0;
+    let hi = map.length - 1;
+    while (lo < hi) {
+      const mid = (lo + hi + 1) >> 1;
+      if (map[mid].offset <= offset) lo = mid;
+      else hi = mid - 1;
+    }
+    return map[lo].page;
+  }
+
+  // Returns the source character offset of the first character shown on page `p`,
+  // using the sampled map built on every measure.
+  function offsetForPage(p: number): number {
+    const map = offsetMapRef.current;
+    if (map.length === 0) return 0;
+    for (const s of map) {
+      if (s.page >= p) return s.offset;
+    }
+    return map[map.length - 1].offset;
+  }
 
   function measureAndLayout() {
     const stage = stageRef.current;
     const col = columnsRef.current;
-    if (!stage || !col) return;
+    if (!col) return;
 
     const MARGIN = 34;
     const GAP = 32;
@@ -247,8 +399,13 @@ export default function Reader() {
     const BASE_H = 1000;
     const BASE_W = BASE_H * PAGE_RATIO;
 
-    const availW = Math.max(320, stage.clientWidth - OUTER_PAD_X * 2);
-    const availH = Math.max(260, stage.clientHeight - OUTER_PAD_Y * 2);
+    // Drive geometry off the (always-current) window size, NOT an element's
+    // clientWidth — see winSizeRef for why this matters under Wails.
+    const ws = winSizeRef.current;
+    const W = ws.w || (stage ? stage.clientWidth : 1280);
+    const H = ws.h || (stage ? stage.clientHeight : 800);
+    const availW = Math.max(320, W - OUTER_PAD_X * 2);
+    const availH = Math.max(260, H - OUTER_PAD_Y * 2);
 
     // Largest single page that fits the available rectangle.
     const singleScale = Math.min(availW / BASE_W, availH / BASE_H);
@@ -262,7 +419,7 @@ export default function Reader() {
 
     // Use a two-page spread only if the window is wide enough AND each page
     // would still be comfortably readable. Otherwise scale a single page up.
-    const ppv = stage.clientWidth >= 900 && doubleW >= MIN_PAGE_W ? 2 : 1;
+    const ppv = W >= 900 && doubleW >= MIN_PAGE_W ? 2 : 1;
     const sw = ppv === 2 ? doubleW : singleW;
     const sh = ppv === 2 ? doubleH : singleH;
     const cw = Math.max(160, sw - MARGIN * 2);
@@ -279,6 +436,10 @@ export default function Reader() {
     // The column gap must position each text column exactly over the printable
     // area of the corresponding sheet: sheet + gap - content width.
     const columnGap = sw + GAP - cw;
+    // Distance between the left edges of two adjacent text columns. Equal to
+    // contentWidth + columnGap == sheetWidth + pageGap. Used to derive a page
+    // (column index) from a character's horizontal position.
+    const stride = cw + columnGap;
 
     // Measure how many columns the content naturally fills at this geometry.
     col.style.width = 'auto';
@@ -289,13 +450,33 @@ export default function Reader() {
     setPageCount(pc);
     col.style.width = `${pc * cw + (pc - 1) * columnGap}px`;
 
+    // Build the layout-independent offset->page map BEFORE deriving any page,
+    // using the geometry we just measured (cw/ch are the local, correct values
+    // — reading them from React state here could be stale within this pass).
+    buildOffsetMap(stride);
+
+    // Capture the source offset of the currently shown page so a layout change
+    // (font size / window / DPI) keeps the same text in view instead of the
+    // same (now wrong) page number.
+    const keepOffset = offsetForPage(pageIndex);
+
     const maxIdx = Math.max(0, pc - ppv);
     const intent = pageIntentRef.current;
     let nextPage = 0;
     if (intent?.type === 'last') nextPage = maxIdx;
     else if (intent?.type === 'first') nextPage = 0;
-    else if (intent?.type === 'restore') nextPage = Math.min(intent.page ?? 0, maxIdx);
-    else nextPage = Math.min(pageIndex, maxIdx);
+
+    if (restoreOffsetRef.current !== null && offsetMapRef.current.length > 0) {
+      // Explicit restore (bookmark / annotation / saved progress): land on the
+      // page that currently holds this source offset regardless of layout.
+      nextPage = Math.min(pageIndexForOffset(restoreOffsetRef.current), maxIdx);
+      restoreOffsetRef.current = null;
+    } else if (keepOffset !== undefined) {
+      // Layout change (font size / window): keep the same text in view.
+      nextPage = Math.min(pageIndexForOffset(keepOffset), maxIdx);
+    } else {
+      nextPage = Math.min(pageIndex, maxIdx);
+    }
 
     // In two-page mode align the open spread to a physical page boundary.
     if (ppv > 1 && nextPage > 0 && nextPage % ppv !== 0) {
@@ -304,16 +485,23 @@ export default function Reader() {
     setPageIndex(nextPage);
     pageIntentRef.current = null;
   }
+  // Keep the latest measureAndLayout reachable from stable callbacks.
+  measureRef.current = measureAndLayout;
 
   function scheduleMeasure() {
-    requestAnimationFrame(() => measureAndLayout());
+    if (rafRef.current !== null) return;
+    rafRef.current = requestAnimationFrame(() => {
+      rafRef.current = null;
+      measureRef.current();
+    });
   }
 
   /* ---- progress persistence (paged mode) ---- */
   useEffect(() => {
     if (mode !== 'paged' || !current) return;
     const t = setTimeout(() => {
-      api.saveProgress(id, current, pageIndex, pageCount).catch(() => {});
+      const off = offsetForPage(pageIndex);
+      api.saveProgress(id, current, off, pageCount).catch(() => {});
     }, 600);
     return () => clearTimeout(t);
   }, [mode, current, pageIndex, pageCount, id]);
@@ -331,21 +519,50 @@ export default function Reader() {
     setSel(null);
     setBmOpen(false);
     setTocOpen(false);
-    pageIntentRef.current = intent;
+    if (intent?.type === 'restore') {
+      restoreOffsetRef.current = intent.offset ?? 0;
+    } else if (intent?.type === 'last') {
+      pageIntentRef.current = { type: 'last' };
+    } else {
+      pageIntentRef.current = { type: 'first' };
+    }
+    if (cid === current) {
+      // Same chapter: setCurrent is a no-op, so force a re-measure to apply the
+      // intent/restore right now (otherwise it would never be consumed).
+      scheduleMeasure();
+    }
     setCurrent(cid);
   }
 
   const turnStep = Math.max(1, pagesPerView);
   const maxPageIndex = Math.max(0, pageCount - pagesPerView);
 
+  // Cross-dissolve page turn: fade the spread out, swap the page (or load the
+  // next/previous chapter) while invisible, then fade back in. This removes the
+  // horizontal carousel slide entirely — there is zero lateral motion, and a
+  // chapter change becomes a clean dissolve rather than a long slide-to-the-end.
+  function startTurn(apply: () => void, isChapter = false) {
+    if (fxRef.current) return;
+    fxRef.current = true;
+    if (isChapter) awaitingChapterRef.current = true;
+    setFxOut(true);
+    window.setTimeout(() => {
+      apply();
+      if (!isChapter) {
+        setFxOut(false);
+        fxRef.current = false;
+      }
+    }, 130);
+  }
+
   function turn(delta: number) {
     const step = turnStep;
     if (delta > 0) {
-      if (pageIndex + step <= maxPageIndex) setPageIndex(pageIndex + step);
-      else if (next) openChapter(next.id, { type: 'first' });
+      if (pageIndex + step <= maxPageIndex) startTurn(() => setPageIndex(pageIndex + step));
+      else if (next) startTurn(() => openChapter(next.id, { type: 'first' }), true);
     } else {
-      if (pageIndex - step >= 0) setPageIndex(pageIndex - step);
-      else if (prev) openChapter(prev.id, { type: 'last' });
+      if (pageIndex - step >= 0) startTurn(() => setPageIndex(pageIndex - step));
+      else if (prev) startTurn(() => openChapter(prev.id, { type: 'last' }), true);
     }
   }
 
@@ -354,6 +571,17 @@ export default function Reader() {
     if (mode !== 'paged') return;
     if (pageIndex > maxPageIndex) setPageIndex(maxPageIndex);
   }, [mode, pageCount, pagesPerView]);
+
+  // A chapter turn fades out, then loads new content asynchronously. Once the
+  // new chapter's HTML is committed (and measured), fade the spread back in.
+  useEffect(() => {
+    if (awaitingChapterRef.current) {
+      awaitingChapterRef.current = false;
+      setFxOut(false);
+      fxRef.current = false;
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [safeHtml]);
 
   function onStageClick(e: ReactMouseEvent) {
     // Ignore clicks on interactive content and active text selections.
@@ -401,20 +629,55 @@ export default function Reader() {
   }, [mode, pageIndex, pageCount, pagesPerView, prev, next]);
 
   /* ---- keyboard ---- */
+  function exitReading() {
+    // Persist current position before leaving so progress isn't lost.
+    if (current) {
+      const off = mode === 'paged' ? offsetForPage(pageIndex) : 0;
+      const total = mode === 'paged' ? pageCount : 1;
+      api.saveProgress(id, current, off, total).catch(() => {});
+    }
+    nav('/');
+  }
+
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
-      if (e.key === 'Escape') {
-        setPopover(null);
-        setSel(null);
-        setBmOpen(false);
-        setAnnOpen(false);
-        setTocOpen(false);
+
+      // Backspace exits the reader.
+      if (e.key === 'Backspace') {
+        e.preventDefault();
+        exitReading();
         return;
       }
+
+      if (e.key === 'Escape') {
+        // Close any open overlay first; otherwise exit the reader.
+        if (popover) { setPopover(null); return; }
+        if (sel) { setSel(null); return; }
+        if (bmOpen) { setBmOpen(false); return; }
+        if (annOpen) { setAnnOpen(false); return; }
+        if (tocOpen) { setTocOpen(false); return; }
+        if (chromeOpen) { setChromeOpen(false); return; }
+        exitReading();
+        return;
+      }
+
+      // Enter shows the menu bar / chrome.
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        setChromeOpen(true);
+        return;
+      }
+
       if (mode === 'paged') {
         if (e.key === 'ArrowLeft') turn(-1);
         if (e.key === 'ArrowRight') turn(1);
+        // Space turns the page forward; Shift+Space turns back. Prevent the
+        // default page-scroll that Space would otherwise trigger.
+        if (e.code === 'Space') {
+          e.preventDefault();
+          turn(e.shiftKey ? -1 : 1);
+        }
       } else {
         if (e.key === 'ArrowLeft' && prev) setCurrent(prev.id);
         if (e.key === 'ArrowRight' && next) setCurrent(next.id);
@@ -422,7 +685,7 @@ export default function Reader() {
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [mode, prev, next, pageIndex, pageCount]);
+  }, [mode, prev, next, pageIndex, pageCount, chromeOpen, popover, sel, bmOpen, annOpen, tocOpen, current, id]);
 
   /* ---- selection -> toolbar (paged) ---- */
   useEffect(() => {
@@ -473,7 +736,7 @@ export default function Reader() {
   async function createAnnotation(color: string) {
     if (!sel || !current) return;
     try {
-      const a = await api.addAnnotation(id, current, sel.start, sel.end, sel.text, color, '');
+      const a = await api.addAnnotation(id, current, sel.start, sel.end, pageIndex, sel.text, color, '');
       setAnnotations((prev) => [...prev, a]);
       window.getSelection()?.removeAllRanges();
       setSel(null);
@@ -502,6 +765,7 @@ export default function Reader() {
       const upd = await api.updateAnnotation(a.id, a.color, noteDraft);
       setAnnotations((prev) => prev.map((x) => (x.id === a.id ? upd : x)));
       setPopover((p) => (p ? { ...p, ann: upd } : p));
+      setPopover(null);
       toast('已保存批注', 'success');
     } catch (e) {
       toastError(e);
@@ -521,7 +785,8 @@ export default function Reader() {
   async function addBookmarkNow() {
     if (!current) return;
     try {
-      const b = await api.addBookmark(id, current, pageIndex, '');
+      const off = offsetForPage(pageIndex);
+      const b = await api.addBookmark(id, current, off, '');
       setBookmarks((prev) => [...prev, b]);
       toast('已添加书签', 'success');
     } catch (e) {
@@ -539,11 +804,11 @@ export default function Reader() {
   }
 
   function jumpBookmark(b: Bookmark) {
-    openChapter(b.chapterId, { type: 'restore', page: b.anchor });
+    openChapter(b.chapterId, { type: 'restore', offset: b.anchor });
   }
 
   function jumpAnnotation(a: Annotation) {
-    openChapter(a.chapterId, { type: 'first' });
+    openChapter(a.chapterId, { type: 'restore', offset: a.startOffset });
     setAnnOpen(false);
   }
 
@@ -615,40 +880,46 @@ export default function Reader() {
   }
 
   /* ---- paged immersive mode ---- */
-  const innerWidth = pageCount > 0 ? pageCount * sheetWidth + (pageCount - 1) * pageGap : 0;
   const viewWidth = pagesPerView * sheetWidth + (pagesPerView - 1) * pageGap;
-  const spreadLeft = Math.round((stageWidth - viewWidth) / 2);
-  const spreadTop = Math.round((stageHeight - sheetHeight) / 2);
   const columnGap = sheetWidth + pageGap - contentWidth;
   const geometryReady = sheetWidth > 0 && contentWidth > 0;
+  // Only render the sheets actually on screen (1 or 2) so no third-page edge leaks.
+  const visibleSheets = geometryReady ? Math.min(pagesPerView, Math.max(0, pageCount - pageIndex)) : 0;
 
   return (
     <div className="reader reader-paged">
       <div className="reader-stage" ref={stageRef} onClick={onStageClick}>
         <div
-          className={`reader-spread${geometryReady ? ' is-ready' : ''}`}
+          className={`reader-spread${fxOut ? ' fx-out' : ''}`}
           ref={spreadRef}
           style={{
-            left: spreadLeft,
-            top: spreadTop,
-            width: Math.max(0, innerWidth),
+            width: Math.max(0, viewWidth),
             height: Math.max(0, sheetHeight),
-            transform: `translate3d(-${pageIndex * (sheetWidth + pageGap)}px, 0, 0)`,
           }}
         >
           {geometryReady &&
-            Array.from({ length: pageCount }).map((_, i) => (
-              <div
-                key={i}
-                className={`page-sheet${i % 2 === 0 ? ' left' : ' right'}`}
-                style={{
-                  left: i * (sheetWidth + pageGap),
-                  width: sheetWidth,
-                  height: sheetHeight,
-                }}
-              />
-            ))}
-          {geometryReady && pagesPerView === 2 && (
+            Array.from({ length: visibleSheets }).map((_, j) => {
+              const i = pageIndex + j;
+              const isLeft = i % 2 === 0;
+              // Like a real book: the page number sits in the outer bottom
+              // corner. A single page uses the right corner; in a spread the
+              // left sheet uses the left corner and the right sheet the right.
+              const corner = pagesPerView === 1 ? 'right' : isLeft ? 'left' : 'right';
+              return (
+                <div
+                  key={i}
+                  className={`page-sheet${isLeft ? ' left' : ' right'}`}
+                  style={{
+                    left: j * (sheetWidth + pageGap),
+                    width: sheetWidth,
+                    height: sheetHeight,
+                  }}
+                >
+                  <span className={`page-num ${corner}`}>{i + 1} / {pageCount}</span>
+                </div>
+              );
+            })}
+          {geometryReady && pagesPerView === 2 && pageIndex + 1 < pageCount && (
             <div
               className="book-fold"
               style={{
@@ -659,18 +930,27 @@ export default function Reader() {
             />
           )}
           <div
-            className="reader-columns"
-            ref={columnsRef}
+            className="reader-clip"
             style={{
-              left: 0,
-              top: marginPx,
-              width: pageCount > 0 ? pageCount * contentWidth + (pageCount - 1) * columnGap : 0,
-              height: Math.max(0, contentHeight),
-              columnWidth: contentWidth,
-              columnGap: columnGap,
+              width: Math.max(0, viewWidth),
+              height: Math.max(0, sheetHeight),
             }}
           >
-            <div className="reader-content" ref={contentRef} style={{ fontSize }} />
+            <div
+              className="reader-columns"
+              ref={columnsRef}
+              style={{
+                left: marginPx,
+                top: marginPx,
+                width: pageCount > 0 ? pageCount * contentWidth + (pageCount - 1) * columnGap : 0,
+                height: Math.max(0, contentHeight),
+                transform: `translate3d(-${pageIndex * (sheetWidth + pageGap)}px, 0, 0)`,
+                columnWidth: contentWidth,
+                columnGap: columnGap,
+              }}
+            >
+              <div className="reader-content" ref={contentRef} style={{ fontSize }} />
+            </div>
           </div>
         </div>
       </div>
@@ -779,8 +1059,7 @@ export default function Reader() {
                       <button className="drawer-row-main" onClick={() => jumpBookmark(b)}>
                         <div className="drawer-row-title">{ch ? ch.title : '未知章节'}</div>
                         <div className="muted" style={{ fontSize: 12 }}>
-                          第 {b.anchor + 1} 页
-                          {b.label ? ' · ' + b.label : ''}
+                          {b.label ? b.label : '已标记'}
                         </div>
                       </button>
                       <button className="btn sm danger" onClick={() => removeBookmark(b.id)}>

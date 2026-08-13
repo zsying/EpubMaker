@@ -613,7 +613,12 @@ a {
 
 /* ---------- immersive paged reader ---------- */
 .reader-paged {
+  /* Override the scroll-mode .reader grid (268px sidebar + 1fr) so the paged
+     reader owns the full viewport instead of being squeezed into the sidebar. */
+  display: block;
+  grid-template-columns: none;
   position: relative;
+  width: 100%;
   height: 100%;
   overflow: hidden;
   background:
@@ -627,16 +632,55 @@ a {
   height: 100%;
   overflow: hidden;
   cursor: pointer;
-  perspective: 1600px;
+  /* Center the spread both vertically and horizontally with flex so the book
+     sits in the middle of the viewport instead of being anchored to the top. */
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+/* Page number printed inside the sheet, like a real book: bottom outer corner.
+   Single page -> bottom right; spread -> left sheet bottom-left, right sheet
+   bottom-right. Rendered behind the transparent clip, in the page margin. */
+.page-sheet .page-num {
+  position: absolute;
+  bottom: 14px;
+  font-size: 11px;
+  line-height: 1;
+  color: #9a8b78;
+  pointer-events: none;
+  user-select: none;
+  font-family: var(--font);
+  letter-spacing: 0.02em;
+}
+.page-sheet .page-num.left {
+  left: 20px;
+}
+.page-sheet .page-num.right {
+  right: 20px;
 }
 
 .reader-spread {
-  position: absolute;
-  will-change: transform;
+  position: relative;
+  will-change: opacity;
+  /* Page turns are a cross-dissolve, never a horizontal slide: the columns
+     jump instantly (while faded out), so there is zero lateral motion. */
+  transition: opacity 0.13s ease;
+  flex: none;
 }
 
-.reader-spread.is-ready {
-  transition: transform 0.42s cubic-bezier(0.22, 0.61, 0.36, 1);
+.reader-spread.fx-out {
+  opacity: 0;
+}
+
+/* Foreground clip that exactly matches the visible sheet(s). The page-sheet
+   shadows live on sibling elements behind it, so they are not clipped, while
+   the text column is strictly masked to the current 1 or 2 pages. */
+.reader-clip {
+  position: absolute;
+  left: 0;
+  top: 0;
+  overflow: hidden;
 }
 
 .page-sheet {
@@ -708,6 +752,7 @@ a {
   background: transparent;
   color: #2c2f33;
   overflow: hidden;
+  will-change: transform;
 }
 
 .reader-paged .reader-content {
