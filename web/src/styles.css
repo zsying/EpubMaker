@@ -13,6 +13,7 @@
   --danger-soft: #fdeaea;
   --ok: #1a9c62;
   --radius: 10px;
+  --toc-dock-w: 268px;
   --shadow: 0 1px 2px rgba(16, 24, 40, 0.04), 0 4px 16px rgba(16, 24, 40, 0.06);
   --font: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB',
     'Microsoft YaHei', sans-serif;
@@ -624,6 +625,55 @@ a {
   background:
     radial-gradient(circle at 50% 30%, rgba(255, 255, 255, 0.18) 0%, transparent 60%),
     #e3ddd1; /* warm desk surface */
+}
+
+/* Docked TOC mode: the chapter list pins as a persistent left sidebar and the
+   reading stage shrinks into the remaining column. The chrome bars are inset to
+   the dock width so they sit above the page, not over the TOC. */
+.reader-paged.toc-docked {
+  display: grid;
+  grid-template-columns: var(--toc-dock-w) 1fr;
+  grid-template-rows: 100%;
+}
+.reader-paged.toc-docked .toc-dock {
+  grid-column: 1;
+  grid-row: 1;
+}
+.reader-paged.toc-docked .reader-stage {
+  grid-column: 2;
+  grid-row: 1;
+  width: 100%;
+  height: 100%;
+}
+.reader-paged.toc-docked .reader-chrome {
+  left: var(--toc-dock-w);
+}
+
+/* The docked TOC sidebar (reuses the scroll-mode .toc look). */
+.toc-dock {
+  grid-row: 1;
+  border-right: 1px solid var(--border);
+  background: var(--panel);
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  z-index: 20;
+}
+.toc-dock .toc-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: none;
+  padding: 16px 16px 12px;
+}
+.toc-dock .toc-head .btn {
+  margin-left: auto;
+}
+.toc-dock-body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 6px 0;
 }
 
 .reader-stage {

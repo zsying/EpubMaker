@@ -6,6 +6,10 @@ import { toast, toastError } from '../toast';
 
 const FONT_KEY = 'epubmaker.fontSize';
 const MODE_KEY = 'epubmaker.readMode';
+const TOC_DOCK_KEY = 'epubmaker.tocDocked';
+// Width of the docked TOC sidebar (kept in sync with --toc-dock-w in styles.css
+// and the .toc sidebar width in scroll mode for visual consistency).
+const TOC_DOCK_W = 268;
 const posKey = (id: string) => `epubmaker.pos.${id}`;
 
 type ReadMode = 'scroll' | 'paged';
@@ -94,6 +98,7 @@ export default function Reader() {
   const [pageCount, setPageCount] = useState(1);
   const [pagesPerView, setPagesPerView] = useState(1);
   const [chromeOpen, setChromeOpen] = useState(false);
+  const [chromeHover, setChromeHover] = useState(false);
 
   // page-turn cross-dissolve: while true the whole spread is faded out so the
   // page (or next/prev chapter) can be swapped with zero lateral motion.
@@ -117,6 +122,9 @@ export default function Reader() {
 
   // overlays
   const [tocOpen, setTocOpen] = useState(false);
+  // Docked TOC mode: the chapter list is pinned as a persistent sidebar on the
+  // left instead of opening as a transient drawer.
+  const [tocDocked, setTocDocked] = useState(() => localStorage.getItem(TOC_DOCK_KEY) === '1');
   const [bmOpen, setBmOpen] = useState(false);
   const [annOpen, setAnnOpen] = useState(false);
   const [sel, setSel] = useState<SelState>(null);
@@ -156,6 +164,12 @@ export default function Reader() {
     w: typeof window !== 'undefined' ? window.innerWidth : 1280,
     h: typeof window !== 'undefined' ? window.innerHeight : 800,
   });
+
+  // Mirrors tocDocked into a ref so measureAndLayout (which reads the window
+  // size from winSizeRef) can also subtract the dock width for page geometry
+  // without being re-bound on every toggle.
+  const tocDockedRef = useRef(tocDocked);
+  tocDockedRef.current = tocDocked;
 
   /* ---- load book / chapters / persisted data ---- */
   useEffect(() => {
@@ -222,6 +236,15 @@ export default function Reader() {
 
   useEffect(() => localStorage.setItem(FONT_KEY, String(fontSize)), [fontSize]);
   useEffect(() => localStorage.setItem(MODE_KEY, mode), [mode]);
+  useEffect(() => localStorage.setItem(TOC_DOCK_KEY, tocDocked ? '1' : '0'), [tocDocked]);
+
+  // When the docked sidebar is toggled, the available reading width changes, so
+  // re-measure the page geometry (the page size / 1-vs-2 spread must adapt).
+  useEffect(() => {
+    if (mode !== 'paged') return;
+    scheduleMeasure();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tocDocked, mode]);
 
   const safeHtml = useMemo(
     () => DOMPurify.sanitize(html, { ADD_ATTR: ['target'], FORBID_TAGS: ['script', 'style', 'link'] }),
@@ -404,7 +427,12 @@ export default function Reader() {
     const ws = winSizeRef.current;
     const W = ws.w || (stage ? stage.clientWidth : 1280);
     const H = ws.h || (stage ? stage.clientHeight : 800);
-    const availW = Math.max(320, W - OUTER_PAD_X * 2);
+    // The docked TOC sidebar eats horizontal space on the left, so the usable
+    // reading width is the window minus the dock. This keeps the book fully
+    // visible inside the shrunken stage instead of being clipped by it.
+    const dockW = tocDockedRef.current ? TOC_DOCK_W : 0;
+    const effW = Math.max(0, W - dockW);
+    const availW = Math.max(320, effW - OUTER_PAD_X * 2);
     const availH = Math.max(260, H - OUTER_PAD_Y * 2);
 
     // Largest single page that fits the available rectangle.
@@ -419,7 +447,7 @@ export default function Reader() {
 
     // Use a two-page spread only if the window is wide enough AND each page
     // would still be comfortably readable. Otherwise scale a single page up.
-    const ppv = W >= 900 && doubleW >= MIN_PAGE_W ? 2 : 1;
+    const ppv = effW >= 900 && doubleW >= MIN_PAGE_W ? 2 : 1;
     const sw = ppv === 2 ? doubleW : singleW;
     const sh = ppv === 2 ? doubleH : singleH;
     const cw = Math.max(160, sw - MARGIN * 2);
@@ -687,6 +715,30 @@ export default function Reader() {
     return () => window.removeEventListener('keydown', onKey);
   }, [mode, prev, next, pageIndex, pageCount, chromeOpen, popover, sel, bmOpen, annOpen, tocOpen, current, id]);
 
+  /* ---- hover the top/bottom edge to reveal the reader chrome (paged) ---- */
+  useEffect(() => {
+    if (mode !== 'paged') return;
+    const EDGE = 64; // px from the top/bottom edge that activates the chrome
+    let raf = 0;
+    const onMove = (e: MouseEvent) => {
+      if (raf) return; // coalesce bursts of mousemove into one frame
+      raf = requestAnimationFrame(() => {
+        raf = 0;
+        const y = e.clientY;
+        const h = window.innerHeight;
+        const near = y < EDGE || y > h - EDGE;
+        // Functional update avoids stale closures and only re-renders on change.
+        setChromeHover((prev) => (prev === near ? prev : near));
+      });
+    };
+    window.addEventListener('mousemove', onMove);
+    return () => {
+      window.removeEventListener('mousemove', onMove);
+      if (raf) cancelAnimationFrame(raf);
+      setChromeHover(false);
+    };
+  }, [mode]);
+
   /* ---- selection -> toolbar (paged) ---- */
   useEffect(() => {
     const el = contentRef.current;
@@ -887,7 +939,30 @@ export default function Reader() {
   const visibleSheets = geometryReady ? Math.min(pagesPerView, Math.max(0, pageCount - pageIndex)) : 0;
 
   return (
-    <div className="reader reader-paged">
+    <div className={"reader reader-paged" + (tocDocked ? " toc-docked" : "")}>
+      {tocDocked && (
+        <aside className="toc-dock">
+          <div className="toc-head">
+            目录 · {chapters.length} 章
+            <button className="btn sm" onClick={() => setTocDocked(false)} title="取消固定目录">
+              ✕
+            </button>
+          </div>
+          <div className="toc-dock-body">
+            {chapters.map((c, i) => (
+              <button
+                key={c.id}
+                className={`toc-item${c.id === current ? " active" : ""}`}
+                onClick={() => openChapter(c.id)}
+                title={c.title}
+              >
+                <span className="num">{String(i + 1).padStart(2, "0")}</span>
+                {c.title}
+              </button>
+            ))}
+          </div>
+        </aside>
+      )}
       <div className="reader-stage" ref={stageRef} onClick={onStageClick}>
         <div
           className={`reader-spread${fxOut ? ' fx-out' : ''}`}
@@ -955,7 +1030,7 @@ export default function Reader() {
         </div>
       </div>
 
-      {chromeOpen && (
+      {(chromeOpen || chromeHover) && (
         <>
           <div className="reader-chrome top">
             <button className="btn sm" onClick={() => nav('/')}>
@@ -981,6 +1056,13 @@ export default function Reader() {
             </button>
             <button className="btn sm" onClick={() => setTocOpen(true)}>
               目录
+            </button>
+            <button
+              className={`btn sm${tocDocked ? ' primary' : ''}`}
+              onClick={() => setTocDocked((v) => !v)}
+              title={tocDocked ? '取消固定目录（恢复为抽屉）' : '将目录固定在侧边'}
+            >
+              {tocDocked ? '目录已固定' : '固定目录'}
             </button>
             <button className="btn sm" onClick={() => setBmOpen(true)}>
               书签
