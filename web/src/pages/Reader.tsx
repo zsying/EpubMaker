@@ -90,10 +90,18 @@ export default function Reader() {
   // paged reading state
   const [pageIndex, setPageIndex] = useState(0);
   const [pageCount, setPageCount] = useState(1);
-  const [pageWidth, setPageWidth] = useState(0);
-  const [stageWidth, setStageWidth] = useState(0);
   const [pagesPerView, setPagesPerView] = useState(1);
   const [chromeOpen, setChromeOpen] = useState(false);
+
+  // book-page geometry (proportions like a real paperback)
+  const [stageWidth, setStageWidth] = useState(0);
+  const [stageHeight, setStageHeight] = useState(0);
+  const [sheetWidth, setSheetWidth] = useState(0);
+  const [sheetHeight, setSheetHeight] = useState(0);
+  const [contentWidth, setContentWidth] = useState(0);
+  const [contentHeight, setContentHeight] = useState(0);
+  const [pageGap, setPageGap] = useState(28);
+  const [marginPx, setMarginPx] = useState(34);
 
   // persisted reading data
   const [bookmarks, setBookmarks] = useState<Bookmark[]>([]);
@@ -109,6 +117,7 @@ export default function Reader() {
 
   const mainRef = useRef<HTMLDivElement>(null);
   const stageRef = useRef<HTMLDivElement>(null);
+  const spreadRef = useRef<HTMLDivElement>(null);
   const columnsRef = useRef<HTMLDivElement>(null);
   const contentRef = useRef<HTMLDivElement>(null);
   const pageIntentRef = useRef<PageIntent>(null);
@@ -208,9 +217,13 @@ export default function Reader() {
     if (mode !== 'paged') return;
     const stage = stageRef.current;
     if (!stage) return;
-    const ro = new ResizeObserver(() => setStageWidth(stage.clientWidth));
+    const update = () => {
+      setStageWidth(stage.clientWidth);
+      setStageHeight(stage.clientHeight);
+    };
+    const ro = new ResizeObserver(update);
     ro.observe(stage);
-    setStageWidth(stage.clientWidth);
+    update();
     return () => ro.disconnect();
   }, [mode]);
 
@@ -224,17 +237,38 @@ export default function Reader() {
     const stage = stageRef.current;
     const col = columnsRef.current;
     if (!stage || !col) return;
-    const w = stage.clientWidth;
-    const ppv = w >= 1100 ? 2 : 1;
-    const pw = Math.max(160, Math.floor(w / ppv));
-    setPagesPerView(ppv);
-    setPageWidth(pw);
 
-    // Measure natural columned width first, then pin columns to exact page widths.
-    const pc = Math.max(1, Math.ceil(col.scrollWidth / pw));
+    const MARGIN = 34;
+    const GAP = 28;
+    const PAD_X = 44;
+    const PAD_Y = 24;
+    const PAGE_RATIO = 0.72; // typical Chinese paperback width/height
+
+    const availH = Math.max(240, stage.clientHeight - PAD_Y * 2);
+    const sh = Math.min(Math.round(availH), 900);
+    const sw = Math.round(sh * PAGE_RATIO);
+    const cw = Math.max(160, sw - MARGIN * 2);
+    const ch = sh - MARGIN * 2;
+
+    const ppv = stage.clientWidth >= sw * 2 + GAP + PAD_X * 2 ? 2 : 1;
+
+    setSheetWidth(sw);
+    setSheetHeight(sh);
+    setContentWidth(cw);
+    setContentHeight(ch);
+    setPageGap(GAP);
+    setMarginPx(MARGIN);
+    setPagesPerView(ppv);
+
+    const columnGap = sw + GAP - cw; // = GAP + 2*MARGIN, aligns columns with sheets
+    // Measure how many columns the content naturally fills at this geometry.
+    col.style.width = 'auto';
+    col.style.columnWidth = `${cw}px`;
+    col.style.columnGap = `${columnGap}px`;
+    col.style.height = `${ch}px`;
+    const pc = Math.max(1, Math.ceil(col.scrollWidth / (cw + columnGap)));
     setPageCount(pc);
-    col.style.width = `${pc * pw}px`;
-    col.style.columnWidth = `${pw}px`;
+    col.style.width = `${pc * cw + (pc - 1) * columnGap}px`;
 
     const intent = pageIntentRef.current;
     let nextPage = 0;
@@ -553,18 +587,55 @@ export default function Reader() {
   }
 
   /* ---- paged immersive mode ---- */
+  const innerWidth = pageCount > 0 ? pageCount * sheetWidth + (pageCount - 1) * pageGap : 0;
+  const spreadWidth = innerWidth + 2 * marginPx;
+  const spreadHeight = sheetHeight + 2 * marginPx;
+  const viewWidth = Math.max(sheetWidth, pagesPerView * sheetWidth + (pagesPerView - 1) * pageGap);
+  const spreadLeft = Math.round((stageWidth - viewWidth) / 2);
+  const spreadTop = Math.round((stageHeight - sheetHeight) / 2);
+  const columnGap = sheetWidth + pageGap - contentWidth;
+  const geometryReady = sheetWidth > 0 && contentWidth > 0;
+
   return (
     <div className="reader reader-paged">
       <div className="reader-stage" ref={stageRef} onClick={onStageClick}>
         <div
-          className="reader-columns"
-          ref={columnsRef}
+          className={`reader-spread${geometryReady ? ' is-ready' : ''}`}
+          ref={spreadRef}
           style={{
-            transform: `translateX(-${pageIndex * pageWidth}px)`,
-            height: '100%',
+            left: spreadLeft,
+            top: spreadTop,
+            width: Math.max(0, spreadWidth),
+            height: Math.max(0, spreadHeight),
+            transform: `translate3d(-${pageIndex * (sheetWidth + pageGap)}px, 0, 0)`,
           }}
         >
-          <div className="reader-content" ref={contentRef} style={{ fontSize }} />
+          {geometryReady &&
+            Array.from({ length: pageCount }).map((_, i) => (
+              <div
+                key={i}
+                className={`page-sheet${i % 2 === 0 ? ' left' : ' right'}`}
+                style={{
+                  left: marginPx + i * (sheetWidth + pageGap),
+                  width: sheetWidth,
+                  height: sheetHeight,
+                }}
+              />
+            ))}
+          <div
+            className="reader-columns"
+            ref={columnsRef}
+            style={{
+              left: marginPx,
+              top: marginPx,
+              width: pageCount > 0 ? pageCount * contentWidth + (pageCount - 1) * columnGap : 0,
+              height: Math.max(0, contentHeight),
+              columnWidth: contentWidth,
+              columnGap: columnGap,
+            }}
+          >
+            <div className="reader-content" ref={contentRef} style={{ fontSize }} />
+          </div>
         </div>
       </div>
 

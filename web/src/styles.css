@@ -614,29 +614,85 @@ a {
 /* ---------- immersive paged reader ---------- */
 .reader-paged {
   position: relative;
-  display: block;
   height: 100%;
   overflow: hidden;
-  background: #f4f1ea;
+  background: #e6e0d4; /* warm desk surface */
 }
 
 .reader-stage {
+  position: relative;
+  width: 100%;
   height: 100%;
   overflow: hidden;
-  padding: 28px 36px;
   cursor: pointer;
-  background: #f4f1ea;
+  perspective: 1400px;
+}
+
+.reader-spread {
+  position: absolute;
+  will-change: transform;
+}
+
+.reader-spread.is-ready {
+  transition: transform 0.45s cubic-bezier(0.22, 0.61, 0.36, 1);
+}
+
+.page-sheet {
+  position: absolute;
+  top: 0;
+  background: #faf8f3;
+  pointer-events: none;
+  box-shadow:
+    0 1px 2px rgba(0, 0, 0, 0.08),
+    0 6px 18px rgba(0, 0, 0, 0.14);
+}
+
+/* left page: straight gutter on the right, rounded outer (left) edge */
+.page-sheet.left {
+  border-radius: 3px 8px 8px 3px;
+  box-shadow:
+    0 1px 2px rgba(0, 0, 0, 0.08),
+    0 6px 18px rgba(0, 0, 0, 0.14),
+    -3px 0 5px rgba(0, 0, 0, 0.05) inset;
+}
+
+/* right page: straight gutter on the left, rounded outer (right) edge */
+.page-sheet.right {
+  border-radius: 8px 3px 3px 8px;
+  box-shadow:
+    0 1px 2px rgba(0, 0, 0, 0.08),
+    0 6px 18px rgba(0, 0, 0, 0.14),
+    3px 0 5px rgba(0, 0, 0, 0.05) inset;
+}
+
+/* subtle gutter shadow on the inner edge of each sheet */
+.page-sheet::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 16px;
+  pointer-events: none;
+}
+.page-sheet.left::after {
+  right: 0;
+  background: linear-gradient(90deg, rgba(0, 0, 0, 0) 0%, rgba(0, 0, 0, 0.05) 100%);
+}
+.page-sheet.right::after {
+  left: 0;
+  background: linear-gradient(270deg, rgba(0, 0, 0, 0) 0%, rgba(0, 0, 0, 0.05) 100%);
 }
 
 .reader-columns {
-  column-gap: 0;
+  position: absolute;
   column-fill: auto;
-  will-change: transform;
-  transition: transform 0.22s ease;
+  background: transparent;
+  color: #2c2f33;
+  overflow: hidden;
 }
 
 .reader-paged .reader-content {
-  color: #23262b;
+  color: #2c2f33;
   font-family: var(--font-serif);
   line-height: 1.95;
   word-wrap: break-word;
@@ -645,9 +701,11 @@ a {
 .reader-paged .reader-content img,
 .reader-paged .reader-content svg {
   max-width: 100%;
+  max-height: 100%;
   height: auto;
   display: block;
   margin: 18px auto;
+  break-inside: avoid;
 }
 .reader-paged .reader-content h1,
 .reader-paged .reader-content h2,
@@ -656,6 +714,7 @@ a {
   font-family: var(--font);
   line-height: 1.4;
   margin: 1.6em 0 0.7em;
+  break-inside: avoid;
 }
 .reader-paged .reader-content p {
   margin: 0 0 1.05em;
@@ -666,6 +725,7 @@ a {
   padding: 4px 0 4px 16px;
   border-left: 3px solid var(--border-strong);
   color: #4a4f57;
+  break-inside: avoid;
 }
 .reader-paged .reader-content table {
   border-collapse: collapse;
