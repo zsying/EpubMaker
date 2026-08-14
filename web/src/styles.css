@@ -930,6 +930,34 @@ a {
   box-shadow: 3px 12px 24px rgba(0, 0, 0, 0.22);
 }
 
+/* 3D page-flip overlay: a static destination page sits beneath while the
+   current page rotates around the spine to reveal it. Zero horizontal slide. */
+.reader-flip {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  perspective: 1600px;
+  z-index: 6;
+  pointer-events: none;
+}
+.reader-flip-face {
+  position: absolute;
+  inset: 0;
+  transform-style: preserve-3d;
+  backface-visibility: hidden;
+}
+.reader-flip-face.turning {
+  transition: transform 0.45s ease-in-out;
+  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.18);
+}
+.flip-shade {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background: linear-gradient(90deg, rgba(0, 0, 0, 0) 0%, rgba(0, 0, 0, 0.38) 100%);
+}
+
 .reader-columns {
   position: absolute;
   column-fill: auto;

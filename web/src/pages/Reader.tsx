@@ -287,6 +287,14 @@ export default function Reader() {
   const fxRef = useRef(false);
   const awaitingChapterRef = useRef(false);
 
+  // 3D page-flip (within-chapter turns only): a static "next page" layer sits
+  // beneath while the current page rotates around the spine and is revealed.
+  type FlipState = { dir: 1 | -1; from: number; to: number };
+  const [flip, setFlip] = useState<FlipState | null>(null);
+  const [flipAngle, setFlipAngle] = useState(0);
+  const flipFromContentRef = useRef<HTMLDivElement>(null);
+  const flipToContentRef = useRef<HTMLDivElement>(null);
+
   // book-page geometry (proportions like a real paperback)
   const [stageWidth, setStageWidth] = useState(0);
   const [stageHeight, setStageHeight] = useState(0);
@@ -454,6 +462,18 @@ export default function Reader() {
     scheduleMeasure();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [safeHtml, annotationsForChapter, mode]);
+
+  /* ---- populate the 3D flip faces (only while a flip is in flight) ---- */
+  useEffect(() => {
+    if (!flip) return;
+    for (const ref of [flipFromContentRef, flipToContentRef]) {
+      const el = ref.current;
+      if (!el) continue;
+      el.innerHTML = safeHtml;
+      applyHighlights(el, annotationsForChapter);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [flip, safeHtml, annotationsForChapter]);
 
   /* ---- measure pages (paged mode) ---- */
   useEffect(() => {
@@ -800,6 +820,8 @@ export default function Reader() {
   // next/previous chapter) while invisible, then fade back in. This removes the
   // horizontal carousel slide entirely — there is zero lateral motion, and a
   // chapter change becomes a clean dissolve rather than a long slide-to-the-end.
+  // Used for chapter turns (different HTML not yet measured); within-chapter
+  // turns use the 3D flip below instead.
   function startTurn(apply: () => void, isChapter = false) {
     if (fxRef.current) return;
     fxRef.current = true;
@@ -814,13 +836,31 @@ export default function Reader() {
     }, 130);
   }
 
+  // 3D page-flip for a within-chapter turn: the destination page is shown
+  // statically beneath, and the current page rotates around the spine (a real
+  // book turn, zero horizontal slide) to reveal it.
+  function flipTo(to: number, dir: 1 | -1) {
+    if (flip || fxRef.current) return;
+    setFlip({ dir, from: pageIndex, to });
+    setFlipAngle(0);
+    // Kick the CSS transition on the next frame so it animates from 0.
+    requestAnimationFrame(() =>
+      requestAnimationFrame(() => setFlipAngle(dir === -1 ? 180 : -180)),
+    );
+    window.setTimeout(() => {
+      setPageIndex(to);
+      setFlip(null);
+      setFlipAngle(0);
+    }, 480);
+  }
+
   function turn(delta: number) {
     const step = turnStep;
     if (delta > 0) {
-      if (pageIndex + step <= maxPageIndex) startTurn(() => setPageIndex(pageIndex + step));
+      if (pageIndex + step <= maxPageIndex) flipTo(pageIndex + step, 1);
       else if (next) startTurn(() => openChapter(next.id, { type: 'first' }), true);
     } else {
-      if (pageIndex - step >= 0) startTurn(() => setPageIndex(pageIndex - step));
+      if (pageIndex - step >= 0) flipTo(pageIndex - step, -1);
       else if (prev) startTurn(() => openChapter(prev.id, { type: 'last' }), true);
     }
   }
@@ -1186,6 +1226,62 @@ export default function Reader() {
   // Only render the sheets actually on screen (1 or 2) so no third-page edge leaks.
   const visibleSheets = geometryReady ? Math.min(pagesPerView, Math.max(0, pageCount - pageIndex)) : 0;
 
+  // Renders one face of the 3D flip: a paper sheet stack + clipped text column
+  // positioned at `page`. `rotating` faces carry the rotateY transform + shade.
+  const renderFlipFace = (page: number, rotating: boolean) => {
+    if (!flip) return null;
+    const stepPx = sheetWidth + pageGap;
+    const originX = pagesPerView === 2 ? sheetWidth : flip.dir === 1 ? sheetWidth : 0;
+    return (
+      <div
+        className={`reader-flip-face${rotating ? ' turning' : ''}`}
+        style={{
+          transform: rotating ? `rotateY(${flipAngle}deg)` : 'none',
+          transformOrigin: `${originX}px 50%`,
+        }}
+      >
+        {pagesPerView === 2 ? (
+          <>
+            <div className="page-sheet left" style={{ left: 0, width: sheetWidth, height: sheetHeight }}>
+              <span className="page-num left">{page + 1} / {pageCount}</span>
+            </div>
+            <div className="page-sheet right" style={{ left: sheetWidth + pageGap, width: sheetWidth, height: sheetHeight }}>
+              <span className="page-num right">{page + 2} / {pageCount}</span>
+            </div>
+            <div className="book-fold" style={{ left: sheetWidth, width: pageGap, height: sheetHeight }} />
+          </>
+        ) : (
+          <div className="page-sheet right" style={{ left: 0, width: sheetWidth, height: sheetHeight }}>
+            <span className="page-num right">{page + 1} / {pageCount}</span>
+          </div>
+        )}
+        <div className="reader-clip" style={{ width: viewWidth, height: sheetHeight }}>
+          <div
+            className="reader-columns"
+            style={{
+              left: marginPx,
+              top: marginPx,
+              width: pageCount > 0 ? pageCount * contentWidth + (pageCount - 1) * columnGap : 0,
+              height: Math.max(0, contentHeight),
+              transform: `translate3d(-${page * stepPx}px, 0, 0)`,
+              columnWidth: contentWidth,
+              columnGap,
+            }}
+          >
+            <div
+              className="reader-content"
+              ref={page === flip.from ? flipFromContentRef : flipToContentRef}
+              style={{ fontSize }}
+            />
+          </div>
+        </div>
+        {rotating && (
+          <div className="flip-shade" style={{ opacity: Math.min(0.55, Math.abs(flipAngle) / 360) }} />
+        )}
+      </div>
+    );
+  };
+
   return (
     <div className={"reader reader-paged" + (tocDocked ? " toc-docked" : "")}>
       {tocDocked && (
@@ -1301,6 +1397,12 @@ export default function Reader() {
             </div>
           </div>
         </div>
+        {flip && geometryReady && (
+          <div className="reader-flip" style={{ width: viewWidth, height: sheetHeight }}>
+            {renderFlipFace(flip.to, false)}
+            {renderFlipFace(flip.from, true)}
+          </div>
+        )}
       </div>
 
       {(chromeOpen || chromeHover) && (
