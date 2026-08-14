@@ -2,6 +2,7 @@ import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState, type M
 import { Link, useLocation, useNavigate, useParams } from 'react-router-dom';
 import DOMPurify from 'dompurify';
 import { api, Annotation, Book, Bookmark, Chapter, TocEntry } from '../api';
+import { Caret } from '../Caret';
 import { toast, toastError } from '../toast';
 
 const FONT_KEY = 'epubmaker.fontSize';
@@ -16,6 +17,22 @@ const TOC_DOCK_W = 268;
 function docKey(href: string): string {
   const i = href.indexOf('#');
   return i >= 0 ? href.slice(0, i) : href;
+}
+
+// Return the node-path keys (matching TocNode's key encoding) from the root down
+// to the entry whose document href matches `doc`. Used by "locate current chapter"
+// to expand every ancestor group.
+function findTocPath(es: TocEntry[], doc: string, base = ''): string[] {
+  for (let i = 0; i < es.length; i++) {
+    const e = es[i];
+    const key = base === '' ? `/${i}` : `${base}/${i}`;
+    if (e.href && docKey(e.href) === doc) return [key];
+    if (e.children && e.children.length) {
+      const sub = findTocPath(e.children, doc, key);
+      if (sub.length) return [key, ...sub];
+    }
+  }
+  return [];
 }
 
 // Which TOC nodes count as "current" for the active highlight. We match a node
@@ -42,11 +59,11 @@ function computeActiveHrefs(entries: TocEntry[], activeDoc: string): Set<string>
   return new Set(fragLess.length ? fragLess : any);
 }
 
-// Recursive hierarchical TOC renderer. Each node carries its own collapse state
-// (a caret toggles it); indentation comes from the row wrapper. The active node
-// is highlighted and clicking a node opens the matching chapter. Group nodes
-// without an href are not clickable to open, but their caret still collapses
-// their subtree.
+// Recursive hierarchical TOC renderer. Collapse state is controlled by the parent
+// via `collapsed` (a Set of node-path keys) so a "locate current chapter" action
+// can expand ancestors. Indentation comes from the row wrapper. The active node is
+// highlighted and clicking a node opens the matching chapter. Group nodes without
+// an href are not clickable to open, but their caret still collapses their subtree.
 function TocTree({
   entries,
   depth = 0,
@@ -54,6 +71,9 @@ function TocTree({
   activeSet,
   resolve,
   onPick,
+  collapsed,
+  onToggle,
+  pathBase = '',
 }: {
   entries: TocEntry[];
   depth?: number;
@@ -61,57 +81,72 @@ function TocTree({
   activeSet: Set<string>;
   resolve: (href: string) => string | undefined;
   onPick: (cid: string) => void;
+  collapsed: Set<string>;
+  onToggle: (key: string) => void;
+  pathBase?: string;
 }) {
   return (
     <>
-      {entries.map((e, i) => (
-        <TocNode
-          key={i}
-          entry={e}
-          depth={depth}
-          itemClass={itemClass}
-          activeSet={activeSet}
-          resolve={resolve}
-          onPick={onPick}
-        />
-      ))}
+      {entries.map((e, i) => {
+        const key = pathBase === '' ? `/${i}` : `${pathBase}/${i}`;
+        return (
+          <TocNode
+            key={key}
+            entry={e}
+            nodeKey={key}
+            depth={depth}
+            itemClass={itemClass}
+            activeSet={activeSet}
+            resolve={resolve}
+            onPick={onPick}
+            collapsed={collapsed}
+            onToggle={onToggle}
+          />
+        );
+      })}
     </>
   );
 }
 
 function TocNode({
   entry,
+  nodeKey,
   depth,
   itemClass,
   activeSet,
   resolve,
   onPick,
+  collapsed,
+  onToggle,
 }: {
   entry: TocEntry;
+  nodeKey: string;
   depth: number;
   itemClass: string;
   activeSet: Set<string>;
   resolve: (href: string) => string | undefined;
   onPick: (cid: string) => void;
+  collapsed: Set<string>;
+  onToggle: (key: string) => void;
 }) {
   const hasKids = !!entry.children && entry.children.length > 0;
-  const [open, setOpen] = useState(true);
+  const open = !collapsed.has(nodeKey);
   const cid = entry.href ? resolve(entry.href) : undefined;
   const active = entry.href ? activeSet.has(entry.href) : false;
   const toggle = (ev: ReactMouseEvent) => {
     ev.stopPropagation();
-    setOpen((o) => !o);
+    onToggle(nodeKey);
   };
   const labelClick = () => {
     if (cid) onPick(cid);
-    else if (hasKids) setOpen((o) => !o);
+    else if (hasKids) onToggle(nodeKey);
   };
   return (
     <>
       <div className="toc-row" style={{ paddingLeft: depth * 16 }}>
         {hasKids ? (
           <button type="button" className="toc-caret" onClick={toggle} aria-label={open ? '折叠' : '展开'}>
-            {open ? '▾' : '▸'}
+            <Caret open={open} />
           </button>
         ) : (
           <span className="toc-caret toc-caret-empty" />
@@ -135,6 +170,9 @@ function TocNode({
           activeSet={activeSet}
           resolve={resolve}
           onPick={onPick}
+          collapsed={collapsed}
+          onToggle={onToggle}
+          pathBase={nodeKey}
         />
       )}
     </>
@@ -218,6 +256,17 @@ export default function Reader() {
   const [chapters, setChapters] = useState<Chapter[]>([]);
   // Hierarchical table of contents (empty for books imported before hierarchy support).
   const [toc, setToc] = useState<TocEntry[]>([]);
+  // Collapsed hierarchical-group node keys (path-encoded). Controlled so the
+  // "locate current chapter" action can expand ancestors.
+  const [tocCollapsed, setTocCollapsed] = useState<Set<string>>(new Set());
+  const [locateNonce, setLocateNonce] = useState(0);
+  const toggleToc = (key: string) =>
+    setTocCollapsed((prev) => {
+      const n = new Set(prev);
+      if (n.has(key)) n.delete(key);
+      else n.add(key);
+      return n;
+    });
   const [current, setCurrent] = useState<string | null>(null);
   const [html, setHtml] = useState('');
   const [loading, setLoading] = useState(true);
@@ -694,6 +743,30 @@ export default function Reader() {
     [toc, activeDoc],
   );
 
+  // Expand every ancestor group of the current chapter and (after render) scroll
+  // the active node into view. If no TOC surface is showing, open the drawer.
+  function locateCurrent() {
+    if (!activeDoc) return;
+    const path = findTocPath(toc, docKey(activeDoc));
+    if (path.length) {
+      setTocCollapsed((prev) => {
+        const n = new Set(prev);
+        for (const k of path) n.delete(k);
+        return n;
+      });
+    }
+    if (!tocDocked && !tocOpen) setTocOpen(true);
+    setLocateNonce((n) => n + 1);
+  }
+  useEffect(() => {
+    if (locateNonce === 0) return;
+    const els = Array.from(
+      document.querySelectorAll('.toc-item.active, .drawer-item.active'),
+    ) as HTMLElement[];
+    const el = els.find((e) => e.offsetParent !== null) || els[0];
+    el?.scrollIntoView({ block: 'center', behavior: 'smooth' });
+  }, [locateNonce]);
+
   /* ---- navigation ---- */
   function openChapter(cid: string, intent: PageIntent = { type: 'first' }) {
     setPopover(null);
@@ -1025,9 +1098,17 @@ export default function Reader() {
     return (
       <div className="reader">
         <aside className="toc">
-          <div className="toc-head">目录 · {chapters.length} 章</div>
+          <div className="toc-head">
+            目录 · {chapters.length} 章
+            <button className="toc-locate" title="定位到当前章节" onClick={locateCurrent} aria-label="定位到当前章节">
+              <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <circle cx="12" cy="12" r="3" />
+                <path d="M12 2v3M12 19v3M2 12h3M19 12h3" />
+              </svg>
+            </button>
+          </div>
           {toc.length > 0 ? (
-            <TocTree entries={toc} itemClass="toc-item" activeSet={activeSet} resolve={resolveTocHref} onPick={openChapter} />
+            <TocTree entries={toc} itemClass="toc-item" activeSet={activeSet} resolve={resolveTocHref} onPick={openChapter} collapsed={tocCollapsed} onToggle={toggleToc} />
           ) : (
             chapters.map((c, i) => (
               <button
@@ -1101,13 +1182,19 @@ export default function Reader() {
         <aside className="toc-dock">
           <div className="toc-head">
             目录 · {chapters.length} 章
+            <button className="toc-locate" title="定位到当前章节" onClick={locateCurrent} aria-label="定位到当前章节">
+              <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <circle cx="12" cy="12" r="3" />
+                <path d="M12 2v3M12 19v3M2 12h3M19 12h3" />
+              </svg>
+            </button>
             <button className="btn sm" onClick={() => setTocDocked(false)} title="取消固定目录">
               ✕
             </button>
           </div>
           <div className="toc-dock-body">
             {toc.length > 0 ? (
-              <TocTree entries={toc} itemClass="toc-item" activeSet={activeSet} resolve={resolveTocHref} onPick={openChapter} />
+              <TocTree entries={toc} itemClass="toc-item" activeSet={activeSet} resolve={resolveTocHref} onPick={openChapter} collapsed={tocCollapsed} onToggle={toggleToc} />
             ) : (
               chapters.map((c, i) => (
                 <button
@@ -1256,13 +1343,19 @@ export default function Reader() {
           <aside className="drawer" onClick={(e) => e.stopPropagation()}>
             <div className="drawer-head">
               目录 · {chapters.length} 章
+              <button className="toc-locate" title="定位到当前章节" onClick={locateCurrent} aria-label="定位到当前章节">
+                <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <circle cx="12" cy="12" r="3" />
+                  <path d="M12 2v3M12 19v3M2 12h3M19 12h3" />
+                </svg>
+              </button>
               <button className="btn sm" onClick={() => setTocOpen(false)}>
                 ✕
               </button>
             </div>
             <div className="drawer-body">
               {toc.length > 0 ? (
-                <TocTree entries={toc} itemClass="drawer-item" activeSet={activeSet} resolve={resolveTocHref} onPick={openChapter} />
+                <TocTree entries={toc} itemClass="drawer-item" activeSet={activeSet} resolve={resolveTocHref} onPick={openChapter} collapsed={tocCollapsed} onToggle={toggleToc} />
               ) : (
                 chapters.map((c, i) => (
                   <button

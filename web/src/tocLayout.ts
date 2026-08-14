@@ -99,3 +99,48 @@ export function visibleTocItems(items: TocRenderItem[], collapsed: Set<string>):
   }
   return out;
 }
+
+export interface HierarchySplit {
+  parts: { title: string }[];
+  assign: Record<string, number>;
+}
+
+// Build a volume split directly from the hierarchical TOC. Each TOC group at the
+// requested depth (`level`, 1 = top-level) becomes its own volume; every chapter
+// under that group is assigned to it. Chapters not covered by the chosen level
+// (e.g. a deep book with only 2 real levels) fall back to a single volume.
+export function splitByHierarchy(toc: TocEntry[], chapters: Chapter[], level: number): HierarchySplit {
+  const byHref = new Map<string, Chapter>();
+  for (const c of chapters) byHref.set(docKey(c.href), c);
+
+  const parts: { title: string }[] = [];
+  const assign: Record<string, number> = {};
+
+  const assignSubtree = (e: TocEntry, p: number) => {
+    if (e.href) {
+      const ch = byHref.get(docKey(e.href));
+      if (ch) assign[ch.id] = p;
+    }
+    for (const c of e.children ?? []) assignSubtree(c, p);
+  };
+
+  const walk = (es: TocEntry[], depth: number) => {
+    for (const e of es) {
+      if (depth + 1 < level) {
+        walk(e.children ?? [], depth + 1);
+      } else {
+        const p = parts.length;
+        parts.push({ title: e.title || `分卷 ${p + 1}` });
+        assignSubtree(e, p);
+      }
+    }
+  };
+
+  walk(toc, 0);
+
+  if (parts.length === 0) {
+    parts.push({ title: '分卷 1' });
+    for (const c of chapters) assign[c.id] = 0;
+  }
+  return { parts, assign };
+}

@@ -3,6 +3,7 @@ import { Link, useNavigate, useParams } from 'react-router-dom';
 import DOMPurify from 'dompurify';
 import { api, Book, Chapter, ImageAsset, TocEntry, downloadDataUrl } from '../api';
 import { buildTocItems, visibleTocItems } from '../tocLayout';
+import { Caret } from '../Caret';
 import { toast, toastError } from '../toast';
 
 type Tab = 'book' | 'chapter';
@@ -306,7 +307,7 @@ export default function Editor() {
                     }}
                     aria-label={collapsed.has(it.key) ? '展开' : '折叠'}
                   >
-                    {collapsed.has(it.key) ? '▸' : '▾'}
+                    <Caret open={!collapsed.has(it.key)} />
                   </button>
                   <span className="g-title" title={it.title}>
                     {it.title}

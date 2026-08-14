@@ -2,7 +2,8 @@ import { useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import DOMPurify from 'dompurify';
 import { api, Book, Chapter, ImageAsset, TocEntry } from '../api';
-import { buildTocItems, visibleTocItems } from '../tocLayout';
+import { buildTocItems, visibleTocItems, splitByHierarchy } from '../tocLayout';
+import { Caret } from '../Caret';
 import { toast, toastError } from '../toast';
 
 const COLORS = ['#2f6bff', '#e2725b', '#1a9c62', '#a05ce0', '#d9a12b', '#0e9ba8', '#d94f8a', '#6b7a90'];
@@ -202,6 +203,8 @@ export default function Split() {
   const [toc, setToc] = useState<TocEntry[]>([]);
   // Collapsed hierarchical-group keys in the chapter list.
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
+  // Depth used by "split by hierarchy" (1 = top-level groups -> volumes).
+  const [splitLevel, setSplitLevel] = useState(1);
   const tocItems = useMemo(() => buildTocItems(toc, chapters), [toc, chapters]);
   const toggleGroup = (key: string) =>
     setCollapsed((prev) => {
@@ -258,17 +261,12 @@ export default function Split() {
     return m;
   }, [parts, chapters, assign]);
 
-  function evenSplit(n: number) {
-    if (!book || n < 1) return;
-    const size = Math.ceil(chapters.length / n);
-    const next: Part[] = Array.from({ length: n }, (_, i) => ({
-      title: `${book.title} 第${i + 1}卷`,
-      author: book.author,
-      coverHref: ''
-    }));
-    const a: Record<string, number> = {};
-    chapters.forEach((c, i) => (a[c.id] = Math.min(n - 1, Math.floor(i / size))));
-    setParts(next);
+  // Build one volume per TOC group at the chosen depth; assign every chapter
+  // under that group to it. Replaces the old "average split" which ignored the
+  // book's natural structure.
+  function applyHierarchySplit(level: number) {
+    const { parts: ps, assign: a } = splitByHierarchy(toc, chapters, level);
+    setParts(ps.map((p) => ({ title: p.title, author: book?.author ?? '', coverHref: '' })));
     setAssign(a);
   }
 
@@ -373,7 +371,7 @@ export default function Split() {
                   }}
                   aria-label={collapsed.has(it.key) ? '展开' : '折叠'}
                 >
-                  {collapsed.has(it.key) ? '▸' : '▾'}
+                  <Caret open={!collapsed.has(it.key)} />
                 </button>
                 <span className="g-title" title={it.title}>
                   {it.title}
@@ -526,12 +524,28 @@ export default function Split() {
             </button>
 
             <div className="toolbar" style={{ marginTop: 10 }}>
-              <span className="muted" style={{ fontSize: 12 }}>快速平均拆分：</span>
-              {[2, 3, 4, 5].map((n) => (
-                <button key={n} className="btn sm" onClick={() => evenSplit(n)}>
-                  {n} 卷
-                </button>
-              ))}
+              <span className="muted" style={{ fontSize: 12 }}>按层次分卷：</span>
+              <select
+                className="select"
+                style={{ width: 92 }}
+                value={splitLevel}
+                onChange={(e) => setSplitLevel(Number(e.target.value))}
+              >
+                <option value={1}>一级分组</option>
+                <option value={2}>二级分组</option>
+                <option value={3}>三级分组</option>
+              </select>
+              <button
+                className="btn sm"
+                disabled={toc.length === 0}
+                title={toc.length === 0 ? '本书无层级目录，无法按层次分卷' : '按所选层级把每个分组拆成一卷'}
+                onClick={() => applyHierarchySplit(splitLevel)}
+              >
+                生成分卷
+              </button>
+              {toc.length === 0 && (
+                <span className="muted" style={{ fontSize: 11.5 }}>本书无层级目录</span>
+              )}
             </div>
 
             <div className="toolbar" style={{ marginTop: 8 }}>
