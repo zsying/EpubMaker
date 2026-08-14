@@ -977,7 +977,22 @@ a {
   color: #e8eaed;
   backdrop-filter: blur(8px);
 }
-.reader-chrome.top { top: 0; border-bottom: 1px solid rgba(255, 255, 255, 0.08); }
+.reader-chrome.top { top: 0; border-bottom: 1px solid rgba(255, 255, 255, 0.08); justify-content: space-between; }
+.reader-chrome .chrome-left { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.reader-chrome .chrome-center {
+  flex: 1 1 auto;
+  min-width: 0;
+  margin: 0 16px;
+  text-align: center;
+  font-size: 13px;
+  font-weight: 550;
+  color: #fff;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  pointer-events: none;
+}
+.reader-chrome .chrome-right { display: flex; align-items: center; gap: 6px; }
 .reader-chrome.bottom {
   bottom: 0;
   justify-content: space-between;

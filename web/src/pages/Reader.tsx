@@ -1286,18 +1286,23 @@ export default function Reader() {
       {(chromeOpen || chromeHover) && (
         <>
           <div className="reader-chrome top">
-            <button className="btn sm" onClick={() => nav('/')}>
-              ← 书架
-            </button>
-            <div className="crumb">
-              <strong>{book.title}</strong>
-              <span>·</span>
-              <span>{book.author || '未知作者'}</span>
+            <div className="chrome-left">
+              <button className="btn sm" onClick={() => nav('/')}>
+                ← 书架
+              </button>
+              <div className="crumb">
+                <strong>{book.title}</strong>
+                <span>·</span>
+                <span>{book.author || '未知作者'}</span>
+              </div>
             </div>
-            <span style={{ flex: 1 }} />
-            <span className="muted" style={{ fontSize: 12 }}>
-              {Math.round(progressPct)}%
-            </span>
+            <div className="chrome-center" title={currentChapter?.title || undefined}>
+              {currentChapter?.title || '尚未打开章节'}
+            </div>
+            <div className="chrome-right">
+              <span className="muted" style={{ fontSize: 12 }}>
+                {Math.round(progressPct)}%
+              </span>
             <button className="btn sm" onClick={() => setFontSize((f) => Math.max(13, f - 1))}>
               A−
             </button>
@@ -1326,6 +1331,7 @@ export default function Reader() {
             <button className="btn sm" onClick={() => setMode('scroll')}>
               滚动
             </button>
+            </div>
           </div>
 
           <div className="reader-chrome bottom">
