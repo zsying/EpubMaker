@@ -1329,6 +1329,107 @@ export default function Reader() {
     );
   };
 
+  // Real book-page turn: a single sheet (the right page for next, the left
+  // page for prev) rotates around the spine. It carries a front (current page)
+  // and a back (the page that lands on the far side). Until the sheet crosses
+  // the spine (past 90deg) only the front is visible, so the far page stays
+  // put — giving the time-lag of a genuine page turn instead of both pages
+  // animating at once.
+  const renderFlipTurner = () => {
+    if (!flip) return null;
+    const stepPx = sheetWidth + pageGap;
+    const twoPage = pagesPerView === 2;
+    const turnerLeft = twoPage ? (flip.dir === -1 ? 0 : sheetWidth) : 0;
+    const originX = twoPage ? sheetWidth : flip.dir === 1 ? sheetWidth : 0;
+    const frontPage = twoPage
+      ? flip.dir === 1
+        ? flip.from + 1
+        : flip.from
+      : flip.from;
+    const backPage = twoPage ? (flip.dir === 1 ? flip.to : flip.to + 1) : flip.to;
+    const spineLeft = originX <= turnerLeft;
+    const faceStyle = (left: number) => ({ left, width: sheetWidth, height: sheetHeight });
+    const columns = (page: number) => ({
+      left: marginPx,
+      top: marginPx,
+      width: pageCount > 0 ? pageCount * contentWidth + (pageCount - 1) * columnGap : 0,
+      height: Math.max(0, contentHeight),
+      transform: `translate3d(-${page * stepPx}px, 0, 0)`,
+      columnWidth: contentWidth,
+      columnGap,
+    });
+    const sheet = (page: number) => (
+      <div className="page-sheet right" style={{ left: 0, width: sheetWidth, height: sheetHeight }}>
+        <span className="page-num right">{page + 1} / {pageCount}</span>
+      </div>
+    );
+    return (
+      <div
+        className="flip-turner"
+        style={{ transformOrigin: `${originX}px 50%`, transform: `rotateY(${flipAngle}deg)` }}
+      >
+        <div className="flip-face flip-front" style={faceStyle(turnerLeft)}>
+          {sheet(frontPage)}
+          <div className="reader-clip" style={{ width: sheetWidth, height: sheetHeight, overflow: 'hidden' }}>
+            <div className="reader-columns" style={columns(frontPage)}>
+              <div className="reader-content" ref={flipFromContentRef} style={{ fontSize }} />
+            </div>
+          </div>
+          <div
+            className="flip-shade"
+            style={{
+              opacity: Math.min(0.5, Math.abs(flipAngle) / 360),
+              background: spineLeft
+                ? 'linear-gradient(270deg, rgba(0,0,0,0) 0%, rgba(0,0,0,0.42) 100%)'
+                : 'linear-gradient(90deg, rgba(0,0,0,0) 0%, rgba(0,0,0,0.42) 100%)',
+            }}
+          />
+        </div>
+        <div className="flip-face flip-back" style={{ ...faceStyle(turnerLeft), transform: 'rotateY(180deg)' }}>
+          {sheet(backPage)}
+          <div className="reader-clip" style={{ width: sheetWidth, height: sheetHeight, overflow: 'hidden' }}>
+            <div className="reader-columns" style={columns(backPage)}>
+              <div className="reader-content" ref={flipToContentRef} style={{ fontSize }} />
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  };
+
+  // In two-page mode the far page must keep showing the OLD content until the
+  // turning sheet crosses the spine. This static layer sits above the new
+  // spread's far page and is covered by the turning sheet's back once it lands.
+  const renderFlipOldPage = () => {
+    if (!flip || pagesPerView !== 2) return null;
+    const stepPx = sheetWidth + pageGap;
+    const oldPage = flip.dir === 1 ? flip.from : flip.from + 1;
+    const left = flip.dir === 1 ? 0 : sheetWidth;
+    return (
+      <div className="flip-old" style={{ left, width: sheetWidth, height: sheetHeight }}>
+        <div className="page-sheet right" style={{ left: 0, width: sheetWidth, height: sheetHeight }}>
+          <span className="page-num right">{oldPage + 1} / {pageCount}</span>
+        </div>
+        <div className="reader-clip" style={{ width: sheetWidth, height: sheetHeight, overflow: 'hidden' }}>
+          <div
+            className="reader-columns"
+            style={{
+              left: marginPx,
+              top: marginPx,
+              width: pageCount > 0 ? pageCount * contentWidth + (pageCount - 1) * columnGap : 0,
+              height: Math.max(0, contentHeight),
+              transform: `translate3d(-${oldPage * stepPx}px, 0, 0)`,
+              columnWidth: contentWidth,
+              columnGap,
+            }}
+          >
+            <div className="reader-content" style={{ fontSize }} />
+          </div>
+        </div>
+      </div>
+    );
+  };
+
   return (
     <div className={"reader reader-paged" + (tocDocked ? " toc-docked" : "")}>
       {tocDocked && (
@@ -1447,7 +1548,8 @@ export default function Reader() {
         {flip && geometryReady && (
           <div className="reader-flip" style={{ width: viewWidth, height: sheetHeight }}>
             {renderFlipFace(flip.to, false)}
-            {renderFlipFace(flip.from, true)}
+            {renderFlipOldPage()}
+            {renderFlipTurner()}
           </div>
         )}
       </div>
