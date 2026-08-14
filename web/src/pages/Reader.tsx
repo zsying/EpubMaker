@@ -674,16 +674,21 @@ export default function Reader() {
     const maxIdx = Math.max(0, pc - ppv);
     const intent = pageIntentRef.current;
     let nextPage = 0;
-    if (intent?.type === 'last') nextPage = maxIdx;
-    else if (intent?.type === 'first') nextPage = 0;
 
     if (restoreOffsetRef.current !== null && offsetMapRef.current.length > 0) {
       // Explicit restore (bookmark / annotation / saved progress): land on the
       // page that currently holds this source offset regardless of layout.
       nextPage = Math.min(pageIndexForOffset(restoreOffsetRef.current), maxIdx);
       restoreOffsetRef.current = null;
+    } else if (intent?.type === 'last') {
+      // Chapter switch backwards: open the previous chapter on its last page.
+      nextPage = maxIdx;
+    } else if (intent?.type === 'first') {
+      // Chapter switch forwards (or TOC jump): open on the first page.
+      nextPage = 0;
     } else if (keepOffset !== undefined) {
-      // Layout change (font size / window): keep the same text in view.
+      // Layout change only (font size / window / DPI), same chapter: keep the
+      // same text in view rather than the same (now wrong) page number.
       nextPage = Math.min(pageIndexForOffset(keepOffset), maxIdx);
     } else {
       nextPage = Math.min(pageIndex, maxIdx);
