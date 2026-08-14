@@ -295,7 +295,13 @@ export default function Reader() {
   type FlipState = { dir: 1 | -1; from: number; to: number };
   const [flip, setFlip] = useState<FlipState | null>(null);
   const flipFromContentRef = useRef<HTMLDivElement>(null);
-  const FLIP_MS = 340;
+  // rAF-driven turn animation: progress is written straight to DOM styles via
+  // refs so animation frames never trigger React re-renders.
+  const turnerRef = useRef<HTMLDivElement>(null);
+  const flipShadeRef = useRef<HTMLDivElement>(null);
+  const flipStartRef = useRef(0);
+  const flipSwappedRef = useRef(false);
+  const FLIP_MS = 400;
 
   // book-page geometry (proportions like a real paperback)
   const [stageWidth, setStageWidth] = useState(0);
@@ -836,19 +842,54 @@ export default function Reader() {
     }, 130);
   }
 
-  // Within-chapter page turn: lift + fade the turning sheet, and swap the page
-  // index at the MIDDLE of the turn so the new content is already there once the
-  // sheet has faded out. The CSS keyframe (flip-next / flip-prev) handles the
-  // actual lift + opacity; we only schedule the swap and teardown here.
+  // Within-chapter page turn: kicking the flip state mounts the turning sheet
+  // and starts the rAF effect below. That effect lifts the sheet from its
+  // bottom corner and fades it out over the FIRST HALF of the turn, then swaps
+  // the page index at the exact midpoint — so the new content is already in
+  // place when the sheet has fully vanished (the "page middle" of the model).
   function flipTo(to: number, dir: 1 | -1) {
     if (flip || fxRef.current) return;
     setFlip({ dir, from: pageIndex, to });
-    // Content is injected by the effect below once `flip` is set. The keyframe
-    // starts on mount; fade to invisible by ~55%, so swap just after that point
-    // (no ghost of the old page over the new one).
-    window.setTimeout(() => setPageIndex(to), Math.round(FLIP_MS * 0.58));
-    window.setTimeout(() => setFlip(null), FLIP_MS);
   }
+
+  // Drive the turn with requestAnimationFrame (robust — no dependence on a CSS
+  // animation starting). Progress t runs 0..1 over FLIP_MS. The visible motion
+  // is only the FIRST HALF: the sheet rotates from flat to edge-on (78deg
+  // around its binding edge — LEFT edge for next so the free right corner lifts
+  // and sweeps left; RIGHT edge for prev so the free left corner lifts and
+  // sweeps right) while fading to fully transparent. Exactly at the midpoint
+  // the page index is swapped, so the refreshed page is what remains. The
+  // second half is static (sheet already invisible), then the overlay unmounts.
+  useEffect(() => {
+    if (!flip) return;
+    flipStartRef.current = performance.now();
+    flipSwappedRef.current = false;
+    let raf = 0;
+    const tick = (now: number) => {
+      const t = Math.min(1, (now - flipStartRef.current) / FLIP_MS);
+      const mid = Math.min(1, t / 0.5);
+      const turner = turnerRef.current;
+      if (turner) {
+        const angle = (flip.dir === 1 ? 78 : -78) * mid;
+        turner.style.opacity = String(Math.max(0, 1 - mid));
+        turner.style.transform = `rotateY(${angle}deg) rotateX(${10 * mid}deg) translateY(${-12 * mid}px)`;
+      }
+      const shade = flipShadeRef.current;
+      if (shade) shade.style.opacity = String(0.32 * mid);
+      if (!flipSwappedRef.current && t >= 0.5) {
+        flipSwappedRef.current = true;
+        setPageIndex(flip.to);
+      }
+      if (t < 1) {
+        raf = requestAnimationFrame(tick);
+      } else {
+        setFlip(null);
+      }
+    };
+    raf = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(raf);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [flip]);
 
   function turn(delta: number) {
     const step = turnStep;
@@ -1224,10 +1265,10 @@ export default function Reader() {
 
   // Light page turn shared by single-page and two-page layouts. Only the
   // turning page is drawn — the RIGHT page for next, the LEFT page for prev in
-  // two-page mode (the single page in single mode). The sheet lifts from its
-  // bottom corner and fades out via the CSS keyframe (flip-next / flip-prev);
-  // the page index is swapped at the middle of the turn (see flipTo) so the new
-  // content is already in place once the sheet has faded away.
+  // two-page mode (the single page in single mode). The sheet pivots on its
+  // BINDING edge (left for next, right for prev) so the free corner lifts from
+  // the bottom and sweeps across; opacity + rotation are driven per-frame by
+  // the [flip] effect, and the page index swaps at the midpoint of the turn.
   const renderFlipTurner = () => {
     if (!flip) return null;
     const stepPx = sheetWidth + pageGap;
@@ -1240,12 +1281,31 @@ export default function Reader() {
     const corner = twoPage ? (flip.dir === 1 ? 'right' : 'left') : 'right';
     return (
       <div
-        className={`flip-turner ${flip.dir === 1 ? 'flip-next' : 'flip-prev'}`}
-        style={{ left, width: sheetWidth, height: sheetHeight, animationDuration: `${FLIP_MS}ms` }}
+        ref={turnerRef}
+        className="flip-turner"
+        style={{
+          left,
+          width: sheetWidth,
+          height: sheetHeight,
+          // Binding edge: next pivots on the LEFT (free right corner lifts and
+          // sweeps left); prev pivots on the RIGHT (free left corner lifts and
+          // sweeps right). Same for single and two-page.
+          transformOrigin: flip.dir === 1 ? '0% 50%' : '100% 50%',
+        }}
       >
         <div className="page-sheet turn" style={{ left: 0, width: sheetWidth, height: sheetHeight }}>
           <span className={`page-num ${corner}`}>{animPage + 1} / {pageCount}</span>
         </div>
+        <div
+          className="flip-shade"
+          ref={flipShadeRef}
+          style={{
+            background:
+              flip.dir === 1
+                ? 'linear-gradient(270deg, rgba(0,0,0,0) 0%, rgba(0,0,0,0.34) 100%)'
+                : 'linear-gradient(90deg, rgba(0,0,0,0) 0%, rgba(0,0,0,0.34) 100%)',
+          }}
+        />
         <div className="reader-clip" style={{ width: sheetWidth, height: sheetHeight, overflow: 'hidden' }}>
           <div
             className="reader-columns"
