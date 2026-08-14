@@ -42,9 +42,11 @@ function computeActiveHrefs(entries: TocEntry[], activeDoc: string): Set<string>
   return new Set(fragLess.length ? fragLess : any);
 }
 
-// Recursive hierarchical TOC renderer. Indents by depth, highlights the active
-// node, and opens the matching chapter on click (group nodes without an href are
-// not clickable but still group their children).
+// Recursive hierarchical TOC renderer. Each node carries its own collapse state
+// (a caret toggles it); indentation comes from the row wrapper. The active node
+// is highlighted and clicking a node opens the matching chapter. Group nodes
+// without an href are not clickable to open, but their caret still collapses
+// their subtree.
 function TocTree({
   entries,
   depth = 0,
@@ -62,35 +64,79 @@ function TocTree({
 }) {
   return (
     <>
-      {entries.map((e, i) => {
-        const hasKids = !!e.children && e.children.length > 0;
-        const cid = e.href ? resolve(e.href) : undefined;
-        const active = e.href ? activeSet.has(e.href) : false;
-        return (
-          <Fragment key={i}>
-            <button
-              type="button"
-              className={`${itemClass}${active ? ' active' : ''}${hasKids ? ' group' : ''}`}
-              style={{ paddingLeft: 16 + depth * 16 }}
-              onClick={() => cid && onPick(cid)}
-              title={e.title}
-              disabled={!cid}
-            >
-              {e.title || '(无标题)'}
-            </button>
-            {hasKids && (
-              <TocTree
-                entries={e.children!}
-                depth={depth + 1}
-                itemClass={itemClass}
-                activeSet={activeSet}
-                resolve={resolve}
-                onPick={onPick}
-              />
-            )}
-          </Fragment>
-        );
-      })}
+      {entries.map((e, i) => (
+        <TocNode
+          key={i}
+          entry={e}
+          depth={depth}
+          itemClass={itemClass}
+          activeSet={activeSet}
+          resolve={resolve}
+          onPick={onPick}
+        />
+      ))}
+    </>
+  );
+}
+
+function TocNode({
+  entry,
+  depth,
+  itemClass,
+  activeSet,
+  resolve,
+  onPick,
+}: {
+  entry: TocEntry;
+  depth: number;
+  itemClass: string;
+  activeSet: Set<string>;
+  resolve: (href: string) => string | undefined;
+  onPick: (cid: string) => void;
+}) {
+  const hasKids = !!entry.children && entry.children.length > 0;
+  const [open, setOpen] = useState(true);
+  const cid = entry.href ? resolve(entry.href) : undefined;
+  const active = entry.href ? activeSet.has(entry.href) : false;
+  const toggle = (ev: ReactMouseEvent) => {
+    ev.stopPropagation();
+    setOpen((o) => !o);
+  };
+  const labelClick = () => {
+    if (cid) onPick(cid);
+    else if (hasKids) setOpen((o) => !o);
+  };
+  return (
+    <>
+      <div className="toc-row" style={{ paddingLeft: depth * 16 }}>
+        {hasKids ? (
+          <button type="button" className="toc-caret" onClick={toggle} aria-label={open ? '折叠' : '展开'}>
+            {open ? '▾' : '▸'}
+          </button>
+        ) : (
+          <span className="toc-caret toc-caret-empty" />
+        )}
+        <button
+          type="button"
+          className={`${itemClass}${active ? ' active' : ''}${hasKids ? ' group' : ''}`}
+          style={{ padding: '7px 12px' }}
+          onClick={labelClick}
+          title={entry.title}
+          disabled={!cid && !hasKids}
+        >
+          {entry.title || '(无标题)'}
+        </button>
+      </div>
+      {hasKids && open && (
+        <TocTree
+          entries={entry.children!}
+          depth={depth + 1}
+          itemClass={itemClass}
+          activeSet={activeSet}
+          resolve={resolve}
+          onPick={onPick}
+        />
+      )}
     </>
   );
 }

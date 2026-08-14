@@ -517,6 +517,36 @@ a {
   font-weight: 600;
 }
 
+/* Hierarchical TOC: collapsible rows. Indentation lives on .toc-row so the
+   caret and label stay aligned across depths. */
+.toc-row {
+  display: flex;
+  align-items: stretch;
+}
+
+.toc-caret {
+  flex: 0 0 18px;
+  align-self: stretch;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  background: none;
+  cursor: pointer;
+  color: var(--text-3);
+  font-size: 10px;
+  line-height: 1;
+  padding: 0;
+}
+
+.toc-caret:hover {
+  color: var(--text);
+}
+
+.toc-caret-empty {
+  cursor: default;
+}
+
 .reader-main {
   overflow-y: auto;
   background: var(--bg);
