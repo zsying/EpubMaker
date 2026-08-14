@@ -1229,10 +1229,30 @@ export default function Reader() {
 
   // Renders one face of the 3D flip: a paper sheet stack + clipped text column
   // positioned at `page`. `rotating` faces carry the rotateY transform + shade.
+  //
+  // Single page: the whole sheet turns around the right edge (next) or left
+  // edge (prev) — a right-hand turn. Two pages: next turns ONLY the right page
+  // and prev turns ONLY the left page, each around the center spine; the whole
+  // spread never rotates at once.
   const renderFlipFace = (page: number, rotating: boolean) => {
     if (!flip) return null;
     const stepPx = sheetWidth + pageGap;
-    const originX = pagesPerView === 2 ? sheetWidth : flip.dir === 1 ? sheetWidth : 0;
+    let originX = sheetWidth;
+    let drawSingle: 'left' | 'right' | null = null;
+    if (rotating) {
+      if (pagesPerView === 2) {
+        drawSingle = flip.dir === 1 ? 'right' : 'left';
+        originX = sheetWidth; // center spine
+      } else {
+        originX = flip.dir === 1 ? sheetWidth : 0;
+      }
+    }
+    const rotatingFaceLeft = drawSingle === 'right' ? sheetWidth + pageGap : 0;
+    const spineLeft = originX <= rotatingFaceLeft;
+    // Which content column this face shows: a 2-page "next" turn flips the
+    // right page, so its text is one column past the spread start.
+    const contentPage =
+      rotating && pagesPerView === 2 && flip.dir === 1 ? page + 1 : page;
     return (
       <div
         className={`reader-flip-face${rotating ? ' turning' : ''}`}
@@ -1242,13 +1262,24 @@ export default function Reader() {
           ...(rotating
             ? {
                 boxShadow: `0 10px 28px rgba(0,0,0,0.18), inset ${
-                  flip.dir === 1 ? '-' : ''
+                  spineLeft ? '' : '-'
                 }36px 0 52px -30px rgba(255,255,255,0.6)`,
               }
             : {}),
         }}
       >
-        {pagesPerView === 2 ? (
+        {rotating && drawSingle ? (
+          <div
+            className={`page-sheet ${drawSingle}`}
+            style={{
+              left: drawSingle === 'right' ? sheetWidth + pageGap : 0,
+              width: sheetWidth,
+              height: sheetHeight,
+            }}
+          >
+            <span className={`page-num ${drawSingle}`}>{contentPage + 1} / {pageCount}</span>
+          </div>
+        ) : pagesPerView === 2 ? (
           <>
             <div className="page-sheet left" style={{ left: 0, width: sheetWidth, height: sheetHeight }}>
               <span className="page-num left">{page + 1} / {pageCount}</span>
@@ -1271,7 +1302,7 @@ export default function Reader() {
               top: marginPx,
               width: pageCount > 0 ? pageCount * contentWidth + (pageCount - 1) * columnGap : 0,
               height: Math.max(0, contentHeight),
-              transform: `translate3d(-${page * stepPx}px, 0, 0)`,
+              transform: `translate3d(-${contentPage * stepPx}px, 0, 0)`,
               columnWidth: contentWidth,
               columnGap,
             }}
@@ -1288,10 +1319,9 @@ export default function Reader() {
             className="flip-shade"
             style={{
               opacity: Math.min(0.55, Math.abs(flipAngle) / 360),
-              background:
-                flip.dir === 1
-                  ? 'linear-gradient(90deg, rgba(0,0,0,0) 0%, rgba(0,0,0,0.42) 100%)'
-                  : 'linear-gradient(270deg, rgba(0,0,0,0) 0%, rgba(0,0,0,0.42) 100%)',
+              background: spineLeft
+                ? 'linear-gradient(270deg, rgba(0,0,0,0) 0%, rgba(0,0,0,0.42) 100%)'
+                : 'linear-gradient(90deg, rgba(0,0,0,0) 0%, rgba(0,0,0,0.42) 100%)',
             }}
           />
         )}
