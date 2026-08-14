@@ -22,13 +22,24 @@ type ManifestItem struct {
 	Properties string
 }
 
+// TOCEntry is a single node in the (possibly hierarchical) table of contents.
+// Children carries nested sub-sections, mirroring NCX <navPoint> nesting and
+// EPUB3 nav <ol><li> nesting. A node without an href is a structural parent
+// (e.g. an EPUB3 nav <span> group) that still groups its children.
+type TOCEntry struct {
+	Href     string     `json:"href"`
+	Title    string     `json:"title"`
+	Children []TOCEntry `json:"children,omitempty"`
+}
+
 // ParsedEpub is the extracted structure of an EPUB, ready to be persisted.
 type ParsedEpub struct {
 	Metadata  Metadata
 	OpfPath   string
 	Spine     []ManifestItem
 	Resources []ManifestItem
-	TOC       map[string]string // href -> title
+	TOC       map[string]string // href -> title (flat, used for spine title lookup)
+	TOCList   []TOCEntry        // hierarchical table of contents (preserves nesting)
 	CoverHref string
 	// Entries maps normalized href -> zip file handle. Cleared after use.
 	Entries map[string]*zip.File
@@ -54,9 +65,6 @@ func ReadEntry(f *zip.File) ([]byte, error) {
 	return io.ReadAll(rc)
 }
 
-var ncxTextRe = regexp.MustCompile(`(?is)<text[^>]*>([\s\S]*?)</text>[\s\S]*?<content[^>]*src\s*=\s*["']([^"']+)["']`)
-var navLinkRe = regexp.MustCompile(`(?is)<a\s[^>]*href\s*=\s*["']([^"']+)["'][^>]*>([\s\S]*?)</a>`)
-
 // textOf extracts trimmed text from an XMLNode character-data value (which our
 // parser stores as a plain string in .Text).
 func textOf(v any) string {
@@ -75,33 +83,164 @@ func textOf(v any) string {
 	return ""
 }
 
-// parseNcx extracts <text>title</text> … <content src="…"/> pairs.
-func parseNcx(xmlStr, ncxPath string) map[string]string {
-	out := map[string]string{}
-	for _, m := range ncxTextRe.FindAllStringSubmatch(xmlStr, -1) {
-		title := html.StripTags(m[1])
-		href := html.ResolveHref(ncxPath, m[2])
-		if title != "" && href != "" {
-			if _, exists := out[href]; !exists {
-				out[href] = title
-			}
+// innerText recursively concatenates the character data of a node and all its
+// descendants (so titles inside <a>Chapter <b>1</b></a> come out whole).
+func innerText(n *XMLNode) string {
+	if n == nil {
+		return ""
+	}
+	var sb strings.Builder
+	sb.WriteString(n.Text)
+	for _, c := range n.Children {
+		sb.WriteString(innerText(c))
+	}
+	return strings.TrimSpace(sb.String())
+}
+
+// childElems returns the direct children of parent whose local name is local.
+// Direct children only — unlike FindAll, which is depth-first over all
+// descendants — so nested lists are not double-counted when recursing.
+func childElems(parent *XMLNode, local string) []*XMLNode {
+	if parent == nil {
+		return nil
+	}
+	var out []*XMLNode
+	for _, c := range parent.Children {
+		if c.Local == local {
+			out = append(out, c)
 		}
 	}
 	return out
 }
 
-// parseNav extracts <a href="…">title</a> pairs from an EPUB3 nav document.
-func parseNav(xmlStr, navPath string) map[string]string {
-	out := map[string]string{}
-	for _, m := range navLinkRe.FindAllStringSubmatch(xmlStr, -1) {
-		href := html.ResolveHref(navPath, m[1])
-		title := html.StripTags(m[2])
-		if title != "" && href != "" {
-			if _, exists := out[href]; !exists {
-				out[href] = title
+// parseNcxTree builds the hierarchical TOC from an NCX navMap, preserving
+// <navPoint> nesting. Returns nil when no navMap is present.
+func parseNcxTree(root *XMLNode, ncxPath string) []TOCEntry {
+	if root == nil {
+		return nil
+	}
+	navMap := root.find("navMap")
+	if navMap == nil {
+		return nil
+	}
+	return ncxNavPoints(navMap, ncxPath)
+}
+
+func ncxNavPoints(parent *XMLNode, ncxPath string) []TOCEntry {
+	var out []TOCEntry
+	for _, np := range childElems(parent, "navPoint") {
+		var title string
+		if label := childElems(np, "navLabel"); len(label) > 0 {
+			if t := childElems(label[0], "text"); len(t) > 0 {
+				title = innerText(t[0])
 			}
 		}
+		var href string
+		if content := childElems(np, "content"); len(content) > 0 {
+			if src, ok := content[0].Attrs["src"]; ok && src != "" {
+				href = resolveHrefKeepFragment(ncxPath, src)
+			}
+		}
+		out = append(out, TOCEntry{
+			Href:     href,
+			Title:    title,
+			Children: ncxNavPoints(np, ncxPath),
+		})
 	}
+	return out
+}
+
+// resolveHrefKeepFragment resolves a TOC entry href against its container file
+// but keeps any #fragment, since sub-section entries point at anchors inside a
+// chapter document. ResolveHref/NormalizeHref strip the fragment, so we split
+// it off, resolve the base, and re-append it.
+func resolveHrefKeepFragment(fromFile, rel string) string {
+	frag := ""
+	if i := strings.IndexByte(rel, '#'); i >= 0 {
+		frag = rel[i:]
+		rel = rel[:i]
+	}
+	if rel == "" {
+		return frag // fragment-only reference
+	}
+	return html.ResolveHref(fromFile, rel) + frag
+}
+
+// parseNavTree builds the hierarchical TOC from an EPUB3 nav document,
+// preserving <ol><li> nesting. Prefers the nav with epub:type="toc".
+func parseNavTree(root *XMLNode, navPath string) []TOCEntry {
+	if root == nil {
+		return nil
+	}
+	var nav *XMLNode
+	for _, n := range root.FindAll("nav") {
+		if strings.Contains(n.Attrs["epub:type"], "toc") {
+			nav = n
+			break
+		}
+	}
+	if nav == nil {
+		nav = root.find("nav")
+	}
+	if nav == nil {
+		return nil
+	}
+	return navListItems(nav, navPath)
+}
+
+// navListItems walks the immediate <ol> children of parent, recursing into
+// each <li>'s nested <ol> to keep the hierarchy intact.
+func navListItems(parent *XMLNode, navPath string) []TOCEntry {
+	var out []TOCEntry
+	for _, ol := range childElems(parent, "ol") {
+		for _, li := range childElems(ol, "li") {
+			entry := navLi(li, navPath)
+			entry.Children = navListItems(li, navPath)
+			out = append(out, entry)
+		}
+	}
+	return out
+}
+
+// navLi extracts a single <li>'s href/title from its DIRECT children only — a
+// <a> gives the link, a bare <span> (or the li's own text) is a structural
+// parent grouping its children. Descendant search is avoided so a parent li
+// does not hijack a nested li's <a>.
+func navLi(li *XMLNode, navPath string) TOCEntry {
+	title, href := "", ""
+	if a := childElems(li, "a"); len(a) > 0 {
+		if h, ok := a[0].Attrs["href"]; ok && h != "" {
+			href = resolveHrefKeepFragment(navPath, h)
+		}
+		title = innerText(a[0])
+	}
+	if title == "" {
+		if span := childElems(li, "span"); len(span) > 0 {
+			title = innerText(span[0])
+		}
+	}
+	if title == "" {
+		title = innerText(li)
+	}
+	return TOCEntry{Href: href, Title: title}
+}
+
+// flattenTOC collapses a hierarchical TOC into the flat href->title map used
+// for spine title lookups. Document order is preserved; first occurrence wins.
+func flattenTOC(entries []TOCEntry) map[string]string {
+	out := map[string]string{}
+	var walk func([]TOCEntry)
+	walk = func(es []TOCEntry) {
+		for _, e := range es {
+			if e.Href != "" && e.Title != "" {
+				if _, ok := out[e.Href]; !ok {
+					out[e.Href] = e.Title
+				}
+			}
+			walk(e.Children)
+		}
+	}
+	walk(entries)
 	return out
 }
 
@@ -276,13 +415,13 @@ func parseZip(zr *zip.Reader) (*ParsedEpub, error) {
 				}
 			}
 		}
-		// 5. table of contents
-		toc := map[string]string{}
+		// 5. table of contents (hierarchical)
+		var navRoot, ncxRoot *XMLNode
 		if navItem != nil {
 			if e := find(navItem.Href); e != nil {
 				if b, e2 := ReadEntry(e); e2 == nil {
-					for k, v := range parseNav(string(b), navItem.Href) {
-						toc[k] = v
+					if r, e3 := parseXMLTree(b); e3 == nil {
+						navRoot = r
 					}
 				}
 			}
@@ -290,9 +429,25 @@ func parseZip(zr *zip.Reader) (*ParsedEpub, error) {
 		if ncxItem != nil {
 			if e := find(ncxItem.Href); e != nil {
 				if b, e2 := ReadEntry(e); e2 == nil {
-					for k, v := range parseNcx(string(b), ncxItem.Href) {
-						toc[k] = v
+					if r, e3 := parseXMLTree(b); e3 == nil {
+						ncxRoot = r
 					}
+				}
+			}
+		}
+		navTree := parseNavTree(navRoot, navItem.Href)
+		ncxTree := parseNcxTree(ncxRoot, ncxItem.Href)
+		tocList := navTree
+		if len(tocList) == 0 {
+			tocList = ncxTree
+		}
+		toc := flattenTOC(tocList)
+		// When both a nav doc and an NCX are present, merge the NCX titles into
+		// the flat map too so spine title lookup stays as complete as before.
+		if navTree != nil && ncxTree != nil {
+			for k, v := range flattenTOC(ncxTree) {
+				if _, ok := toc[k]; !ok {
+					toc[k] = v
 				}
 			}
 		}
@@ -377,6 +532,7 @@ func parseZip(zr *zip.Reader) (*ParsedEpub, error) {
 			Spine:     spine,
 			Resources: resources,
 			TOC:       toc,
+			TOCList:   tocList,
 			CoverHref: coverHref,
 			Entries:   entries,
 		}, nil

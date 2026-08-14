@@ -95,3 +95,101 @@ func TestParseEpubFile(t *testing.T) {
 		t.Errorf("title=%q, want 测试书", parsed.Metadata.Title)
 	}
 }
+
+// TestParseNcxHierarchy verifies NCX <navPoint> nesting is preserved.
+func TestParseNcxHierarchy(t *testing.T) {
+	xmlStr := `<?xml version="1.0"?>
+<ncx xmlns="http://www.daisy.org/z3986/2005/ncx/">
+  <navMap>
+    <navPoint id="np1" playOrder="1">
+      <navLabel><text>第一章</text></navLabel>
+      <content src="ch1.xhtml"/>
+      <navPoint id="np1a" playOrder="2">
+        <navLabel><text>第一节</text></navLabel>
+        <content src="ch1.xhtml#s1"/>
+      </navPoint>
+      <navPoint id="np1b" playOrder="3">
+        <navLabel><text>第二节</text></navLabel>
+        <content src="ch1.xhtml#s2"/>
+      </navPoint>
+    </navPoint>
+    <navPoint id="np2" playOrder="4">
+      <navLabel><text>第二章</text></navLabel>
+      <content src="ch2.xhtml"/>
+    </navPoint>
+  </navMap>
+</ncx>`
+	root, err := parseXMLTree([]byte(xmlStr))
+	if err != nil {
+		t.Fatalf("parse xml: %v", err)
+	}
+	list := parseNcxTree(root, "OEBPS/toc.ncx")
+	if len(list) != 2 {
+		t.Fatalf("top-level entries=%d, want 2", len(list))
+	}
+	if list[0].Title != "第一章" || list[0].Href != "OEBPS/ch1.xhtml" {
+		t.Errorf("entry0=%+v", list[0])
+	}
+	if len(list[0].Children) != 2 {
+		t.Fatalf("entry0 children=%d, want 2", len(list[0].Children))
+	}
+	if list[0].Children[0].Title != "第一节" || list[0].Children[0].Href != "OEBPS/ch1.xhtml#s1" {
+		t.Errorf("child0=%+v", list[0].Children[0])
+	}
+	// NCX content/@src keeps its fragment; ResolveHref only resolves the base.
+	if list[0].Children[1].Href != "OEBPS/ch1.xhtml#s2" {
+		t.Errorf("child1 href=%q", list[0].Children[1].Href)
+	}
+	if list[1].Title != "第二章" || list[1].Href != "OEBPS/ch2.xhtml" {
+		t.Errorf("entry1=%+v", list[1])
+	}
+}
+
+// TestParseNavHierarchy verifies EPUB3 nav <ol><li> nesting is preserved,
+// including <span> parent nodes that group children without a link.
+func TestParseNavHierarchy(t *testing.T) {
+	xmlStr := `<?xml version="1.0"?>
+<html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops">
+<body>
+  <nav epub:type="toc" id="toc">
+    <ol>
+      <li><a href="ch1.xhtml">第一章</a>
+        <ol>
+          <li><a href="ch1.xhtml#s1">第一节</a></li>
+          <li><a href="ch1.xhtml#s2">第二节</a></li>
+        </ol>
+      </li>
+      <li><span>附录</span>
+        <ol>
+          <li><a href="appendix.xhtml">完整附录</a></li>
+        </ol>
+      </li>
+    </ol>
+  </nav>
+</body>
+</html>`
+	root, err := parseXMLTree([]byte(xmlStr))
+	if err != nil {
+		t.Fatalf("parse xml: %v", err)
+	}
+	list := parseNavTree(root, "OEBPS/nav.xhtml")
+	if len(list) != 2 {
+		t.Fatalf("top-level entries=%d, want 2", len(list))
+	}
+	if list[0].Title != "第一章" || list[0].Href != "OEBPS/ch1.xhtml" {
+		t.Errorf("entry0=%+v", list[0])
+	}
+	if len(list[0].Children) != 2 {
+		t.Fatalf("entry0 children=%d, want 2", len(list[0].Children))
+	}
+	if list[0].Children[1].Title != "第二节" {
+		t.Errorf("child1=%+v", list[0].Children[1])
+	}
+	// span parent has no href (it only groups children) but still nests them.
+	if list[1].Href != "" {
+		t.Errorf("span parent href=%q, want empty", list[1].Href)
+	}
+	if len(list[1].Children) != 1 || list[1].Children[0].Title != "完整附录" || list[1].Children[0].Href != "OEBPS/appendix.xhtml" {
+		t.Errorf("appendix group=%+v", list[1].Children)
+	}
+}
