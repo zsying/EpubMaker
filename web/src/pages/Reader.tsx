@@ -1,7 +1,7 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent } from 'react';
+import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent } from 'react';
 import { Link, useLocation, useNavigate, useParams } from 'react-router-dom';
 import DOMPurify from 'dompurify';
-import { api, Annotation, Book, Bookmark, Chapter } from '../api';
+import { api, Annotation, Book, Bookmark, Chapter, TocEntry } from '../api';
 import { toast, toastError } from '../toast';
 
 const FONT_KEY = 'epubmaker.fontSize';
@@ -10,6 +10,90 @@ const TOC_DOCK_KEY = 'epubmaker.tocDocked';
 // Width of the docked TOC sidebar (kept in sync with --toc-dock-w in styles.css
 // and the .toc sidebar width in scroll mode for visual consistency).
 const TOC_DOCK_W = 268;
+
+// Strip any #fragment from a TOC href so a child-section entry
+// (doc.xhtml#section) resolves to its parent chapter document (doc.xhtml).
+function docKey(href: string): string {
+  const i = href.indexOf('#');
+  return i >= 0 ? href.slice(0, i) : href;
+}
+
+// Which TOC nodes count as "current" for the active highlight. We match a node
+// by its document (fragment-stripped) href against the open chapter. Fragment-less
+// chapter entries are preferred; if the book's TOC has no fragment-less entry for
+// this document, we fall back to the first fragment-bearing match.
+function computeActiveHrefs(entries: TocEntry[], activeDoc: string): Set<string> {
+  const fragLess: string[] = [];
+  const any: string[] = [];
+  const walk = (es: TocEntry[]) => {
+    for (const e of es) {
+      if (!e.href) {
+        if (e.children) walk(e.children);
+        continue;
+      }
+      if (docKey(e.href) === activeDoc) {
+        if (e.href.includes('#')) any.push(e.href);
+        else fragLess.push(e.href);
+      }
+      if (e.children) walk(e.children);
+    }
+  };
+  walk(entries);
+  return new Set(fragLess.length ? fragLess : any);
+}
+
+// Recursive hierarchical TOC renderer. Indents by depth, highlights the active
+// node, and opens the matching chapter on click (group nodes without an href are
+// not clickable but still group their children).
+function TocTree({
+  entries,
+  depth = 0,
+  itemClass,
+  activeSet,
+  resolve,
+  onPick,
+}: {
+  entries: TocEntry[];
+  depth?: number;
+  itemClass: string;
+  activeSet: Set<string>;
+  resolve: (href: string) => string | undefined;
+  onPick: (cid: string) => void;
+}) {
+  return (
+    <>
+      {entries.map((e, i) => {
+        const hasKids = !!e.children && e.children.length > 0;
+        const cid = e.href ? resolve(e.href) : undefined;
+        const active = e.href ? activeSet.has(e.href) : false;
+        return (
+          <Fragment key={i}>
+            <button
+              type="button"
+              className={`${itemClass}${active ? ' active' : ''}${hasKids ? ' group' : ''}`}
+              style={{ paddingLeft: 16 + depth * 16 }}
+              onClick={() => cid && onPick(cid)}
+              title={e.title}
+              disabled={!cid}
+            >
+              {e.title || '(无标题)'}
+            </button>
+            {hasKids && (
+              <TocTree
+                entries={e.children!}
+                depth={depth + 1}
+                itemClass={itemClass}
+                activeSet={activeSet}
+                resolve={resolve}
+                onPick={onPick}
+              />
+            )}
+          </Fragment>
+        );
+      })}
+    </>
+  );
+}
 const posKey = (id: string) => `epubmaker.pos.${id}`;
 
 type ReadMode = 'scroll' | 'paged';
@@ -86,6 +170,8 @@ export default function Reader() {
 
   const [book, setBook] = useState<Book | null>(null);
   const [chapters, setChapters] = useState<Chapter[]>([]);
+  // Hierarchical table of contents (empty for books imported before hierarchy support).
+  const [toc, setToc] = useState<TocEntry[]>([]);
   const [current, setCurrent] = useState<string | null>(null);
   const [html, setHtml] = useState('');
   const [loading, setLoading] = useState(true);
@@ -175,15 +261,17 @@ export default function Reader() {
   useEffect(() => {
     (async () => {
       try {
-        const [b, cs, prog, bms, anns] = await Promise.all([
+        const [b, cs, prog, bms, anns, tocEntries] = await Promise.all([
           api.getBook(id),
           api.listChapters(id),
           api.getProgress(id),
           api.listBookmarks(id),
           api.listAnnotations(id),
+          api.bookTOC(id),
         ]);
         setBook(b);
         setChapters(cs);
+        setToc(tocEntries ?? []);
         setBookmarks(bms);
         setAnnotations(anns);
 
@@ -541,6 +629,25 @@ export default function Reader() {
     ? ((idx + (pageCount ? pageIndex / pageCount : 0)) / chapters.length) * 100
     : 0;
 
+  // Map each chapter document href -> Chapter, so a hierarchical TOC node can
+  // resolve to the chapter id it opens.
+  const byHref = useMemo(() => {
+    const m = new Map<string, Chapter>();
+    for (const c of chapters) m.set(c.href, c);
+    return m;
+  }, [chapters]);
+  const resolveTocHref = (href: string): string | undefined => {
+    const ch = byHref.get(docKey(href));
+    return ch?.id;
+  };
+  const currentChapter = current ? chapters.find((c) => c.id === current) ?? null : null;
+  const activeDoc = currentChapter?.href ?? null;
+  // Active highlight for the hierarchical TOC (no-op for flat-legacy books).
+  const activeSet = useMemo(
+    () => (activeDoc ? computeActiveHrefs(toc, activeDoc) : new Set<string>()),
+    [toc, activeDoc],
+  );
+
   /* ---- navigation ---- */
   function openChapter(cid: string, intent: PageIntent = { type: 'first' }) {
     setPopover(null);
@@ -873,17 +980,21 @@ export default function Reader() {
       <div className="reader">
         <aside className="toc">
           <div className="toc-head">目录 · {chapters.length} 章</div>
-          {chapters.map((c, i) => (
-            <button
-              key={c.id}
-              className={`toc-item${c.id === current ? ' active' : ''}`}
-              onClick={() => openChapter(c.id)}
-              title={c.title}
-            >
-              <span className="num">{String(i + 1).padStart(2, '0')}</span>
-              {c.title}
-            </button>
-          ))}
+          {toc.length > 0 ? (
+            <TocTree entries={toc} itemClass="toc-item" activeSet={activeSet} resolve={resolveTocHref} onPick={openChapter} />
+          ) : (
+            chapters.map((c, i) => (
+              <button
+                key={c.id}
+                className={`toc-item${c.id === current ? ' active' : ''}`}
+                onClick={() => openChapter(c.id)}
+                title={c.title}
+              >
+                <span className="num">{String(i + 1).padStart(2, '0')}</span>
+                {c.title}
+              </button>
+            ))
+          )}
         </aside>
 
         <div className="reader-main" ref={mainRef}>
@@ -949,17 +1060,21 @@ export default function Reader() {
             </button>
           </div>
           <div className="toc-dock-body">
-            {chapters.map((c, i) => (
-              <button
-                key={c.id}
-                className={`toc-item${c.id === current ? " active" : ""}`}
-                onClick={() => openChapter(c.id)}
-                title={c.title}
-              >
-                <span className="num">{String(i + 1).padStart(2, "0")}</span>
-                {c.title}
-              </button>
-            ))}
+            {toc.length > 0 ? (
+              <TocTree entries={toc} itemClass="toc-item" activeSet={activeSet} resolve={resolveTocHref} onPick={openChapter} />
+            ) : (
+              chapters.map((c, i) => (
+                <button
+                  key={c.id}
+                  className={`toc-item${c.id === current ? " active" : ""}`}
+                  onClick={() => openChapter(c.id)}
+                  title={c.title}
+                >
+                  <span className="num">{String(i + 1).padStart(2, "0")}</span>
+                  {c.title}
+                </button>
+              ))
+            )}
           </div>
         </aside>
       )}
@@ -1100,16 +1215,20 @@ export default function Reader() {
               </button>
             </div>
             <div className="drawer-body">
-              {chapters.map((c, i) => (
-                <button
-                  key={c.id}
-                  className={`drawer-item${c.id === current ? ' active' : ''}`}
-                  onClick={() => openChapter(c.id)}
-                >
-                  <span className="num">{String(i + 1).padStart(2, '0')}</span>
-                  {c.title}
-                </button>
-              ))}
+              {toc.length > 0 ? (
+                <TocTree entries={toc} itemClass="drawer-item" activeSet={activeSet} resolve={resolveTocHref} onPick={openChapter} />
+              ) : (
+                chapters.map((c, i) => (
+                  <button
+                    key={c.id}
+                    className={`drawer-item${c.id === current ? ' active' : ''}`}
+                    onClick={() => openChapter(c.id)}
+                  >
+                    <span className="num">{String(i + 1).padStart(2, '0')}</span>
+                    {c.title}
+                  </button>
+                ))
+              )}
             </div>
           </aside>
         </div>

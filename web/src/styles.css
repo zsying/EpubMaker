@@ -511,6 +511,12 @@ a {
   font-size: 11.5px;
 }
 
+/* Hierarchical TOC: section (group) nodes read as headers within the tree. */
+.toc-item.group {
+  color: var(--text);
+  font-weight: 600;
+}
+
 .reader-main {
   overflow-y: auto;
   background: var(--bg);
@@ -945,6 +951,7 @@ a {
 .drawer-item:hover { background: #f2f4f8; color: var(--text); }
 .drawer-item.active { background: var(--accent-soft); color: var(--accent); border-left-color: var(--accent); }
 .drawer-item .num { color: var(--text-3); margin-right: 6px; font-size: 11.5px; }
+.drawer-item.group { color: var(--text); font-weight: 600; }
 .drawer-row {
   display: flex;
   align-items: stretch;
