@@ -128,6 +128,9 @@ func migrate(d *sql.DB) error {
 	_, _ = d.Exec(`ALTER TABLE reading_progress ADD COLUMN position_offset INTEGER NOT NULL DEFAULT 0`)
 	// Migration: older DBs may lack the hierarchical TOC column.
 	_, _ = d.Exec(`ALTER TABLE books ADD COLUMN toc TEXT`)
+	// Backfill existing rows so the column is never NULL (Scan into sql.NullString
+	// also tolerates NULL, but an empty string keeps queries/JSON predictable).
+	_, _ = d.Exec(`UPDATE books SET toc = '' WHERE toc IS NULL`)
 	return nil
 }
 

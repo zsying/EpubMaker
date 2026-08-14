@@ -67,8 +67,8 @@ type BookRow struct {
 	CreatedAt   string
 	UpdatedAt   string
 	// TOC is the hierarchical table-of-contents tree serialized as JSON.
-	// Empty for books imported before hierarchical TOC support.
-	TOC string
+	// NULL (empty) for books imported before hierarchical TOC support.
+	TOC sql.NullString
 }
 
 type ChapterRow struct {
@@ -352,11 +352,11 @@ func GetBookTOC(bookID string) ([]epub.TOCEntry, error) {
 	if row == nil {
 		return nil, nil
 	}
-	if strings.TrimSpace(row.TOC) == "" {
+	if !row.TOC.Valid || strings.TrimSpace(row.TOC.String) == "" {
 		return []epub.TOCEntry{}, nil
 	}
 	var toc []epub.TOCEntry
-	if err := json.Unmarshal([]byte(row.TOC), &toc); err != nil {
+	if err := json.Unmarshal([]byte(row.TOC.String), &toc); err != nil {
 		return []epub.TOCEntry{}, nil
 	}
 	return toc, nil

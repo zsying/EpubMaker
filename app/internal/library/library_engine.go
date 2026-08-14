@@ -378,8 +378,8 @@ func SplitBook(bookID string, parts []SplitPart, deleteSource bool) ([]*BookDTO,
 
 	// Source hierarchical TOC (may be empty for pre-hierarchy imports).
 	var srcTOC []epub.TOCEntry
-	if strings.TrimSpace(row.TOC) != "" {
-		_ = json.Unmarshal([]byte(row.TOC), &srcTOC)
+	if row.TOC.Valid && strings.TrimSpace(row.TOC.String) != "" {
+		_ = json.Unmarshal([]byte(row.TOC.String), &srcTOC)
 	}
 
 	created := []string{}
