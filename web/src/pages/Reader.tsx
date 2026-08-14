@@ -844,10 +844,13 @@ export default function Reader() {
     setFlip({ dir, from: pageIndex, to });
     setFlipAngle(0);
     // Kick the CSS transition on the next frame so it animates from 0.
-    // Both directions rotate to -180: the spine (transform-origin) differs, so
-    // the page either rolls inward (next page, spine on the right) or lifts
-    // outward to the right (prev page, spine on the left) — i.e. opposite feels.
-    requestAnimationFrame(() => requestAnimationFrame(() => setFlipAngle(-180)));
+    // Two-page prev must rotate to +180 (not -180): the turning left page
+    // pivots on the center spine so its outer (left) edge lifts toward the
+    // viewer and sweeps up-and-right across the spine — a "turn the page from
+    // left to right, lifting upward" motion. -180 would sink that edge into the
+    // screen, reading as a downward flip. Next (and single-page) use -180.
+    const target = pagesPerView === 2 && dir === -1 ? 180 : -180;
+    requestAnimationFrame(() => requestAnimationFrame(() => setFlipAngle(target)));
     window.setTimeout(() => {
       setPageIndex(to);
       setFlip(null);
