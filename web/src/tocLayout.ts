@@ -107,16 +107,20 @@ export interface HierarchySplit {
 }
 
 // Build a volume split directly from the hierarchical TOC. Each TOC group at the
-// requested depth (`level`, 1 = top-level) becomes its own volume; every chapter
-// under that group is assigned to it. `excluded` holds chapter ids the user has
-// already marked "不包含" — those stay out of the auto-split. Chapters not
-// covered by the chosen level (e.g. a deep book with only 2 real levels) fall
-// back to a single volume.
+// requested depth (`level`, 1 = top-level) becomes its own volume, and every
+// chapter *nested* under that group is auto-assigned to it. Standalone
+// single-level chapters that are NOT inside any group (e.g. 序章 / 后记 / 附录
+// that sit directly under the book root) are left unassigned by default, so the
+// user can place them manually via the dropdown instead of being silently swept
+// into a volume. `prevAssign` is the current assignment: the user's manual
+// exclusions (value < 0) survive, and any single-level chapter they already
+// dropped into a volume is kept where they put it (re-running "生成分卷" won't
+// wipe their edits).
 export function splitByHierarchy(
   toc: TocEntry[],
   chapters: Chapter[],
   level: number,
-  excluded: Set<string> = new Set(),
+  prevAssign: Record<string, number> = {},
 ): HierarchySplit {
   const byHref = new Map<string, Chapter>();
   for (const c of chapters) byHref.set(docKey(c.href), c);
@@ -124,19 +128,27 @@ export function splitByHierarchy(
   const parts: { title: string }[] = [];
   const assign: Record<string, number> = {};
 
+  // Chapters the user explicitly marked "不包含" stay out even when nested.
+  const manualExcluded = new Set(
+    Object.entries(prevAssign).filter(([, v]) => v < 0).map(([id]) => id),
+  );
+
   const assignSubtree = (e: TocEntry, p: number) => {
     if (e.href) {
       const ch = byHref.get(docKey(e.href));
-      if (ch && !excluded.has(ch.id)) assign[ch.id] = p;
+      if (ch && !manualExcluded.has(ch.id)) assign[ch.id] = p;
     }
     for (const c of e.children ?? []) assignSubtree(c, p);
   };
 
+  // A TOC entry becomes a volume only when it actually has children (a real
+  // section). A leaf entry at the chosen depth is a standalone single-level
+  // chapter: we skip it so it stays unassigned for manual placement.
   const walk = (es: TocEntry[], depth: number) => {
     for (const e of es) {
       if (depth + 1 < level) {
         walk(e.children ?? [], depth + 1);
-      } else {
+      } else if (e.children?.length) {
         const p = parts.length;
         parts.push({ title: e.title || `分卷 ${p + 1}` });
         assignSubtree(e, p);
@@ -146,13 +158,27 @@ export function splitByHierarchy(
 
   walk(toc, 0);
 
-  if (parts.length === 0) {
+  if (parts.length > 0) {
+    // Preserve single-level / ungrouped chapters the user already placed into a
+    // volume (re-running the auto-split shouldn't discard manual additions).
+    for (const c of chapters) {
+      if (c.id in assign) continue;
+      const v = prevAssign[c.id];
+      if (v !== undefined && v >= 0 && v < parts.length) assign[c.id] = v;
+    }
+  } else {
+    // No groups at the chosen level: fall back to a single volume, keeping the
+    // user's existing manual placements / exclusions where possible.
     parts.push({ title: '分卷 1' });
-    for (const c of chapters) if (!excluded.has(c.id)) assign[c.id] = 0;
+    for (const c of chapters) {
+      const v = prevAssign[c.id];
+      if (v !== undefined && v >= 0) assign[c.id] = 0;
+      else if (!manualExcluded.has(c.id)) assign[c.id] = 0;
+    }
   }
 
-  // Drop volumes that ended up with no chapters (e.g. a whole group was
-  // excluded) and reindex so downstream assign values stay valid.
+  // Drop volumes that ended up with no chapters and reindex so downstream
+  // assign values stay valid.
   const keep: number[] = [];
   parts.forEach((_, i) => {
     if (Object.values(assign).some((p) => p === i)) keep.push(i);

@@ -261,14 +261,12 @@ export default function Split() {
     return m;
   }, [parts, chapters, assign]);
 
-  // Build one volume per TOC group at the chosen depth; assign every chapter
-  // under that group to it. Chapters the user already set to "不包含" are kept
-  // out of the auto-split so manual exclusions survive.
+  // Build one volume per TOC group at the chosen depth; only chapters nested
+  // under a group are auto-assigned. Standalone top-level chapters (序章/后记
+  // 等) stay unassigned for manual placement, and the user's own manual
+  // placements / exclusions are preserved across re-runs.
   function applyHierarchySplit(level: number) {
-    const excluded = new Set(
-      chapters.filter((c) => (assign[c.id] ?? -1) < 0).map((c) => c.id),
-    );
-    const { parts: ps, assign: a } = splitByHierarchy(toc, chapters, level, excluded);
+    const { parts: ps, assign: a } = splitByHierarchy(toc, chapters, level, assign);
     setParts(ps.map((p) => ({ title: p.title, author: book?.author ?? '', coverHref: '' })));
     setAssign(a);
   }
