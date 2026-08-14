@@ -262,10 +262,13 @@ export default function Split() {
   }, [parts, chapters, assign]);
 
   // Build one volume per TOC group at the chosen depth; assign every chapter
-  // under that group to it. Replaces the old "average split" which ignored the
-  // book's natural structure.
+  // under that group to it. Chapters the user already set to "不包含" are kept
+  // out of the auto-split so manual exclusions survive.
   function applyHierarchySplit(level: number) {
-    const { parts: ps, assign: a } = splitByHierarchy(toc, chapters, level);
+    const excluded = new Set(
+      chapters.filter((c) => (assign[c.id] ?? -1) < 0).map((c) => c.id),
+    );
+    const { parts: ps, assign: a } = splitByHierarchy(toc, chapters, level, excluded);
     setParts(ps.map((p) => ({ title: p.title, author: book?.author ?? '', coverHref: '' })));
     setAssign(a);
   }

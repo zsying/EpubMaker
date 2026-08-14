@@ -36,18 +36,19 @@ export function buildTocItems(toc: TocEntry[], chapters: Chapter[]): TocRenderIt
   let gid = 0;
   const walk = (es: TocEntry[], depth: number, groups: GroupMeta[]) => {
     for (const e of es) {
-      if (e.href) {
-        const ch = byHref.get(docKey(e.href));
-        if (ch) {
-          found.push({ chapter: ch, depth, groups });
-          if (e.children?.length) walk(e.children, depth + 1, groups);
-          continue;
-        }
+      const ch = e.href ? byHref.get(docKey(e.href)) : undefined;
+      if (e.children?.length) {
+        // This entry is a parent section: it becomes a group header for its
+        // descendants even when it also links to its own chapter (common in real
+        // EPUBs where a volume/part entry carries both an href and child entries).
+        // Skipping the header here previously dropped every ancestor caret.
+        const g: GroupMeta = { key: `g${gid++}`, title: e.title || ch?.title || '(未命名分组)' };
+        if (ch) found.push({ chapter: ch, depth: depth + 1, groups: [...groups, g] });
+        walk(e.children, depth + 1, [...groups, g]);
+      } else if (ch) {
+        found.push({ chapter: ch, depth, groups });
       }
-      // Pure structural group (no matching chapter): becomes a header and its
-      // children are walked with it prepended to the ancestor path.
-      const g: GroupMeta = { key: `g${gid++}`, title: e.title || '(未命名分组)' };
-      if (e.children?.length) walk(e.children, depth + 1, [...groups, g]);
+      // else: an entry with no href and no children is ignored.
     }
   };
   walk(toc, 0, []);
@@ -107,9 +108,16 @@ export interface HierarchySplit {
 
 // Build a volume split directly from the hierarchical TOC. Each TOC group at the
 // requested depth (`level`, 1 = top-level) becomes its own volume; every chapter
-// under that group is assigned to it. Chapters not covered by the chosen level
-// (e.g. a deep book with only 2 real levels) fall back to a single volume.
-export function splitByHierarchy(toc: TocEntry[], chapters: Chapter[], level: number): HierarchySplit {
+// under that group is assigned to it. `excluded` holds chapter ids the user has
+// already marked "不包含" — those stay out of the auto-split. Chapters not
+// covered by the chosen level (e.g. a deep book with only 2 real levels) fall
+// back to a single volume.
+export function splitByHierarchy(
+  toc: TocEntry[],
+  chapters: Chapter[],
+  level: number,
+  excluded: Set<string> = new Set(),
+): HierarchySplit {
   const byHref = new Map<string, Chapter>();
   for (const c of chapters) byHref.set(docKey(c.href), c);
 
@@ -119,7 +127,7 @@ export function splitByHierarchy(toc: TocEntry[], chapters: Chapter[], level: nu
   const assignSubtree = (e: TocEntry, p: number) => {
     if (e.href) {
       const ch = byHref.get(docKey(e.href));
-      if (ch) assign[ch.id] = p;
+      if (ch && !excluded.has(ch.id)) assign[ch.id] = p;
     }
     for (const c of e.children ?? []) assignSubtree(c, p);
   };
@@ -140,7 +148,24 @@ export function splitByHierarchy(toc: TocEntry[], chapters: Chapter[], level: nu
 
   if (parts.length === 0) {
     parts.push({ title: '分卷 1' });
-    for (const c of chapters) assign[c.id] = 0;
+    for (const c of chapters) if (!excluded.has(c.id)) assign[c.id] = 0;
+  }
+
+  // Drop volumes that ended up with no chapters (e.g. a whole group was
+  // excluded) and reindex so downstream assign values stay valid.
+  const keep: number[] = [];
+  parts.forEach((_, i) => {
+    if (Object.values(assign).some((p) => p === i)) keep.push(i);
+  });
+  if (keep.length < parts.length) {
+    const remap = new Map<number, number>();
+    keep.forEach((oldP, newP) => remap.set(oldP, newP));
+    const next: Record<string, number> = {};
+    for (const [cid, p] of Object.entries(assign)) {
+      const np = remap.get(p);
+      if (np !== undefined) next[cid] = np;
+    }
+    return { parts: keep.map((p) => parts[p]), assign: next };
   }
   return { parts, assign };
 }
