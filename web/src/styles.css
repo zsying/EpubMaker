@@ -932,11 +932,11 @@ a {
 
 /* Light page-turn overlay: only the turning sheet is drawn — the RIGHT page
    for next, the LEFT page for prev in two-page mode (the single page in single
-   mode). The motion (rotation + fade) is driven per-frame from JS via the
-   [flip] effect; this CSS only sizes/layers the sheet. It pivots on its
-   binding edge (left for next, right for prev) so the free corner lifts from
-   the bottom and sweeps across, then fades out; the new content is swapped in
-   at the middle of the turn. */
+   mode). The sheet is split into vertical .flip-strip elements that each curl
+   around their own edge (rotation grows toward the free corner), so it bends
+   like paper lifted by hand at the corner. The motion (per-strip rotation +
+   whole-sheet fade) is driven per-frame from JS via the [flip] effect; this
+   CSS only sizes/layers the sheet. The page index is swapped at the middle. */
 .reader-flip {
   position: absolute;
   left: 50%;
@@ -954,8 +954,22 @@ a {
   pointer-events: none;
   z-index: 2;
 }
-.flip-turner .page-sheet.turn {
-  box-shadow: 0 12px 30px rgba(0, 0, 0, 0.20), inset 0 0 0 1px rgba(0, 0, 0, 0.05);
+.flip-strip {
+  position: absolute;
+  top: 0;
+  transform-style: preserve-3d;
+  will-change: transform;
+  background:
+    linear-gradient(90deg, rgba(0, 0, 0, 0.05) 0%, rgba(0, 0, 0, 0) 14%, rgba(0, 0, 0, 0) 86%, rgba(0, 0, 0, 0.05) 100%),
+    linear-gradient(180deg, #fdfbf6 0%, #faf8f3 100%);
+}
+.flip-strip-clip {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
 }
 .flip-shade {
   position: absolute;

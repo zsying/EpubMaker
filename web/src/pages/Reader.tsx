@@ -294,14 +294,18 @@ export default function Reader() {
   // gone — a light, single-side turn shared by both layouts.
   type FlipState = { dir: 1 | -1; from: number; to: number };
   const [flip, setFlip] = useState<FlipState | null>(null);
-  const flipFromContentRef = useRef<HTMLDivElement>(null);
   // rAF-driven turn animation: progress is written straight to DOM styles via
-  // refs so animation frames never trigger React re-renders.
+  // refs so animation frames never trigger React re-renders. The turning page
+  // is split into FLIP_STRIPS vertical strips; each curls around its own edge
+  // with more rotation toward the free corner, so the sheet bends like paper
+  // grabbed at the corner — not a rigid door swing around the spine.
   const turnerRef = useRef<HTMLDivElement>(null);
+  const flipStripRefs = useRef<HTMLDivElement[]>([]);
   const flipShadeRef = useRef<HTMLDivElement>(null);
   const flipStartRef = useRef(0);
   const flipSwappedRef = useRef(false);
-  const FLIP_MS = 400;
+  const FLIP_MS = 420;
+  const FLIP_STRIPS = 5;
 
   // book-page geometry (proportions like a real paperback)
   const [stageWidth, setStageWidth] = useState(0);
@@ -471,13 +475,15 @@ export default function Reader() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [safeHtml, annotationsForChapter, mode]);
 
-  /* ---- populate the turning sheet's content (only while a flip is in flight) ---- */
+  /* ---- populate the turning sheet's strips (only while a flip is in flight) ---- */
   useEffect(() => {
     if (!flip) return;
-    const el = flipFromContentRef.current;
-    if (!el) return;
-    el.innerHTML = safeHtml;
-    applyHighlights(el, annotationsForChapter);
+    for (const strip of flipStripRefs.current) {
+      const el = strip?.querySelector<HTMLElement>('.reader-content');
+      if (!el) continue;
+      el.innerHTML = safeHtml;
+      applyHighlights(el, annotationsForChapter);
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [flip, safeHtml, annotationsForChapter]);
 
@@ -854,25 +860,38 @@ export default function Reader() {
 
   // Drive the turn with requestAnimationFrame (robust — no dependence on a CSS
   // animation starting). Progress t runs 0..1 over FLIP_MS. The visible motion
-  // is only the FIRST HALF: the sheet rotates from flat to edge-on (78deg
-  // around its binding edge — LEFT edge for next so the free right corner lifts
-  // and sweeps left; RIGHT edge for prev so the free left corner lifts and
-  // sweeps right) while fading to fully transparent. Exactly at the midpoint
-  // the page index is swapped, so the refreshed page is what remains. The
-  // second half is static (sheet already invisible), then the overlay unmounts.
+  // is only the FIRST HALF: the sheet is split into FLIP_STRIPS vertical strips
+  // that each rotate around their own edge — rotation grows toward the free
+  // corner (bottom-right for next, bottom-left for prev), bending the paper
+  // like a hand lifting the corner, while the whole sheet fades to transparent.
+  // Exactly at the midpoint the page index is swapped, so the refreshed page is
+  // what remains. The second half is static (sheet already invisible), then the
+  // overlay unmounts.
   useEffect(() => {
     if (!flip) return;
     flipStartRef.current = performance.now();
     flipSwappedRef.current = false;
+    const strips = flipStripRefs.current;
+    const n = Math.max(2, strips.length || FLIP_STRIPS);
     let raf = 0;
     const tick = (now: number) => {
       const t = Math.min(1, (now - flipStartRef.current) / FLIP_MS);
       const mid = Math.min(1, t / 0.5);
       const turner = turnerRef.current;
       if (turner) {
-        const angle = (flip.dir === 1 ? 78 : -78) * mid;
+        // Whole sheet: fade out over the first half and tilt up from the bottom
+        // so the free corner (where the "hand" holds) rises first.
         turner.style.opacity = String(Math.max(0, 1 - mid));
-        turner.style.transform = `rotateY(${angle}deg) rotateX(${10 * mid}deg) translateY(${-12 * mid}px)`;
+        turner.style.transform = `rotateX(${12 * mid}deg) translateY(${-10 * mid}px)`;
+      }
+      // Per-strip curl: each strip pivots on its own edge; the strip at the free
+      // corner rotates the most, the spine-side strip stays flat — a paper bend.
+      const angleBase = flip.dir === 1 ? 70 : -70;
+      for (let i = 0; i < n; i++) {
+        const strip = strips[i];
+        if (!strip) continue;
+        const f = flip.dir === 1 ? i / (n - 1) : (n - 1 - i) / (n - 1);
+        strip.style.transform = `rotateY(${angleBase * f * mid}deg)`;
       }
       const shade = flipShadeRef.current;
       if (shade) shade.style.opacity = String(0.32 * mid);
@@ -1265,10 +1284,11 @@ export default function Reader() {
 
   // Light page turn shared by single-page and two-page layouts. Only the
   // turning page is drawn — the RIGHT page for next, the LEFT page for prev in
-  // two-page mode (the single page in single mode). The sheet pivots on its
-  // BINDING edge (left for next, right for prev) so the free corner lifts from
-  // the bottom and sweeps across; opacity + rotation are driven per-frame by
-  // the [flip] effect, and the page index swaps at the midpoint of the turn.
+  // two-page mode (the single page in single mode). The sheet is split into
+  // FLIP_STRIPS vertical strips; each curls around its own edge with more
+  // rotation toward the free corner, so it bends like paper lifted by hand at
+  // the corner. Rotation + fade are driven per-frame by the [flip] effect, and
+  // the page index swaps at the midpoint of the turn.
   const renderFlipTurner = () => {
     if (!flip) return null;
     const stepPx = sheetWidth + pageGap;
@@ -1279,23 +1299,53 @@ export default function Reader() {
     const animPage = twoPage ? (flip.dir === 1 ? flip.from + 1 : flip.from) : flip.from;
     const left = twoPage ? (flip.dir === 1 ? sheetWidth + pageGap : 0) : 0;
     const corner = twoPage ? (flip.dir === 1 ? 'right' : 'left') : 'right';
+    const stripW = sheetWidth / FLIP_STRIPS;
+    // The strip at the free corner carries the page number.
+    const freeStrip = flip.dir === 1 ? FLIP_STRIPS - 1 : 0;
     return (
       <div
         ref={turnerRef}
         className="flip-turner"
-        style={{
-          left,
-          width: sheetWidth,
-          height: sheetHeight,
-          // Binding edge: next pivots on the LEFT (free right corner lifts and
-          // sweeps left); prev pivots on the RIGHT (free left corner lifts and
-          // sweeps right). Same for single and two-page.
-          transformOrigin: flip.dir === 1 ? '0% 50%' : '100% 50%',
-        }}
+        style={{ left, width: sheetWidth, height: sheetHeight }}
       >
-        <div className="page-sheet turn" style={{ left: 0, width: sheetWidth, height: sheetHeight }}>
-          <span className={`page-num ${corner}`}>{animPage + 1} / {pageCount}</span>
-        </div>
+        {Array.from({ length: FLIP_STRIPS }).map((_, i) => (
+          <div
+            key={i}
+            ref={(el) => {
+              if (el) flipStripRefs.current[i] = el;
+            }}
+            className="flip-strip"
+            style={{
+              left: i * stripW,
+              width: stripW,
+              height: sheetHeight,
+              // Each strip pivots on its own edge: next curls toward the free
+              // right edge (origin on the strip's left), prev toward the free
+              // left edge (origin on the strip's right).
+              transformOrigin: flip.dir === 1 ? '0% 50%' : '100% 50%',
+            }}
+          >
+            <div className="flip-strip-clip" style={{ width: stripW, height: sheetHeight }}>
+              <div
+                className="reader-columns"
+                style={{
+                  left: marginPx - i * stripW,
+                  top: marginPx,
+                  width: pageCount > 0 ? pageCount * contentWidth + (pageCount - 1) * columnGap : 0,
+                  height: Math.max(0, contentHeight),
+                  transform: `translate3d(-${animPage * stepPx}px, 0, 0)`,
+                  columnWidth: contentWidth,
+                  columnGap,
+                }}
+              >
+                <div className="reader-content" style={{ fontSize }} />
+              </div>
+            </div>
+            {i === freeStrip && (
+              <span className={`page-num ${corner}`}>{animPage + 1} / {pageCount}</span>
+            )}
+          </div>
+        ))}
         <div
           className="flip-shade"
           ref={flipShadeRef}
@@ -1306,22 +1356,6 @@ export default function Reader() {
                 : 'linear-gradient(90deg, rgba(0,0,0,0) 0%, rgba(0,0,0,0.34) 100%)',
           }}
         />
-        <div className="reader-clip" style={{ width: sheetWidth, height: sheetHeight, overflow: 'hidden' }}>
-          <div
-            className="reader-columns"
-            style={{
-              left: marginPx,
-              top: marginPx,
-              width: pageCount > 0 ? pageCount * contentWidth + (pageCount - 1) * columnGap : 0,
-              height: Math.max(0, contentHeight),
-              transform: `translate3d(-${animPage * stepPx}px, 0, 0)`,
-              columnWidth: contentWidth,
-              columnGap,
-            }}
-          >
-            <div className="reader-content" ref={flipFromContentRef} style={{ fontSize }} />
-          </div>
-        </div>
       </div>
     );
   };
