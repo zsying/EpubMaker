@@ -844,9 +844,10 @@ export default function Reader() {
     setFlip({ dir, from: pageIndex, to });
     setFlipAngle(0);
     // Kick the CSS transition on the next frame so it animates from 0.
-    requestAnimationFrame(() =>
-      requestAnimationFrame(() => setFlipAngle(dir === -1 ? 180 : -180)),
-    );
+    // Both directions rotate to -180: the spine (transform-origin) differs, so
+    // the page either rolls inward (next page, spine on the right) or lifts
+    // outward to the right (prev page, spine on the left) — i.e. opposite feels.
+    requestAnimationFrame(() => requestAnimationFrame(() => setFlipAngle(-180)));
     window.setTimeout(() => {
       setPageIndex(to);
       setFlip(null);
@@ -1238,6 +1239,13 @@ export default function Reader() {
         style={{
           transform: rotating ? `rotateY(${flipAngle}deg)` : 'none',
           transformOrigin: `${originX}px 50%`,
+          ...(rotating
+            ? {
+                boxShadow: `0 10px 28px rgba(0,0,0,0.18), inset ${
+                  flip.dir === 1 ? '-' : ''
+                }36px 0 52px -30px rgba(255,255,255,0.6)`,
+              }
+            : {}),
         }}
       >
         {pagesPerView === 2 ? (
@@ -1276,7 +1284,16 @@ export default function Reader() {
           </div>
         </div>
         {rotating && (
-          <div className="flip-shade" style={{ opacity: Math.min(0.55, Math.abs(flipAngle) / 360) }} />
+          <div
+            className="flip-shade"
+            style={{
+              opacity: Math.min(0.55, Math.abs(flipAngle) / 360),
+              background:
+                flip.dir === 1
+                  ? 'linear-gradient(90deg, rgba(0,0,0,0) 0%, rgba(0,0,0,0.42) 100%)'
+                  : 'linear-gradient(270deg, rgba(0,0,0,0) 0%, rgba(0,0,0,0.42) 100%)',
+            }}
+          />
         )}
       </div>
     );
