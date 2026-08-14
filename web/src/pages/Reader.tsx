@@ -617,7 +617,7 @@ export default function Reader() {
     if (!col) return;
 
     const MARGIN = 34;
-    const GAP = 32;
+    const GAP = 14;
     const OUTER_PAD_X = 44;
     const OUTER_PAD_Y = 22;
     const MIN_PAGE_W = 260;
@@ -1342,8 +1342,14 @@ export default function Reader() {
     if (!flip) return null;
     const stepPx = sheetWidth + pageGap;
     const twoPage = pagesPerView === 2;
-    const turnerLeft = twoPage ? (flip.dir === -1 ? 0 : sheetWidth) : 0;
-    const originX = twoPage ? sheetWidth : flip.dir === 1 ? sheetWidth : 0;
+    // The turning sheet must exactly overlay the static page it replaces, and
+    // pivot on the SPINE CENTER (sheetWidth + pageGap/2), not the page's bound
+    // edge. Pivoting on the bound edge (sheetWidth) leaves the pageGap-wide
+    // gutter unaccounted for, so the sheet lands pageGap away from the
+    // destination and the flip jitters. Centering the pivot makes the sheet
+    // sweep through the gutter and land exactly on the destination page.
+    const turnerLeft = twoPage ? (flip.dir === -1 ? 0 : sheetWidth + pageGap) : 0;
+    const originX = twoPage ? sheetWidth + pageGap / 2 : flip.dir === 1 ? sheetWidth : 0;
     const frontPage = twoPage
       ? flip.dir === 1
         ? flip.from + 1
@@ -1407,7 +1413,7 @@ export default function Reader() {
     if (!flip || pagesPerView !== 2) return null;
     const stepPx = sheetWidth + pageGap;
     const oldPage = flip.dir === 1 ? flip.from : flip.from + 1;
-    const left = flip.dir === 1 ? 0 : sheetWidth;
+    const left = flip.dir === 1 ? 0 : sheetWidth + pageGap;
     return (
       <div className="flip-old" style={{ left, width: sheetWidth, height: sheetHeight }}>
         <div className="page-sheet right" style={{ left: 0, width: sheetWidth, height: sheetHeight }}>
