@@ -1350,11 +1350,11 @@ export default function Reader() {
     // destination and the flip jitters. Centering the pivot makes the sheet
     // sweep through the gutter and land exactly on the destination page.
     const turnerLeft = twoPage ? (flip.dir === -1 ? 0 : sheetWidth + pageGap) : 0;
-    // Single page mirrors the two-page turn: next pivots on the LEFT edge (the
-    // spine of a right-hand page, free edge lifts and sweeps left); prev pivots
-    // on the RIGHT edge (free edge lifts and sweeps right). Two pages pivot on
-    // the center spine.
-    const originX = twoPage ? sheetWidth + pageGap / 2 : flip.dir === 1 ? 0 : sheetWidth;
+    // Single page turns around the RIGHT edge (the binding), matching the
+    // two-page sweep directions: next (-180) sweeps the page right-to-left
+    // (free/left edge lifts and crosses left), prev (+180) sweeps left-to-right.
+    // Two pages pivot on the center spine instead.
+    const originX = twoPage ? sheetWidth + pageGap / 2 : sheetWidth;
     const frontPage = twoPage
       ? flip.dir === 1
         ? flip.from + 1
