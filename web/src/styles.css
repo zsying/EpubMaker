@@ -930,8 +930,11 @@ a {
   box-shadow: 3px 12px 24px rgba(0, 0, 0, 0.22);
 }
 
-/* 3D page-flip overlay: a static destination page sits beneath while the
-   current page rotates around the spine to reveal it. Zero horizontal slide. */
+/* Light page-turn overlay: only the turning sheet is drawn — the RIGHT page
+   for next, the LEFT page for prev in two-page mode (the single page in single
+   mode). It lifts from its bottom corner and fades out; the new content is
+   swapped in at the middle of the turn, so there is no full 3D rotation and
+   single/two-page share one identical motion. */
 .reader-flip {
   position: absolute;
   left: 50%;
@@ -941,50 +944,39 @@ a {
   z-index: 6;
   pointer-events: none;
 }
-.reader-flip-face {
-  position: absolute;
-  inset: 0;
-  transform-style: preserve-3d;
-  backface-visibility: hidden;
-}
-.reader-flip-face.turning {
-  transition: transform 0.45s ease-in-out;
-  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.18);
-}
-.flip-shade {
-  position: absolute;
-  inset: 0;
-  pointer-events: none;
-  background: linear-gradient(90deg, rgba(0, 0, 0, 0) 0%, rgba(0, 0, 0, 0.38) 100%);
-}
-
-/* Real book-page turn: one sheet (front = current, back = landing page)
-   rotates around the spine. The far page is covered by .flip-old until the
-   turning sheet crosses the spine, so only one side animates at a time. */
 .flip-turner {
   position: absolute;
-  inset: 0;
+  top: 0;
   transform-style: preserve-3d;
-  transition: transform 0.45s ease-in-out;
+  animation-timing-function: ease-in;
+  animation-fill-mode: forwards;
+  will-change: transform, opacity;
   pointer-events: none;
   z-index: 2;
 }
-.flip-face {
-  position: absolute;
-  top: 0;
-  backface-visibility: hidden;
-  -webkit-backface-visibility: hidden;
-  transform-style: preserve-3d;
+.flip-turner .page-sheet.turn {
+  box-shadow: 0 12px 30px rgba(0, 0, 0, 0.20), inset 0 0 0 1px rgba(0, 0, 0, 0.05);
 }
-.flip-front {
-  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.18),
-    inset 0 0 0 1px rgba(0, 0, 0, 0.04);
+/* next: lift from the bottom-right corner and sweep left; prev: from the
+   bottom-left corner and sweep right. Opacity reaches 0 well before the end so
+   the sheet is already gone when the page index swaps at the turn's middle. */
+.flip-turner.flip-next {
+  transform-origin: 100% 100%;
+  animation-name: flip-next;
 }
-.flip-old {
-  position: absolute;
-  top: 0;
-  z-index: 1;
-  pointer-events: none;
+.flip-turner.flip-prev {
+  transform-origin: 0% 100%;
+  animation-name: flip-prev;
+}
+@keyframes flip-next {
+  0%   { opacity: 1; transform: rotateY(0deg) rotateX(0deg) translateY(0); }
+  55%  { opacity: 0; transform: rotateY(-26deg) rotateX(8deg) translateY(-14px); }
+  100% { opacity: 0; transform: rotateY(-26deg) rotateX(8deg) translateY(-14px); }
+}
+@keyframes flip-prev {
+  0%   { opacity: 1; transform: rotateY(0deg) rotateX(0deg) translateY(0); }
+  55%  { opacity: 0; transform: rotateY(26deg) rotateX(8deg) translateY(-14px); }
+  100% { opacity: 0; transform: rotateY(26deg) rotateX(8deg) translateY(-14px); }
 }
 
 .reader-columns {
