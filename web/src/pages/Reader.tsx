@@ -1178,6 +1178,11 @@ export default function Reader() {
   const viewWidth = pagesPerView * sheetWidth + (pagesPerView - 1) * pageGap;
   const columnGap = sheetWidth + pageGap - contentWidth;
   const geometryReady = sheetWidth > 0 && contentWidth > 0;
+  // Covered page-edge thickness: how much of the "next/previous pages" stack
+  // peeks out beyond the current sheet, and how much tucks under it.
+  const bookEdgeW = 30;
+  const bookEdgeTuck = 8;
+  const bookEdgeVisible = bookEdgeW - bookEdgeTuck;
   // Only render the sheets actually on screen (1 or 2) so no third-page edge leaks.
   const visibleSheets = geometryReady ? Math.min(pagesPerView, Math.max(0, pageCount - pageIndex)) : 0;
 
@@ -1225,6 +1230,21 @@ export default function Reader() {
             height: Math.max(0, sheetHeight),
           }}
         >
+          {/* Covered page edges: the rest of the book peeking out from behind the
+              current sheet(s), so it reads like an open book. Shown only when there
+              are actually pages on that side. */}
+          {geometryReady && pageIndex > 0 && (
+            <div
+              className="book-edge left"
+              style={{ left: -bookEdgeVisible, width: bookEdgeW, height: sheetHeight }}
+            />
+          )}
+          {geometryReady && pageIndex + pagesPerView < pageCount && (
+            <div
+              className="book-edge right"
+              style={{ left: viewWidth - bookEdgeTuck, width: bookEdgeW, height: sheetHeight }}
+            />
+          )}
           {geometryReady &&
             Array.from({ length: visibleSheets }).map((_, j) => {
               const i = pageIndex + j;

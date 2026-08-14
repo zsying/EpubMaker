@@ -897,6 +897,39 @@ a {
   );
 }
 
+/* Covered page edges: the rest of the book peeking from behind the current
+   sheet(s), simulating an open book. Vertical striations mimic stacked paper;
+   the gradient goes dark (outer) -> paper (inner, tucked under the page). The
+   inner ~8px sits behind the page sheet, so it reads as "covered". */
+.book-edge {
+  position: absolute;
+  top: 0;
+  z-index: 0;
+  pointer-events: none;
+}
+.book-edge.left {
+  background:
+    repeating-linear-gradient(90deg,
+      rgba(40, 30, 15, 0.10) 0px,
+      rgba(40, 30, 15, 0.10) 1px,
+      rgba(255, 255, 255, 0.30) 1px,
+      rgba(255, 255, 255, 0.30) 2.5px),
+    linear-gradient(90deg, #b3aa99 0%, #d8d0c0 55%, #fbf9f3 100%);
+  border-radius: 7px 2px 2px 7px;
+  box-shadow: -3px 12px 24px rgba(0, 0, 0, 0.22);
+}
+.book-edge.right {
+  background:
+    repeating-linear-gradient(90deg,
+      rgba(40, 30, 15, 0.10) 0px,
+      rgba(40, 30, 15, 0.10) 1px,
+      rgba(255, 255, 255, 0.30) 1px,
+      rgba(255, 255, 255, 0.30) 2.5px),
+    linear-gradient(270deg, #b3aa99 0%, #d8d0c0 55%, #fbf9f3 100%);
+  border-radius: 2px 7px 7px 2px;
+  box-shadow: 3px 12px 24px rgba(0, 0, 0, 0.22);
+}
+
 .reader-columns {
   position: absolute;
   column-fill: auto;
