@@ -2,6 +2,7 @@ package library
 
 import (
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -122,8 +123,14 @@ func ImportEpub(filePath, originalName string) (*BookDTO, error) {
 		if e != nil {
 			return e
 		}
+		tocJSON := "[]"
+		if len(parsed.TOCList) > 0 {
+			if b, e := json.Marshal(parsed.TOCList); e == nil {
+				tocJSON = string(b)
+			}
+		}
 		if e := insertBookStmt(d, bookID, title, parsed.Metadata.Author, parsed.Metadata.Language,
-			parsed.Metadata.Publisher, parsed.Metadata.Description, parsed.Metadata.Identifier, cover, originalName, ts); e != nil {
+			parsed.Metadata.Publisher, parsed.Metadata.Description, parsed.Metadata.Identifier, cover, originalName, ts, tocJSON); e != nil {
 			return e
 		}
 		chStmt, e := d.Prepare(`INSERT INTO chapters (id,book_id,idx,title,href,created_at,updated_at) VALUES (?,?,?,?,?,?,?)`)
@@ -162,11 +169,11 @@ func ImportEpub(filePath, originalName string) (*BookDTO, error) {
 	return GetBook(bookID)
 }
 
-func insertBookStmt(d *sql.DB, id, title, author, language, publisher, description, identifier string, cover sql.NullString, sourceName, ts string) error {
+func insertBookStmt(d *sql.DB, id, title, author, language, publisher, description, identifier string, cover sql.NullString, sourceName, ts, tocJSON string) error {
 	_, err := d.Exec(
-		`INSERT INTO books (id,title,author,language,publisher,description,identifier,cover_href,source_name,created_at,updated_at)
-		 VALUES (?,?,?,?,?,?,?,?,?,?,?)`,
-		id, title, author, language, publisher, description, identifier, cover, sourceName, ts, ts)
+		`INSERT INTO books (id,title,author,language,publisher,description,identifier,cover_href,source_name,created_at,updated_at,toc)
+		 VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`,
+		id, title, author, language, publisher, description, identifier, cover, sourceName, ts, ts, tocJSON)
 	return err
 }
 
@@ -369,6 +376,12 @@ func SplitBook(bookID string, parts []SplitPart, deleteSource bool) ([]*BookDTO,
 		byID[c.ID] = c
 	}
 
+	// Source hierarchical TOC (may be empty for pre-hierarchy imports).
+	var srcTOC []epub.TOCEntry
+	if strings.TrimSpace(row.TOC) != "" {
+		_ = json.Unmarshal([]byte(row.TOC), &srcTOC)
+	}
+
 	created := []string{}
 	for _, part := range parts {
 		picked := []ChapterDTO{}
@@ -421,13 +434,25 @@ func SplitBook(bookID string, parts []SplitPart, deleteSource bool) ([]*BookDTO,
 		if author == "" {
 			author = row.Author
 		}
+		// Carry only the TOC nodes that belong to this part's picked chapters.
+		pickedSet := map[string]bool{}
+		for _, c := range picked {
+			pickedSet[html.NormalizeHref(c.Href)] = true
+		}
+		partTOC := filterTOCTree(srcTOC, pickedSet)
+		partTOCJSON := "[]"
+		if len(partTOC) > 0 {
+			if b, e := json.Marshal(partTOC); e == nil {
+				partTOCJSON = string(b)
+			}
+		}
 		if err := db.Tx(func() error {
 			d, e := db.Open()
 			if e != nil {
 				return e
 			}
 			if e := insertBookStmt(d, newID, title, author, row.Language, row.Publisher,
-				row.Description, "", cov, row.SourceName.String, ts); e != nil {
+				row.Description, "", cov, row.SourceName.String, ts, partTOCJSON); e != nil {
 				return e
 			}
 			chStmt, e := d.Prepare(`INSERT INTO chapters (id,book_id,idx,title,href,created_at,updated_at) VALUES (?,?,?,?,?,?,?)`)
@@ -476,6 +501,40 @@ func chapterHrefsOf(chs []ChapterDTO) []string {
 	out := make([]string, 0, len(chs))
 	for _, c := range chs {
 		out = append(out, c.Href)
+	}
+	return out
+}
+
+// stripFragment returns the document part of a TOC href (drops any #anchor),
+// so a child-section entry can be matched against a chapter's document href.
+func stripFragment(href string) string {
+	if i := strings.IndexByte(href, '#'); i >= 0 {
+		return href[:i]
+	}
+	return href
+}
+
+// filterTOCTree keeps TOC nodes whose document (href without fragment) is in
+// picked, plus structural group nodes (no href) that still contain a kept
+// child. A kept document keeps its full sub-anchor subtree, since those anchors
+// live in the same document. Nodes whose document is not picked — including
+// their sub-anchors — are dropped.
+func filterTOCTree(entries []epub.TOCEntry, picked map[string]bool) []epub.TOCEntry {
+	out := make([]epub.TOCEntry, 0, len(entries))
+	for _, e := range entries {
+		if e.Href == "" {
+			kids := filterTOCTree(e.Children, picked)
+			if len(kids) > 0 {
+				ne := e
+				ne.Children = kids
+				out = append(out, ne)
+			}
+			continue
+		}
+		if !picked[stripFragment(e.Href)] {
+			continue
+		}
+		out = append(out, e)
 	}
 	return out
 }

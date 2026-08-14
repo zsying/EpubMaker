@@ -9,6 +9,7 @@ import (
 	"crypto/rand"
 	"database/sql"
 	"encoding/base64"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -18,6 +19,7 @@ import (
 	"time"
 
 	"epubmaker-desktop/internal/db"
+	"epubmaker-desktop/internal/epub"
 	"epubmaker-desktop/internal/html"
 	"epubmaker-desktop/internal/mime"
 	"epubmaker-desktop/internal/storage"
@@ -64,6 +66,9 @@ type BookRow struct {
 	DeletedAt   sql.NullString
 	CreatedAt   string
 	UpdatedAt   string
+	// TOC is the hierarchical table-of-contents tree serialized as JSON.
+	// Empty for books imported before hierarchical TOC support.
+	TOC string
 }
 
 type ChapterRow struct {
@@ -175,7 +180,7 @@ func scanBook(s scanner) (BookRow, error) {
 	var b BookRow
 	err := s.Scan(&b.ID, &b.Title, &b.Author, &b.Language, &b.Publisher,
 		&b.Description, &b.Identifier, &b.CoverHref, &b.SourceName,
-		&b.CreatedAt, &b.UpdatedAt, &b.DeletedAt)
+		&b.CreatedAt, &b.UpdatedAt, &b.DeletedAt, &b.TOC)
 	return b, err
 }
 
@@ -334,6 +339,27 @@ func GetBook(id string) (*BookDTO, error) {
 	}
 	dto := toBookDTO(*row, n)
 	return &dto, nil
+}
+
+// GetBookTOC returns the hierarchical table-of-contents tree for a book.
+// Books imported before hierarchical TOC support (empty toc) yield an empty
+// slice, never nil, so the frontend can always iterate safely.
+func GetBookTOC(bookID string) ([]epub.TOCEntry, error) {
+	row, err := GetBookRow(bookID)
+	if err != nil {
+		return nil, err
+	}
+	if row == nil {
+		return nil, nil
+	}
+	if strings.TrimSpace(row.TOC) == "" {
+		return []epub.TOCEntry{}, nil
+	}
+	var toc []epub.TOCEntry
+	if err := json.Unmarshal([]byte(row.TOC), &toc); err != nil {
+		return []epub.TOCEntry{}, nil
+	}
+	return toc, nil
 }
 
 func ListChapters(bookID string) ([]ChapterDTO, error) {

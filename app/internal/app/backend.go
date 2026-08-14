@@ -17,6 +17,7 @@ import (
 	"strings"
 
 	"epubmaker-desktop/internal/config"
+	"epubmaker-desktop/internal/epub"
 	"epubmaker-desktop/internal/library"
 	"epubmaker-desktop/internal/webdav"
 )
@@ -105,6 +106,12 @@ func (b *Backend) ImportPaths(paths []string) (map[string]any, error) {
 
 func (b *Backend) ListChapters(bookID string) ([]library.ChapterDTO, error) {
 	return library.ListChapters(bookID)
+}
+
+// BookTOC returns the hierarchical table-of-contents tree for a book. Older
+// books (imported before hierarchy support) return an empty slice.
+func (b *Backend) BookTOC(bookID string) ([]epub.TOCEntry, error) {
+	return library.GetBookTOC(bookID)
 }
 
 func (b *Backend) CreateChapter(bookID string, opts library.ChapterCreateOpts) (*library.ChapterDTO, error) {

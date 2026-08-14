@@ -126,6 +126,8 @@ func migrate(d *sql.DB) error {
 	_, _ = d.Exec(`ALTER TABLE annotations ADD COLUMN page_index INTEGER NOT NULL DEFAULT 0`)
 	// Migration: older DBs may lack the layout-independent progress anchor.
 	_, _ = d.Exec(`ALTER TABLE reading_progress ADD COLUMN position_offset INTEGER NOT NULL DEFAULT 0`)
+	// Migration: older DBs may lack the hierarchical TOC column.
+	_, _ = d.Exec(`ALTER TABLE books ADD COLUMN toc TEXT`)
 	return nil
 }
 

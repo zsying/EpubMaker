@@ -36,6 +36,13 @@ export interface Chapter {
   updatedAt: string;
 }
 
+/** A node in the (possibly hierarchical) table of contents. */
+export interface TocEntry {
+  href: string;
+  title: string;
+  children?: TocEntry[];
+}
+
 export interface ImageAsset {
   href: string;
   size: number;
@@ -187,6 +194,9 @@ export const api = {
     call<{ purged: boolean; dataKept: boolean }>('PurgeBook', id),
 
   listChapters: (bookId: string) => call<Chapter[]>('ListChapters', bookId),
+
+  /** Hierarchical table of contents. Empty for books imported before hierarchy support. */
+  bookTOC: (bookId: string) => call<TocEntry[]>('BookTOC', bookId),
 
   renderChapter: (bookId: string, cid: string) =>
     call<{ title: string; html: string }>('RenderChapter', bookId, cid),
