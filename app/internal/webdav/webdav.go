@@ -99,20 +99,31 @@ func asBool(v any) bool {
 }
 
 func resolveURL(baseURL, relPath string) string {
-	u, err := url.Parse(baseURL)
-	if err != nil {
-		return baseURL
-	}
-	basePath := u.Path
-	if !strings.HasSuffix(basePath, "/") {
-		basePath += "/"
-	}
 	rel := relPath
 	if strings.HasPrefix(rel, "/") {
 		rel = rel[1:]
 	}
-	u.Path = basePath + rel
-	return u.String()
+	base, err := url.Parse(baseURL)
+	if err != nil {
+		return baseURL
+	}
+	basePath := base.Path
+	if !strings.HasSuffix(basePath, "/") {
+		basePath += "/"
+	}
+	// Join the base path and the (already percent-encoded or raw UTF-8) rel as
+	// a string, then re-parse so that any already-encoded segment survives in
+	// RawPath while raw multibyte bytes get escaped by String(). Setting
+	// u.Path directly would double-encode existing %XX sequences (e.g. a server
+	// href "/dav/%E4%BD%99.epub" would become "/dav/%25E4%25BD%2599.epub" and 404).
+	joined, err := url.Parse(basePath + rel)
+	if err != nil {
+		return baseURL
+	}
+	joined.Scheme = base.Scheme
+	joined.Host = base.Host
+	joined.User = base.User
+	return joined.String()
 }
 
 func relativize(href, baseURL string) string {
