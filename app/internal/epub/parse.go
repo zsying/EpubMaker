@@ -435,8 +435,15 @@ func parseZip(zr *zip.Reader) (*ParsedEpub, error) {
 				}
 			}
 		}
-		navTree := parseNavTree(navRoot, navItem.Href)
-		ncxTree := parseNcxTree(ncxRoot, ncxItem.Href)
+		navHref, ncxHref := "", ""
+		if navItem != nil {
+			navHref = navItem.Href
+		}
+		if ncxItem != nil {
+			ncxHref = ncxItem.Href
+		}
+		navTree := parseNavTree(navRoot, navHref)
+		ncxTree := parseNcxTree(ncxRoot, ncxHref)
 		tocList := navTree
 		if len(tocList) == 0 {
 			tocList = ncxTree
