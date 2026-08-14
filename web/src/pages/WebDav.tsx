@@ -35,6 +35,7 @@ export default function WebDav() {
   const [error, setError] = useState<string | null>(null);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [importing, setImporting] = useState(false);
+  const [importResult, setImportResult] = useState<{ ok: number; errors: string[] } | null>(null);
 
   // 恢复上次保存的连接信息（仅填充表单，不自动连接）
   useEffect(() => {
@@ -61,9 +62,10 @@ export default function WebDav() {
       setError(null);
       setSelected(new Set());
       try {
-        const list = await api.webdavList(conn, p);
-        setEntries(list);
-        setPath(p);
+      const list = await api.webdavList(conn, p);
+      setEntries(list);
+      setPath(p);
+      setImportResult(null);
       } catch (e) {
         setError(e instanceof Error ? e.message : String(e));
         setEntries([]);
@@ -104,6 +106,7 @@ export default function WebDav() {
     setPath('');
     setSelected(new Set());
     setError(null);
+    setImportResult(null);
   }
 
   function openDir(e: WebDavEntry) {
@@ -129,8 +132,12 @@ export default function WebDav() {
     setImporting(true);
     try {
       const res = await api.webdavImport(conn, items);
-      toast(`成功导入 ${res.books.length} 本书籍`, 'success');
-      if (res.errors?.length) toast(res.errors.join('\n'), 'error', 6000);
+      const ok = res.books?.length ?? 0;
+      const errors = res.errors ?? [];
+      setImportResult({ ok, errors });
+      setSelected(new Set());
+      toast(`成功导入 ${ok} 本书籍`, 'success');
+      if (errors.length) toast(errors.join('\n'), 'error', 6000);
     } catch (e) {
       toastError(e);
     } finally {
@@ -265,6 +272,30 @@ export default function WebDav() {
       )}
 
       {error && <div className="wd-error">{error}</div>}
+
+      {importResult && (
+        <div className={`wd-result${importResult.errors.length ? ' has-fail' : ' ok'}`}>
+          <span className="wd-result-msg">
+            已成功导入 <b>{importResult.ok}</b> 本
+            {importResult.errors.length > 0 && (
+              <>
+                ，<b className="wd-fail-count">{importResult.errors.length}</b> 个失败
+              </>
+            )}
+          </span>
+          <span style={{ flex: 1 }} />
+          <button className="btn sm ghost" onClick={() => setImportResult(null)}>
+            关闭
+          </button>
+          {importResult.errors.length > 0 && (
+            <ul className="wd-result-list">
+              {importResult.errors.map((er, i) => (
+                <li key={i}>{er}</li>
+              ))}
+            </ul>
+          )}
+        </div>
+      )}
 
       {loading ? (
         <div className="loading">加载中…</div>

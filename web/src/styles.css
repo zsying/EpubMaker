@@ -1705,6 +1705,42 @@ a {
   font-size: 13px;
 }
 
+.wd-result {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 14px;
+  padding: 11px 14px;
+  border-radius: 9px;
+  background: #e8f6ee;
+  border: 1px solid #bfe3c8;
+  color: #1a7a4d;
+  font-size: 13px;
+}
+.wd-result.has-fail {
+  background: #fff7e6;
+  border-color: #f3d99b;
+  color: #8a6d1f;
+  align-items: flex-start;
+}
+.wd-result-msg b {
+  font-weight: 600;
+}
+.wd-result .wd-fail-count {
+  color: var(--danger);
+}
+.wd-result-list {
+  flex-basis: 100%;
+  margin: 4px 0 0;
+  padding-left: 18px;
+  font-size: 12px;
+  line-height: 1.7;
+  color: var(--danger);
+  max-height: 180px;
+  overflow: auto;
+}
+
 .wd-crumb {
   display: flex;
   align-items: center;
