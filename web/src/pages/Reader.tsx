@@ -844,12 +844,13 @@ export default function Reader() {
     setFlip({ dir, from: pageIndex, to });
     setFlipAngle(0);
     // Kick the CSS transition on the next frame so it animates from 0.
-    // Two-page prev must rotate to +180 (not -180): the turning left page
-    // pivots on the center spine so its outer (left) edge lifts toward the
-    // viewer and sweeps up-and-right across the spine — a "turn the page from
-    // left to right, lifting upward" motion. -180 would sink that edge into the
-    // screen, reading as a downward flip. Next (and single-page) use -180.
-    const target = pagesPerView === 2 && dir === -1 ? 180 : -180;
+    // Prev turns rotate to +180, next turns to -180 — mirroring a real book:
+    //  - next: the free (outer) edge lifts toward the viewer and sweeps across
+    //    the spine to the far side (two-page: right page around the center
+    //    spine; single page: pivot on the left edge, page flips off to the left).
+    //  - prev: the free edge lifts and sweeps back the other way (two-page: left
+    //    page around the center spine; single page: pivot on the right edge).
+    const target = dir === -1 ? 180 : -180;
     requestAnimationFrame(() => requestAnimationFrame(() => setFlipAngle(target)));
     window.setTimeout(() => {
       setPageIndex(to);
@@ -1349,7 +1350,11 @@ export default function Reader() {
     // destination and the flip jitters. Centering the pivot makes the sheet
     // sweep through the gutter and land exactly on the destination page.
     const turnerLeft = twoPage ? (flip.dir === -1 ? 0 : sheetWidth + pageGap) : 0;
-    const originX = twoPage ? sheetWidth + pageGap / 2 : flip.dir === 1 ? sheetWidth : 0;
+    // Single page mirrors the two-page turn: next pivots on the LEFT edge (the
+    // spine of a right-hand page, free edge lifts and sweeps left); prev pivots
+    // on the RIGHT edge (free edge lifts and sweeps right). Two pages pivot on
+    // the center spine.
+    const originX = twoPage ? sheetWidth + pageGap / 2 : flip.dir === 1 ? 0 : sheetWidth;
     const frontPage = twoPage
       ? flip.dir === 1
         ? flip.from + 1
