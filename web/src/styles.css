@@ -547,6 +547,31 @@ a {
   cursor: default;
 }
 
+/* Hierarchical group/section header in the Editor (整理) and Split (拆分)
+   chapter lists. Reuses .toc-caret for the collapse toggle. */
+.hier-group {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 8px;
+  font-size: 12px;
+  font-weight: 650;
+  color: var(--text);
+  cursor: pointer;
+  user-select: none;
+}
+
+.hier-group:hover {
+  background: #f4f6fa;
+}
+
+.hier-group .g-title {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .reader-main {
   overflow-y: auto;
   background: var(--bg);

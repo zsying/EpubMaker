@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import DOMPurify from 'dompurify';
-import { api, Book, Chapter, ImageAsset } from '../api';
+import { api, Book, Chapter, ImageAsset, TocEntry } from '../api';
+import { buildTocItems, visibleTocItems } from '../tocLayout';
 import { toast, toastError } from '../toast';
 
 const COLORS = ['#2f6bff', '#e2725b', '#1a9c62', '#a05ce0', '#d9a12b', '#0e9ba8', '#d94f8a', '#6b7a90'];
@@ -198,6 +199,17 @@ export default function Split() {
   const [book, setBook] = useState<Book | null>(null);
   const [chapters, setChapters] = useState<Chapter[]>([]);
   const [images, setImages] = useState<ImageAsset[]>([]);
+  const [toc, setToc] = useState<TocEntry[]>([]);
+  // Collapsed hierarchical-group keys in the chapter list.
+  const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
+  const tocItems = useMemo(() => buildTocItems(toc, chapters), [toc, chapters]);
+  const toggleGroup = (key: string) =>
+    setCollapsed((prev) => {
+      const n = new Set(prev);
+      if (n.has(key)) n.delete(key);
+      else n.add(key);
+      return n;
+    });
   const [loading, setLoading] = useState(true);
   const [parts, setParts] = useState<Part[]>([]);
   /** chapterId -> partIndex（-1 表示不包含） */
@@ -211,14 +223,16 @@ export default function Split() {
   useEffect(() => {
     (async () => {
       try {
-        const [b, cs, imgs] = await Promise.all([
+        const [b, cs, imgs, tocTree] = await Promise.all([
           api.getBook(id),
           api.listChapters(id),
-          api.images(id)
+          api.images(id),
+          api.bookTOC(id),
         ]);
         setBook(b);
         setChapters(cs);
         setImages(imgs);
+        setToc(tocTree);
         setParts([
           { title: `${b.title} 上`, author: b.author, coverHref: '' },
           { title: `${b.title} 下`, author: b.author, coverHref: '' }
@@ -342,69 +356,96 @@ export default function Split() {
       <div className="split-grid">
         {/* 左栏：章节列表，独立滚动 */}
         <div className="pane split-left" style={{ padding: 8 }}>
-          {chapters.map((c, i) => {
-            const p = assign[c.id] ?? -1;
-            return (
-              <div className="split-row" key={c.id}>
-                <span className="idx muted" style={{ width: 30, textAlign: 'right', fontSize: 11.5 }}>
-                  {i + 1}
-                </span>
+          {visibleTocItems(tocItems, collapsed).map((it) =>
+            it.kind === 'group' ? (
+              <div
+                key={it.key}
+                className="hier-group"
+                style={{ paddingLeft: 10 + it.level * 16 }}
+                onClick={() => toggleGroup(it.key)}
+              >
                 <button
                   type="button"
-                  className="swatch swatch-btn"
-                  title={p >= 0 ? '点击设为「不包含」' : '当前未包含，点下拉框选择分卷'}
-                  style={{ background: p >= 0 ? COLORS[p % COLORS.length] : '#dfe3ea' }}
-                  onClick={() => setPart(c.id, -1)}
-                />
-                <span className="name" title={c.title}>
-                  {c.title}
+                  className="toc-caret"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    toggleGroup(it.key);
+                  }}
+                  aria-label={collapsed.has(it.key) ? '展开' : '折叠'}
+                >
+                  {collapsed.has(it.key) ? '▸' : '▾'}
+                </button>
+                <span className="g-title" title={it.title}>
+                  {it.title}
                 </span>
-                <button
-                  className="icon-btn preview-btn"
-                  title="预览本章"
-                  onClick={() => setPreview(c)}
-                >
-                  <svg
-                    viewBox="0 0 24 24"
-                    width="15"
-                    height="15"
-                    fill="none"
-                    stroke="currentColor"
-                    strokeWidth="2"
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                  >
-                    <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" />
-                    <circle cx="12" cy="12" r="3" />
-                  </svg>
-                </button>
-                <select
-                  className="select"
-                  style={{ width: 130 }}
-                  value={p}
-                  onChange={(e) => setPart(c.id, Number(e.target.value))}
-                >
-                  <option value={-1}>不包含</option>
-                  {parts.map((pt, k) => (
-                    <option key={k} value={k}>
-                      {pt.title || `分卷 ${k + 1}`}
-                    </option>
-                  ))}
-                </select>
-                <button
-                  className="btn sm ghost"
-                  title={
-                    p >= 0
-                      ? '从这一章起，后面全部归入当前分卷'
-                      : '从这一章起，后面全部设为「不包含」'
-                  }
-                  onClick={() => assignFrom(c.id, p)}
-                >
-                  往下同卷
-                </button>
               </div>
-            );
-          })}
+            ) : (
+              (() => {
+                const c = it.chapter;
+                const p = assign[c.id] ?? -1;
+                return (
+                  <div className="split-row" key={c.id} style={{ paddingLeft: 10 + it.level * 16 }}>
+                    <span className="idx muted" style={{ width: 30, textAlign: 'right', fontSize: 11.5 }}>
+                      {c.index + 1}
+                    </span>
+                    <button
+                      type="button"
+                      className="swatch swatch-btn"
+                      title={p >= 0 ? '点击设为「不包含」' : '当前未包含，点下拉框选择分卷'}
+                      style={{ background: p >= 0 ? COLORS[p % COLORS.length] : '#dfe3ea' }}
+                      onClick={() => setPart(c.id, -1)}
+                    />
+                    <span className="name" title={c.title}>
+                      {c.title}
+                    </span>
+                    <button
+                      className="icon-btn preview-btn"
+                      title="预览本章"
+                      onClick={() => setPreview(c)}
+                    >
+                      <svg
+                        viewBox="0 0 24 24"
+                        width="15"
+                        height="15"
+                        fill="none"
+                        stroke="currentColor"
+                        strokeWidth="2"
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                      >
+                        <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" />
+                        <circle cx="12" cy="12" r="3" />
+                      </svg>
+                    </button>
+                    <select
+                      className="select"
+                      style={{ width: 130 }}
+                      value={p}
+                      onChange={(e) => setPart(c.id, Number(e.target.value))}
+                    >
+                      <option value={-1}>不包含</option>
+                      {parts.map((pt, k) => (
+                        <option key={k} value={k}>
+                          {pt.title || `分卷 ${k + 1}`}
+                        </option>
+                      ))}
+                    </select>
+                    <button
+                      className="btn sm ghost"
+                      title={
+                        p >= 0
+                          ? '从这一章起，后面全部归入当前分卷'
+                          : '从这一章起，后面全部设为「不包含」'
+                      }
+                      onClick={() => assignFrom(c.id, p)}
+                    >
+                      往下同卷
+                    </button>
+                  </div>
+                );
+              })()
+            ),
+          )}
         </div>
 
         {/* 右栏：分卷设置，独立滚动 */}

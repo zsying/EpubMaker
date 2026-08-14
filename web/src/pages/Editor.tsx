@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import DOMPurify from 'dompurify';
-import { api, Book, Chapter, ImageAsset, downloadDataUrl } from '../api';
+import { api, Book, Chapter, ImageAsset, TocEntry, downloadDataUrl } from '../api';
+import { buildTocItems, visibleTocItems } from '../tocLayout';
 import { toast, toastError } from '../toast';
 
 type Tab = 'book' | 'chapter';
@@ -12,6 +13,17 @@ export default function Editor() {
 
   const [book, setBook] = useState<Book | null>(null);
   const [chapters, setChapters] = useState<Chapter[]>([]);
+  const [toc, setToc] = useState<TocEntry[]>([]);
+  // Collapsed hierarchical-group keys in the chapter list.
+  const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
+  const tocItems = useMemo(() => buildTocItems(toc, chapters), [toc, chapters]);
+  const toggleGroup = (key: string) =>
+    setCollapsed((prev) => {
+      const n = new Set(prev);
+      if (n.has(key)) n.delete(key);
+      else n.add(key);
+      return n;
+    });
   const [images, setImages] = useState<ImageAsset[]>([]);
   const [loading, setLoading] = useState(true);
   const [tab, setTab] = useState<Tab>('book');
@@ -40,10 +52,16 @@ export default function Editor() {
 
   const reload = useCallback(async () => {
     try {
-      const [b, cs, imgs] = await Promise.all([api.getBook(id), api.listChapters(id), api.images(id)]);
+      const [b, cs, imgs, tocTree] = await Promise.all([
+        api.getBook(id),
+        api.listChapters(id),
+        api.images(id),
+        api.bookTOC(id),
+      ]);
       setBook(b);
       setChapters(cs);
       setImages(imgs);
+      setToc(tocTree);
       setForm({
         title: b.title,
         author: b.author,
@@ -271,46 +289,71 @@ export default function Editor() {
           )}
 
           <div className="list-scroll">
-            {chapters.map((c, i) => (
-              <div
-                key={c.id}
-                className={`chapter-row${c.id === currentId ? ' active' : ''}`}
-                draggable
-                onDragStart={() => (dragId.current = c.id)}
-                onDragOver={(e) => e.preventDefault()}
-                onDrop={() => void dropOn(c.id)}
-                onClick={() => void openChapter(c.id)}
-              >
-                <input
-                  type="checkbox"
-                  checked={selected.has(c.id)}
-                  onClick={(e) => e.stopPropagation()}
-                  onChange={(e) => {
-                    const s = new Set(selected);
-                    e.target.checked ? s.add(c.id) : s.delete(c.id);
-                    setSelected(s);
-                  }}
-                />
-                <span className="idx">{i + 1}</span>
-                <span className="name" title={c.title}>
-                  {c.title}
-                </span>
-                <span className="ops" onClick={(e) => e.stopPropagation()}>
-                  <button className="icon-btn" title="上移" onClick={() => void move(c.id, -1)}>
-                    ↑
+            {visibleTocItems(tocItems, collapsed).map((it) =>
+              it.kind === 'group' ? (
+                <div
+                  key={it.key}
+                  className="hier-group"
+                  style={{ paddingLeft: 8 + it.level * 16 }}
+                  onClick={() => toggleGroup(it.key)}
+                >
+                  <button
+                    type="button"
+                    className="toc-caret"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      toggleGroup(it.key);
+                    }}
+                    aria-label={collapsed.has(it.key) ? '展开' : '折叠'}
+                  >
+                    {collapsed.has(it.key) ? '▸' : '▾'}
                   </button>
-                  <button className="icon-btn" title="下移" onClick={() => void move(c.id, 1)}>
-                    ↓
-                  </button>
-                  <button className="icon-btn" title="重命名" onClick={() => void renameChapter(c)}>
-                    ✎
-                  </button>
-                  <button className="icon-btn danger" title="移除" onClick={() => void removeChapter(c)}>
-                    ✕
-                  </button>
-                </span>
-              </div>
-            ))}
+                  <span className="g-title" title={it.title}>
+                    {it.title}
+                  </span>
+                </div>
+              ) : (
+                <div
+                  key={it.chapter.id}
+                  className={`chapter-row${it.chapter.id === currentId ? ' active' : ''}`}
+                  style={{ paddingLeft: 8 + it.level * 16 }}
+                  draggable
+                  onDragStart={() => (dragId.current = it.chapter.id)}
+                  onDragOver={(e) => e.preventDefault()}
+                  onDrop={() => void dropOn(it.chapter.id)}
+                  onClick={() => void openChapter(it.chapter.id)}
+                >
+                  <input
+                    type="checkbox"
+                    checked={selected.has(it.chapter.id)}
+                    onClick={(e) => e.stopPropagation()}
+                    onChange={(e) => {
+                      const s = new Set(selected);
+                      e.target.checked ? s.add(it.chapter.id) : s.delete(it.chapter.id);
+                      setSelected(s);
+                    }}
+                  />
+                  <span className="idx">{it.chapter.index + 1}</span>
+                  <span className="name" title={it.chapter.title}>
+                    {it.chapter.title}
+                  </span>
+                  <span className="ops" onClick={(e) => e.stopPropagation()}>
+                    <button className="icon-btn" title="上移" onClick={() => void move(it.chapter.id, -1)}>
+                      ↑
+                    </button>
+                    <button className="icon-btn" title="下移" onClick={() => void move(it.chapter.id, 1)}>
+                      ↓
+                    </button>
+                    <button className="icon-btn" title="重命名" onClick={() => void renameChapter(it.chapter)}>
+                      ✎
+                    </button>
+                    <button className="icon-btn danger" title="移除" onClick={() => void removeChapter(it.chapter)}>
+                      ✕
+                    </button>
+                  </span>
+                </div>
+              ),
+            )}
             {!chapters.length && <div className="empty">还没有章节</div>}
           </div>
           <div className="muted" style={{ fontSize: 11.5, marginTop: 10 }}>
