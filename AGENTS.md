@@ -25,6 +25,32 @@
 
 ## 常用命令
 
+**首选入口是仓库根的 `run.ps1`**（PowerShell 7 / Windows PowerShell 5.1 均可，
+无参数即打印帮助）：
+
+```powershell
+.\run.ps1            # = help，默认动作
+.\run.ps1 help       # 同上；也认 -h / --help / ?
+.\run.ps1 clean      # 清 web/dist、app/frontend/dist、app/build/bin
+.\run.ps1 build      # 生产 exe（wails build，前端由其自行构建并嵌入）
+.\run.ps1 nsis       # 生产 exe + NSIS 安装包（需本机装 NSIS）
+.\run.ps1 dev        # 桌面开发：vite watcher + 编译 Go + 窗口热更新
+.\run.ps1 web        # 仅前端 vite（7800）；**无 Go 后端、window.go 不存在**
+.\run.ps1 install    # 安装工作区依赖
+.\run.ps1 test       # 前端 typecheck + go vet + go test
+```
+
+短参数：`-c / -b / -d / -w / -t / -i`；`-Verbose` 打开子进程输出。
+未知模式会报错并打印帮助，退出码 1。
+
+> `run.ps1` 的 `build` / `dev` 会把 `GOTOOLCHAIN` 钉到 `app/go.mod` 的 `go` 版本
+> （当前 go1.26.4）。原因：wails v2.11 内置的 `golang.org/x/tools` 读不了 Go 1.27
+> 的导出数据，会报 `internal error: package "fmt" without types`，而 `go build ./...`
+> 是通过的 —— 看着像代码问题，其实是工具链版本错配。已存在的 `GOTOOLCHAIN` 不覆盖。
+> 等 wails 更新后可以删掉 `Set-WailsToolchain`。
+
+底层等价命令（排查时用）：
+
 ```bash
 cd app
 go build ./...                 # 编译桌面后端（含 embed 前端）
@@ -33,7 +59,7 @@ go test ./...                 # 全部单测
 wails dev                     # 桌面开发：后台起 vite watcher + 编译 Go + 窗口热更新
 wails build                   # 生产 exe（先构建前端）
 wails build -nsis             # Windows NSIS 安装包（含 .epub 文件关联，需本机装 NSIS）
-# 仓库根（推荐入口）：
+# 仓库根：
 npm run dev:app               # = cd app && wails dev
 npm run build:app             # 生产构建
 npm run build:app:nsis        # 打安装包
@@ -80,6 +106,12 @@ npm run dev:web               # 仅前端 vite（7800）；**无 Go 后端、win
 8. **没有 HTTP、没有端口**：前端↔Go 只走 Wails 进程内绑定 `window.go.app.Backend.*`（dev 与生产一致）。
    二进制响应（封面/书内图片/渲染章节/导出 EPUB）一律内联 base64 data URL/string；文件选择走原生对话框
    拿路径、`os.ReadFile` 直读，无 multipart、**无资源 HTTP 服务**。禁止再引入 `/api` 路由或 TCP 端口。
+9. **分页阅读器翻页不要动画**：章内翻页是瞬时 `setPageIndex`（整章 HTML 常驻 DOM，
+   翻页只是一次 `translate3d`），**禁止**再加 3D 翻页 / 卷曲 / 高光 / 投影遮罩。
+   章节切换保留 130ms 淡入淡出（`fxOut`），那是为了盖住新章节 HTML 的异步加载空窗。
+   历史教训：曾有过 8 个 commit 的 3D 翻页（`.flip-turner` 双面各塞一份完整章节 HTML
+   + `mix-blend-mode` 高光），在 WebView2 里严重卡顿且没有实体书手感，已整体删除。
+   如果将来重做动画，**不要**在翻页时复制整章 HTML —— 一次翻页只应有一个活动图层。
 
 ## 开发规则与约定
 

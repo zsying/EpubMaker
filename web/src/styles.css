@@ -814,8 +814,8 @@ a {
 .reader-spread {
   position: relative;
   will-change: opacity;
-  /* Page turns are a cross-dissolve, never a horizontal slide: the columns
-     jump instantly (while faded out), so there is zero lateral motion. */
+  /* The 0.13s fade covers chapter loads only (see startTurn); a
+     within-chapter page turn swaps the column strip instantly. */
   transition: opacity 0.13s ease;
   flex: none;
 }
@@ -886,8 +886,7 @@ a {
 .book-fold {
   position: absolute;
   top: 0;
-  /* Lifted above the flip overlay so the spine line never disappears while a
-     page turns (the turning sheet sweeps past it). */
+  /* Above the page sheets so the spine line stays visible. */
   z-index: 7;
   pointer-events: none;
   background: linear-gradient(90deg,
@@ -907,9 +906,7 @@ a {
 .book-edge {
   position: absolute;
   top: 0;
-  /* Lifted above the flip overlay (.reader-flip is z-index 6) so the covered
-     page edges stay visible while the turning sheet sweeps past — no flicker
-     of the edge appearing/disappearing during a page turn. */
+  /* Above the page sheets so the covered edges stay visible. */
   z-index: 7;
   pointer-events: none;
 }
@@ -934,213 +931,6 @@ a {
     linear-gradient(270deg, #b3aa99 0%, #d8d0c0 55%, #fbf9f3 100%);
   border-radius: 2px 7px 7px 2px;
   box-shadow: 3px 12px 24px rgba(0, 0, 0, 0.22);
-}
-
-/* 3D page-turn overlay: only the turning sheet is drawn — the RIGHT page for
-   next, the LEFT page for prev in two-page mode (the single page in single
-   mode). The sheet is a real plane with a FRONT (page lifting away) and a BACK
-   (incoming page) so a "real" turn shows the new content with no mid-turn blank.
-   The parent (.reader-flip) owns the perspective; the sheet rotates via JS. */
-.reader-flip {
-  position: absolute;
-  left: 50%;
-  top: 50%;
-  transform: translate(-50%, -50%);
-  perspective: 2200px;
-  perspective-origin: 50% 50%;
-  z-index: 6;
-  pointer-events: none;
-}
-.flip-turner {
-  position: absolute;
-  top: 0;
-  transform-style: preserve-3d;
-  backface-visibility: hidden;
-  will-change: transform, opacity;
-  pointer-events: none;
-}
-.flip-face {
-  position: absolute;
-  inset: 0;
-  border-radius: 4px;
-  overflow: hidden;
-  backface-visibility: hidden;
-  background:
-    linear-gradient(90deg, rgba(0, 0, 0, 0.05) 0%, rgba(0, 0, 0, 0) 14%, rgba(0, 0, 0, 0) 86%, rgba(0, 0, 0, 0.05) 100%),
-    linear-gradient(180deg, #fdfbf6 0%, #faf8f3 100%);
-  box-shadow:
-    0 18px 40px rgba(0, 0, 0, 0.5),
-    inset 0 0 0 1px rgba(0, 0, 0, 0.04);
-}
-.flip-face.back {
-  transform: rotateY(180deg);
-  background: linear-gradient(180deg, #efe7d6 0%, #e7dcc6 60%);
-}
-.flip-clip {
-  position: absolute;
-  inset: 0;
-  overflow: hidden;
-}
-/* Curl sheen (highlight) + shadow sweep across the sheet for paper realism. */
-.flip-sheen {
-  position: absolute;
-  inset: 0;
-  pointer-events: none;
-  opacity: 0;
-  border-radius: 4px;
-  background: linear-gradient(115deg, rgba(255, 255, 255, 0) 40%, rgba(255, 255, 255, 0.55) 52%, rgba(255, 255, 255, 0) 60%);
-  mix-blend-mode: screen;
-}
-.flip-curl {
-  position: absolute;
-  inset: 0;
-  pointer-events: none;
-  opacity: 0;
-  border-radius: 4px;
-  background: linear-gradient(115deg, rgba(0, 0, 0, 0) 46%, rgba(0, 0, 0, 0.28) 56%, rgba(0, 0, 0, 0) 66%);
-}
-
-/* Shadow the turning sheet casts onto the page it lifts off of (underneath). */
-.flip-cast {
-  position: absolute;
-  top: 0;
-  z-index: 5;
-  pointer-events: none;
-  opacity: 0;
-  border-radius: 4px;
-}
-
-/* flip-animation settings popover (inside the reader chrome) */
-.flip-settings {
-  position: absolute;
-  z-index: 35;
-  left: 50%;
-  bottom: 64px;
-  transform: translateX(-50%);
-  width: 340px;
-  max-width: 92%;
-  background: rgba(18, 20, 26, 0.96);
-  color: #e8eaed;
-  border: 1px solid rgba(255, 255, 255, 0.1);
-  border-radius: 12px;
-  padding: 14px 16px;
-  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.35);
-  backdrop-filter: blur(8px);
-}
-.flip-settings .fs-head {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  font-size: 13px;
-  font-weight: 600;
-  margin-bottom: 12px;
-}
-.flip-settings .fs-head .btn {
-  margin-left: auto;
-}
-.flip-settings .fs-row {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  margin-bottom: 12px;
-}
-.flip-settings .fs-row:last-child {
-  margin-bottom: 0;
-}
-.flip-settings .fs-row > label {
-  flex: 0 0 36px;
-  font-size: 12px;
-  color: #aab1bd;
-}
-.flip-settings .fs-val {
-  flex: 0 0 auto;
-  min-width: 52px;
-  text-align: right;
-  font-size: 12px;
-  color: #c8a96a;
-  font-variant-numeric: tabular-nums;
-}
-.flip-settings .switch {
-  position: relative;
-  display: inline-block;
-  width: 40px;
-  height: 22px;
-  flex: 0 0 auto;
-}
-.flip-settings .switch input {
-  position: absolute;
-  opacity: 0;
-  width: 100%;
-  height: 100%;
-  margin: 0;
-  cursor: pointer;
-}
-.flip-settings .switch .slider {
-  position: absolute;
-  inset: 0;
-  background: #3a3f4b;
-  border-radius: 999px;
-  transition: background 0.18s ease;
-}
-.flip-settings .switch .slider::before {
-  content: '';
-  position: absolute;
-  left: 3px;
-  top: 3px;
-  width: 16px;
-  height: 16px;
-  border-radius: 50%;
-  background: #e8eaed;
-  transition: transform 0.18s ease;
-}
-.flip-settings .switch input:checked + .slider {
-  background: #c8a96a;
-}
-.flip-settings .switch input:checked + .slider::before {
-  transform: translateX(18px);
-}
-.flip-settings.off .fs-row:not(:first-child) {
-  opacity: 0.4;
-  pointer-events: none;
-}
-.flip-settings input[type='range'] {
-  flex: 1;
-  accent-color: #c8a96a;
-  min-width: 0;
-}
-.flip-settings .seg {
-  display: inline-flex;
-  flex: 1;
-  background: rgba(255, 255, 255, 0.08);
-  border: 1px solid rgba(255, 255, 255, 0.16);
-  border-radius: 8px;
-  overflow: hidden;
-}
-.flip-settings .seg button {
-  flex: 1;
-  background: transparent;
-  color: #c8ccd4;
-  border: 0;
-  padding: 7px 10px;
-  font-size: 12px;
-  cursor: pointer;
-  font-family: inherit;
-}
-.flip-settings .seg button.on {
-  background: #c8a96a;
-  color: #1a1a1a;
-  font-weight: 600;
-}
-.flip-settings .btn {
-  background: rgba(255, 255, 255, 0.1);
-  color: #e8eaed;
-  border-color: rgba(255, 255, 255, 0.18);
-  height: 24px;
-  padding: 0 8px;
-  font-size: 12px;
-}
-.flip-settings .btn:hover {
-  background: rgba(255, 255, 255, 0.18);
 }
 
 .reader-columns {
