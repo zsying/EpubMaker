@@ -61,5 +61,5 @@ backend is Go — no Node service, no reverse proxy, no open ports.
 - `build`/`dev` pin `GOTOOLCHAIN` to the version in `app/go.mod`, working around
   wails v2.11 being unable to read Go 1.27 export data.
 
-[Unreleased]: https://github.com/zsying/epubmaker/compare/v0.1.0...HEAD
-[0.1.0]: https://github.com/zsying/epubmaker/releases/tag/v0.1.0
+[Unreleased]: https://github.com/zsying/EpubMaker/compare/v0.1.0...HEAD
+[0.1.0]: https://github.com/zsying/EpubMaker/releases/tag/v0.1.0
