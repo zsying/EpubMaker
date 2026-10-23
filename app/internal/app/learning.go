@@ -254,9 +254,44 @@ func (b *Backend) VocabAdd(term, surface, bookID, chapterID string, offset int, 
 	return v, nil
 }
 
-// ListVocab returns notebook entries, newest first.
-func (b *Backend) ListVocab(status, keyword string) ([]vocab.Entry, error) {
-	return vocab.List(vocab.ListOpts{Status: status, Keyword: keyword})
+// VocabItem is one notebook row as the notebook page renders it: the stored
+// word plus the dictionary gloss, so the list is readable without opening each
+// word.
+type VocabItem struct {
+	vocab.ListItem
+	Phonetic    string `json:"phonetic"`
+	Translation string `json:"translation"`
+}
+
+// ListVocab returns notebook entries, newest first, enriched with their
+// meaning. A missing dictionary is not an error — the notebook stays usable,
+// the rows just have no gloss.
+func (b *Backend) ListVocab(status, keyword string) ([]VocabItem, error) {
+	rows, err := vocab.List(vocab.ListOpts{Status: status, Keyword: keyword})
+	if err != nil {
+		return nil, err
+	}
+	d, dictErr := openDict()
+	out := make([]VocabItem, 0, len(rows))
+	for _, row := range rows {
+		item := VocabItem{ListItem: row}
+		if dictErr == nil {
+			if res, err := d.Lookup(row.Term); err == nil && res.Found && res.Entry != nil {
+				item.Phonetic = res.Entry.Phonetic
+				item.Translation = res.Entry.Translation
+				if item.Translation == "" {
+					item.Translation = res.Entry.Definition
+				}
+			}
+		}
+		out = append(out, item)
+	}
+	return out, nil
+}
+
+// VocabStats counts the notebook by status for the page header.
+func (b *Backend) VocabStats() (*vocab.Stats, error) {
+	return vocab.CountByStatus()
 }
 
 // SetVocabStatus moves a word between new / learning / known / ignored.

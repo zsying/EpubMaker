@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"epubmaker-desktop/internal/config"
 	"epubmaker-desktop/internal/db"
@@ -46,10 +47,38 @@ func resetPolicy(t *testing.T) {
 	if err != nil {
 		t.Fatalf("db.Open: %v", err)
 	}
-	for _, table := range []string{"vocab", "vocab_seen"} {
+	for _, table := range []string{"vocab", "vocab_seen", "annotations", "bookmarks", "reading_progress", "chapters", "books"} {
 		if _, err := d.Exec(`DELETE FROM ` + table); err != nil {
 			t.Fatalf("reset %s: %v", table, err)
 		}
+	}
+}
+
+// seedBook inserts a book (and one chapter) so a notebook entry can point at
+// real titles. Pass deleted=true to simulate a book that has been thrown away.
+func seedBook(t *testing.T, id, title, chapterID, chapterTitle string, deleted bool) {
+	t.Helper()
+	d, err := db.Open()
+	if err != nil {
+		t.Fatalf("db.Open: %v", err)
+	}
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	var deletedAt any
+	if deleted {
+		deletedAt = now
+	}
+	if _, err := d.Exec(
+		`INSERT INTO books (id, title, created_at, updated_at, deleted_at) VALUES (?, ?, ?, ?, ?)`,
+		id, title, now, now, deletedAt); err != nil {
+		t.Fatalf("seed book: %v", err)
+	}
+	if chapterID == "" {
+		return
+	}
+	if _, err := d.Exec(
+		`INSERT INTO chapters (id, book_id, idx, title, href, created_at, updated_at) VALUES (?, ?, 0, ?, 'c1.xhtml', ?, ?)`,
+		chapterID, id, chapterTitle, now, now); err != nil {
+		t.Fatalf("seed chapter: %v", err)
 	}
 }
 
@@ -230,5 +259,94 @@ func TestLookupWordWithoutDictionaryEntry(t *testing.T) {
 	}
 	if r.Found || r.Entry != nil || r.Recorded {
 		t.Fatalf("expected a clean miss, got %+v", r)
+	}
+}
+
+/* --------------------------- notebook page --------------------------- */
+
+// The notebook list has to be readable on its own: a word without a meaning is
+// just a string, so each row carries the dictionary gloss and where it was met.
+func TestVocabListCarriesMeaningAndOrigin(t *testing.T) {
+	resetPolicy(t)
+	seedBook(t, "tb-1", "Test Book", "tbc-1", "Chapter One", false)
+	b := &Backend{}
+	if _, err := b.VocabAdd("blorp", "blorp", "tb-1", "tbc-1", 120, "a blorp appeared"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := b.VocabAdd("the", "the", "tb-1", "tbc-1", 5, "the house"); err != nil {
+		t.Fatal(err)
+	}
+
+	list, err := b.ListVocab("", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(list) != 2 {
+		t.Fatalf("list = %+v, want 2 rows", list)
+	}
+	byTerm := map[string]VocabItem{}
+	for _, it := range list {
+		byTerm[it.Term] = it
+	}
+	blorp := byTerm["blorp"]
+	if blorp.Translation != "n. 虚构词" {
+		t.Errorf("blorp translation = %q", blorp.Translation)
+	}
+	if blorp.BookTitle != "Test Book" || blorp.ChapterTitle != "Chapter One" {
+		t.Errorf("blorp origin = %q / %q", blorp.BookTitle, blorp.ChapterTitle)
+	}
+	if blorp.Context != "a blorp appeared" || blorp.Offset != 120 {
+		t.Errorf("blorp context = %q @%d", blorp.Context, blorp.Offset)
+	}
+	if the := byTerm["the"]; the.Phonetic != "ðə" {
+		t.Errorf("the phonetic = %q, want ðə", the.Phonetic)
+	}
+}
+
+// Deleting a book must not delete the words learned from it. The entry stays;
+// only the trail back to the text is gone, so the title is empty rather than
+// the row disappearing.
+func TestVocabListKeepsWordsFromDeletedBooks(t *testing.T) {
+	resetPolicy(t)
+	seedBook(t, "tb-2", "Gone Book", "tbc-2", "Chapter Two", true)
+	b := &Backend{}
+	if _, err := b.VocabAdd("blimp", "blimp", "tb-2", "tbc-2", 40, "a blimp floated"); err != nil {
+		t.Fatal(err)
+	}
+	list, err := b.ListVocab("", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(list) != 1 {
+		t.Fatalf("word vanished with its book: %+v", list)
+	}
+	if list[0].Term != "blimp" {
+		t.Fatalf("term = %q", list[0].Term)
+	}
+	if list[0].BookTitle != "" {
+		t.Errorf("bookTitle = %q, want empty for a deleted book", list[0].BookTitle)
+	}
+}
+
+func TestVocabStatsCountsByStatus(t *testing.T) {
+	resetPolicy(t)
+	b := &Backend{}
+	v1, err := b.VocabAdd("blorp", "blorp", "", "", 0, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := b.VocabAdd("blimp", "blimp", "", "", 0, ""); err != nil {
+		t.Fatal(err)
+	}
+	if err := b.SetVocabStatus(v1.ID, "known"); err != nil {
+		t.Fatal(err)
+	}
+
+	st, err := b.VocabStats()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st.Total != 2 || st.New != 1 || st.Known != 1 {
+		t.Fatalf("stats = %+v, want total 2 / new 1 / known 1", st)
 	}
 }

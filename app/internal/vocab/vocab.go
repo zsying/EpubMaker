@@ -124,28 +124,45 @@ func Get(term string) (*Entry, error) {
 	return scan(d.QueryRow(`SELECT `+columns+` FROM vocab WHERE term = ?`, term))
 }
 
+// ListItem is a notebook entry enriched with the titles of where the word was
+// met, so the notebook page can show "why do I have this word" without a second
+// lookup per row. BookTitle is empty when that book has since been deleted: the
+// word is the user's asset and stays, but the trail back to the text may not.
+type ListItem struct {
+	Entry
+	BookTitle    string `json:"bookTitle"`
+	ChapterTitle string `json:"chapterTitle"`
+}
+
 // List returns notebook entries, newest first.
-func List(o ListOpts) ([]Entry, error) {
+func List(o ListOpts) ([]ListItem, error) {
 	d, err := db.Open()
 	if err != nil {
 		return nil, err
 	}
-	q := `SELECT ` + columns + ` FROM vocab`
+	// LEFT JOIN, and the book join carries the deleted filter instead of a WHERE
+	// clause — a WHERE would drop the word along with the book.
+	q := `SELECT v.id, v.term, v.surface, v.book_id, v.chapter_id, v.start_offset, v.context,
+	             v.status, v.lookups, v.created_at, v.updated_at,
+	             COALESCE(b.title, ''), COALESCE(c.title, '')
+	      FROM vocab v
+	      LEFT JOIN books b ON b.id = v.book_id AND b.deleted_at IS NULL
+	      LEFT JOIN chapters c ON c.id = v.chapter_id`
 	var where []string
 	var args []any
 	if o.Status != "" {
-		where = append(where, `status = ?`)
+		where = append(where, `v.status = ?`)
 		args = append(args, o.Status)
 	}
 	if kw := strings.TrimSpace(o.Keyword); kw != "" {
-		where = append(where, `(term LIKE ? OR context LIKE ?)`)
+		where = append(where, `(v.term LIKE ? OR v.context LIKE ?)`)
 		like := "%" + kw + "%"
 		args = append(args, like, like)
 	}
 	if len(where) > 0 {
 		q += ` WHERE ` + strings.Join(where, ` AND `)
 	}
-	q += ` ORDER BY updated_at DESC`
+	q += ` ORDER BY v.updated_at DESC`
 	if o.Limit > 0 {
 		q += ` LIMIT ?`
 		args = append(args, o.Limit)
@@ -156,15 +173,59 @@ func List(o ListOpts) ([]Entry, error) {
 		return nil, err
 	}
 	defer rows.Close()
-	out := []Entry{}
+	out := []ListItem{}
 	for rows.Next() {
-		e, err := scan(rows)
-		if err != nil {
+		var it ListItem
+		if err := rows.Scan(&it.ID, &it.Term, &it.Surface, &it.BookID, &it.ChapterID,
+			&it.Offset, &it.Context, &it.Status, &it.Lookups, &it.CreatedAt, &it.UpdatedAt,
+			&it.BookTitle, &it.ChapterTitle); err != nil {
 			return nil, err
 		}
-		out = append(out, *e)
+		out = append(out, it)
 	}
 	return out, rows.Err()
+}
+
+// Stats counts notebook entries by status, for the header of the notebook page.
+type Stats struct {
+	Total    int `json:"total"`
+	New      int `json:"new"`
+	Learning int `json:"learning"`
+	Known    int `json:"known"`
+	Ignored  int `json:"ignored"`
+}
+
+// CountByStatus aggregates the notebook in a single pass.
+func CountByStatus() (*Stats, error) {
+	d, err := db.Open()
+	if err != nil {
+		return nil, err
+	}
+	rows, err := d.Query(`SELECT status, COUNT(*) FROM vocab GROUP BY status`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	st := &Stats{}
+	for rows.Next() {
+		var status string
+		var n int
+		if err := rows.Scan(&status, &n); err != nil {
+			return nil, err
+		}
+		st.Total += n
+		switch status {
+		case StatusNew:
+			st.New = n
+		case StatusLearning:
+			st.Learning = n
+		case StatusKnown:
+			st.Known = n
+		case StatusIgnored:
+			st.Ignored = n
+		}
+	}
+	return st, rows.Err()
 }
 
 // UpdateStatus moves an entry between new / learning / known / ignored.
