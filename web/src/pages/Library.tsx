@@ -40,6 +40,12 @@ export default function Library() {
   // A phone has no native file dialog and cannot receive an OS file drop, so
   // the import controls have to point at something that works there.
   const desktop = hasNativeDialogs();
+  // Phone layout: the search field collapses behind a header icon, the import
+  // controls move into a floating button, and per-book actions live in a
+  // bottom sheet opened from the ⋯ on each card.
+  const [searchOpen, setSearchOpen] = useState(false);
+  const [importOpen, setImportOpen] = useState(false);
+  const [menuBook, setMenuBook] = useState<Book | null>(null);
 
   const load = useCallback(async (kw?: string) => {
     try {
@@ -226,11 +232,13 @@ export default function Library() {
         if (!canResolveDropPaths()) void pickAndImport();
       }}
     >
-      <div className="lib-head">
+      <div className={`lib-head${searchOpen ? ' search-open' : ''}`}>
         <h1>书架</h1>
         <span className="tag">{books.length} 本</span>
         <span style={{ flex: 1 }} />
-        <Link className="btn ghost" to="/trash">
+        {/* 回收站 lives under「我的」on the phone; the class only hides it in
+            the mobile media query, the desktop top bar keeps it here. */}
+        <Link className="btn ghost desk-only" to="/trash">
           回收站
         </Link>
         {desktop ? (
@@ -242,29 +250,29 @@ export default function Library() {
           >
             {dictBusy ? '导入词库…' : dict?.installed ? `词库 ${dict.entries} 条` : '导入词库'}
           </button>
-        ) : (
-          /* The phone cannot open the csv picker, so the same information is
-             shown without an action that would only fail. */
-          <span className="tag" title={dict?.installed ? '词库已安装' : '尚未安装词库，查词功能不可用'}>
-            {dict?.installed ? `词库 ${dict.entries} 条` : '无词库'}
-          </span>
-        )}
+        ) : null}
+        <button
+          className="btn ghost lib-search-toggle"
+          aria-label={searchOpen ? '收起搜索' : '搜索'}
+          onClick={() => setSearchOpen((v) => !v)}
+        >
+          <svg width="15" height="15" viewBox="0 0 15 15" aria-hidden="true">
+            <circle cx="6.4" cy="6.4" r="4.6" fill="none" stroke="currentColor" strokeWidth="1.5" />
+            <path d="M10 10 L13.4 13.4" stroke="currentColor" strokeWidth="1.5" />
+          </svg>
+        </button>
         <input
-          className="input"
+          className="input lib-search-input"
           style={{ width: 220 }}
           placeholder="搜索书名或作者…"
           value={keyword}
           onChange={(e) => setKeyword(e.target.value)}
         />
         {desktop ? (
-          <button className="btn primary" disabled={importing} onClick={() => void pickAndImport()}>
+          <button className="btn primary import-btn" disabled={importing} onClick={() => void pickAndImport()}>
             {importing ? '导入中…' : '导入 EPUB'}
           </button>
-        ) : (
-          <Link className="btn primary" to="/webdav">
-            从 WebDAV 导入
-          </Link>
-        )}
+        ) : null}
       </div>
 
       <div className="lib-scroll">
@@ -273,9 +281,7 @@ export default function Library() {
             {importing ? '正在解析 EPUB…' : '把 .epub 文件拖到这里，或点击选择文件（支持多选）'}
           </div>
         ) : (
-          <div className="dropzone hint">
-            手机版从 WebDAV 导入书籍：点右上角「WebDAV」，填入服务器地址后选书下载。
-          </div>
+          <div className="dropzone hint">手机版点右下角的 ＋ 按钮，从 WebDAV 导入书籍。</div>
         )}
 
         {loading ? (
@@ -319,6 +325,17 @@ export default function Library() {
                   <button className="btn sm danger" onClick={() => void remove(b)}>
                     删除
                   </button>
+                  <button
+                    className="btn sm book-more"
+                    aria-label={`${b.title} 的操作`}
+                    onClick={() => setMenuBook(b)}
+                  >
+                    <svg width="14" height="14" viewBox="0 0 14 14" aria-hidden="true">
+                      <circle cx="2.4" cy="7" r="1.3" fill="currentColor" />
+                      <circle cx="7" cy="7" r="1.3" fill="currentColor" />
+                      <circle cx="11.6" cy="7" r="1.3" fill="currentColor" />
+                    </svg>
+                  </button>
                 </div>
               </div>
             ))}
@@ -337,6 +354,92 @@ export default function Library() {
           </div>
         )}
       </div>
+
+      {/* Phone-only floating import button; CSS hides it outside the 640px
+          breakpoint, where the header buttons do this job. */}
+      <button className="fab" aria-label="导入书籍" onClick={() => setImportOpen(true)}>
+        <svg width="22" height="22" viewBox="0 0 22 22" aria-hidden="true">
+          <path d="M11 4.5 V17.5 M4.5 11 H17.5" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" />
+        </svg>
+      </button>
+
+      {importOpen && (
+        <div className="sheet-mask" onClick={() => setImportOpen(false)}>
+          <div className="sheet" role="menu" onClick={(e) => e.stopPropagation()}>
+            <div className="sheet-title">导入书籍</div>
+            {desktop && (
+              <button
+                className="sheet-item"
+                disabled={importing}
+                onClick={() => {
+                  setImportOpen(false);
+                  void pickAndImport();
+                }}
+              >
+                {importing ? '导入中…' : '从本地文件导入'}
+              </button>
+            )}
+            <Link className="sheet-item" to="/webdav" onClick={() => setImportOpen(false)}>
+              从 WebDAV 导入
+            </Link>
+            <button className="sheet-item cancel" onClick={() => setImportOpen(false)}>
+              取消
+            </button>
+          </div>
+        </div>
+      )}
+
+      {menuBook && (
+        <div className="sheet-mask" onClick={() => setMenuBook(null)}>
+          <div className="sheet" role="menu" onClick={(e) => e.stopPropagation()}>
+            <div className="sheet-title">{menuBook.title}</div>
+            <Link
+              className="sheet-item"
+              to={`/books/${menuBook.id}/read`}
+              onClick={() => setMenuBook(null)}
+            >
+              阅读
+            </Link>
+            <Link
+              className="sheet-item"
+              to={`/books/${menuBook.id}/edit`}
+              onClick={() => setMenuBook(null)}
+            >
+              整理
+            </Link>
+            <Link
+              className="sheet-item"
+              to={`/books/${menuBook.id}/split`}
+              onClick={() => setMenuBook(null)}
+            >
+              拆分
+            </Link>
+            <button
+              className="sheet-item"
+              onClick={() => {
+                const bk = menuBook;
+                setMenuBook(null);
+                void exportBook(bk);
+              }}
+            >
+              导出
+            </button>
+            <button
+              className="sheet-item danger"
+              onClick={() => {
+                const bk = menuBook;
+                setMenuBook(null);
+                void remove(bk);
+              }}
+            >
+              删除
+            </button>
+            <button className="sheet-item cancel" onClick={() => setMenuBook(null)}>
+              取消
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

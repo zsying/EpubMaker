@@ -5,6 +5,15 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+- **A phone information architecture** — the desktop top bar's six links
+  become a bottom tab bar (书架 · 生词本 · 我的) below 640px, with the
+  low-frequency destinations (bookmarks, annotations, trash, WebDAV, dictionary
+  status) collected on a new「我的」page. The shelf gets a two-cover grid, a
+  floating ＋ import button (WebDAV on the phone, local files on a narrow
+  desktop window), a collapsible search field, and a per-book ⋯ sheet where the
+  five action buttons no longer fit. The reader route stays fullscreen and
+  tab-free. The desktop layout is untouched.
+
 - **Android: the backend answers.** On a real device the shelf now loads
   through Wails v3's runtime. Two fixes were needed: the Java host no longer
   forces `application/json` onto `/wails/runtime.js` (the WebView refused to

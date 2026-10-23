@@ -9,8 +9,10 @@ import WebDav from './pages/WebDav';
 import Bookmarks from './pages/Bookmarks';
 import Annotations from './pages/Annotations';
 import Vocab from './pages/Vocab';
+import Me from './pages/Me';
 import { initFileDrop } from './filedrop';
 import { Toaster } from './toast';
+import MobileTabs from './components/MobileTabs';
 
 export default function App() {
   const loc = useLocation();
@@ -50,7 +52,12 @@ export default function App() {
         </header>
       )}
 
-      <main className="main">
+      {/* The phone navigates from the bottom (tabbar); the desktop keeps the
+          top bar. CSS picks which one is visible per breakpoint. The reader is
+          its own fullscreen surface and never shows tabs. */}
+      {!isReader && <MobileTabs />}
+
+      <main className={isReader ? 'main' : 'main with-tabs'}>
         {isReader ? (
           <Routes>
             <Route path="/books/:id/read" element={<Reader />} />
@@ -64,6 +71,7 @@ export default function App() {
             <Route path="/vocab" element={<Vocab />} />
             <Route path="/trash" element={<Trash />} />
             <Route path="/webdav" element={<WebDav />} />
+            <Route path="/me" element={<Me />} />
             <Route path="/books/:id/edit" element={<Editor />} />
             <Route path="/books/:id/split" element={<Split />} />
             <Route path="*" element={<div className="page empty">页面不存在</div>} />
