@@ -5,6 +5,7 @@ import { api, Annotation, Book, Bookmark, Chapter, LookupResult, ReadingProgress
 import { Caret } from '../Caret';
 import { toast, toastError } from '../toast';
 import { Anchor, EDGE_GAP, placeOverlay } from '../overlay';
+import { wordAt } from '../wordHit';
 
 const FONT_KEY = 'epubmaker.fontSize';
 const MODE_KEY = 'epubmaker.readMode';
@@ -453,6 +454,10 @@ export default function Reader() {
   // would change the page count and throw the reader off their page.
   const [lookupCard, setLookupCard] = useState<LookupCardState>(null);
   const [lookupBusy, setLookupBusy] = useState(false);
+  // Whether a dictionary is installed at all. A click on a word looks it up
+  // only when there is something to look it up in; otherwise every click would
+  // answer "not in the dictionary", which is noise rather than help.
+  const [dictReady, setDictReady] = useState(false);
   // A jump from the notebook or an annotation list has to be visible, not just
   // correct: this is a transient highlight over the landed-on text.
   const [flash, setFlash] = useState<{ left: number; top: number; width: number; height: number } | null>(null);
@@ -476,6 +481,16 @@ export default function Reader() {
   const spreadRef = useRef<HTMLDivElement>(null);
   const columnsRef = useRef<HTMLDivElement>(null);
   const contentRef = useRef<HTMLDivElement>(null);
+
+  // A bare click on a word is deferred by a few milliseconds before it looks
+  // anything up. The mousedown of a double-click cancels the pending lookup, so
+  // double-clicking a word to select (and highlight) it never flashes a card on
+  // the way to the selection toolbar.
+  const wordTimerRef = useRef<number | null>(null);
+  // When a drag in the page edge turned a page, the click that follows the
+  // mouseup must not turn a second one.
+  const dragRef = useRef<{ x: number; y: number; fired: boolean } | null>(null);
+  const turnedAtRef = useRef(0);
   const pageIntentRef = useRef<PageIntent>(null);
   // Layout-independent restore target: a source character offset to land on.
   // Kept in a ref (not a one-shot intent) so it survives across measure passes
@@ -557,6 +572,14 @@ export default function Reader() {
     })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id]);
+
+  /* ---- is there a dictionary to look words up in? ---- */
+  useEffect(() => {
+    api
+      .dictStatus()
+      .then((s) => setDictReady(s.installed))
+      .catch(() => setDictReady(false));
+  }, []);
 
   /* ---- render current chapter HTML ---- */
   useEffect(() => {
@@ -1117,6 +1140,9 @@ export default function Reader() {
   }
 
   function turn(delta: number) {
+    // The card points at a word on the page being left behind.
+    cancelWordLookup();
+    setLookupCard(null);
     const step = turnStep;
     if (delta > 0) {
       if (pageIndex + step <= maxPageIndex) setPageIndex(pageIndex + step);
@@ -1133,6 +1159,26 @@ export default function Reader() {
     if (pageIndex > maxPageIndex) setPageIndex(maxPageIndex);
   }, [mode, pageCount, pagesPerView]);
 
+  // Which page-turn zone a viewport x sits in: -1 the covered pages to the left
+  // of the book, 0 the page itself, 1 the covered pages to the right.
+  //
+  // The zones are measured from the BOOK, not from the window: on a wide screen
+  // all the empty space flanking the book still turns pages, and on any screen
+  // the book's own outer margin does too — that margin is the "stack of paper"
+  // the reader aims at. A proportional share of the window (18% each side) used
+  // to turn pages from inside the text column on small windows, which is where
+  // words are.
+  function turnZoneAt(clientX: number): -1 | 0 | 1 {
+    const spread = spreadRef.current;
+    if (!spread) return 0;
+    const r = spread.getBoundingClientRect();
+    if (r.width <= 0) return 0;
+    const band = Math.min(marginPx, 26);
+    if (clientX < r.left + band) return -1;
+    if (clientX > r.right - band) return 1;
+    return 0;
+  }
+
   function onStageClick(e: ReactMouseEvent) {
     // Ignore clicks on interactive content and active text selections.
     const target = e.target as HTMLElement;
@@ -1148,16 +1194,64 @@ export default function Reader() {
     const selection = window.getSelection();
     if (selection && selection.toString().trim()) return;
 
+    // A drag along the page edge already turned; the click on mouseup must not
+    // turn again.
+    if (Date.now() - turnedAtRef.current < 300) return;
+
+    const zone = turnZoneAt(e.clientX);
+    if (zone < 0) {
+      turn(-1);
+      return;
+    }
+    if (zone > 0) {
+      turn(1);
+      return;
+    }
+
+    // One click on a word is enough to look it up — no selection needed.
+    if (scheduleWordLookup(e.clientX, e.clientY)) return;
+
     const stage = stageRef.current;
     if (!stage) return;
     const rect = stage.getBoundingClientRect();
     const ratio = (e.clientX - rect.left) / rect.width;
 
-    // Fixed zones: narrow edges turn pages, small center toggles chrome,
-    // the broad middle band is left for text selection / links.
-    if (ratio < 0.18) turn(-1);
-    else if (ratio > 0.82) turn(1);
-    else if (ratio > 0.42 && ratio < 0.58) setChromeOpen((o) => !o);
+    // The narrow middle band toggles the chrome. Everything else in the page is
+    // left to text selection and links.
+    if (ratio > 0.42 && ratio < 0.58) setChromeOpen((o) => !o);
+  }
+
+  /* ---- drag along the page edge to turn ---- */
+  // Pressing in a page-turn zone and pulling the paper sideways turns a page:
+  // pulling left walks forward through the book, pulling right walks back. One
+  // turn per gesture, so a long drag cannot skip a dozen pages.
+  const DRAG_TURN_PX = 44;
+
+  function onStageMouseDown(e: ReactMouseEvent) {
+    dragRef.current = null;
+    if (e.button !== 0) return;
+    if (turnZoneAt(e.clientX) === 0) return;
+    // The margin is a page-turn surface, so a press there must not start
+    // smearing a text selection across the page.
+    e.preventDefault();
+    dragRef.current = { x: e.clientX, y: e.clientY, fired: false };
+  }
+
+  function onStageMouseMove(e: ReactMouseEvent) {
+    const d = dragRef.current;
+    if (!d || d.fired || e.buttons !== 1) return;
+    const dx = e.clientX - d.x;
+    const dy = e.clientY - d.y;
+    // Horizontal intent only: a vertical drag along the edge is a slip, not a
+    // page turn.
+    if (Math.abs(dx) < DRAG_TURN_PX || Math.abs(dx) < Math.abs(dy) * 1.4) return;
+    d.fired = true;
+    turnedAtRef.current = Date.now();
+    turn(dx < 0 ? 1 : -1);
+  }
+
+  function onStageMouseUp() {
+    dragRef.current = null;
   }
 
   /* ---- mouse wheel page turning ---- */
@@ -1354,7 +1448,23 @@ export default function Reader() {
           setNoteDraft(ann.note);
           setPopover({ x: r.left + r.width / 2, y: r.bottom + 8, ann });
         }
+        return;
       }
+      // Paged mode has its own click router (onStageClick) that has to weigh a
+      // click against the page-turn zones; scrolling has none, so the lookup
+      // happens here.
+      if (mode !== 'scroll') return;
+      if (
+        target.closest('a') ||
+        target.closest('button') ||
+        target.closest('input') ||
+        target.closest('textarea')
+      ) {
+        return;
+      }
+      const selection = window.getSelection();
+      if (selection && !selection.isCollapsed && selection.toString().trim()) return;
+      scheduleWordLookup(e.clientX, e.clientY);
     }
     root.addEventListener('mouseup', onMouseUp);
     root.addEventListener('click', onClick);
@@ -1365,29 +1475,102 @@ export default function Reader() {
     // `html` is a dependency because on a cold open the content node does not
     // exist yet when this effect first runs — without it the listeners would
     // never attach and selecting text would do nothing.
-  }, [mode, annotations, html]);
+  }, [mode, annotations, html, current, dictReady]);
 
   /* ---- dictionary / vocabulary ---- */
 
-  async function lookupSelection() {
-    if (!sel || !current) return;
-    const word = sel.text.trim();
-    if (!word) return;
+  // One lookup path for both gestures: a selection sent with 查词, and a word
+  // under a bare click. Both end up as the same card.
+  async function runLookup(
+    word: string,
+    start: number,
+    end: number,
+    at: { x: number; top: number; bottom: number },
+  ) {
+    if (!current || !word) return;
     const root = contentRef.current;
-    const context = root ? sentenceAt(root, sel.start, sel.end) : '';
-    const at = { x: sel.x, top: sel.y, bottom: sel.bottom };
-    const offset = sel.start;
-    setSel(null);
+    const context = root ? sentenceAt(root, start, end) : '';
     setLookupBusy(true);
     try {
-      const res = await api.lookupWord(id, current, offset, word, context);
-      setLookupCard({ ...at, res, offset, context });
+      const res = await api.lookupWord(id, current, start, word, context);
+      setLookupCard({ ...at, res, offset: start, context });
     } catch (e) {
       toastError(e);
     } finally {
       setLookupBusy(false);
     }
   }
+
+  async function lookupSelection() {
+    if (!sel) return;
+    const { text, start, end } = sel;
+    const at = { x: sel.x, top: sel.y, bottom: sel.bottom };
+    setSel(null);
+    await runLookup(text.trim(), start, end, at);
+  }
+
+  // The word under a point in the page, if the point is on one at all. The
+  // caret comes from the browser's own hit test — the same one a text cursor
+  // uses — so a click in the margin or between words simply finds nothing.
+  function wordHitAt(x: number, y: number): { word: string; offset: number; rect: DOMRect } | null {
+    const root = contentRef.current;
+    if (!root) return null;
+    const doc = document as Document & {
+      caretRangeFromPoint?: (x: number, y: number) => Range | null;
+    };
+    const caret = doc.caretRangeFromPoint?.(x, y);
+    if (!caret) return null;
+    const node = caret.startContainer;
+    if (node.nodeType !== Node.TEXT_NODE || !root.contains(node)) return null;
+    const span = wordAt(node.textContent || '', caret.startOffset);
+    if (!span) return null;
+    const range = document.createRange();
+    range.setStart(node, span.start);
+    range.setEnd(node, span.end);
+    const rect = range.getBoundingClientRect();
+    if (rect.width <= 0) return null;
+    return { word: span.word, offset: charOffset(root, node, span.start), rect };
+  }
+
+  function cancelWordLookup() {
+    if (wordTimerRef.current !== null) {
+      window.clearTimeout(wordTimerRef.current);
+      wordTimerRef.current = null;
+    }
+  }
+
+  // Returns true when the point is on a word, meaning this click has become a
+  // lookup and the caller must not read it as anything else (page turn, chrome
+  // toggle). The deferral is what keeps selecting text clean: the mousedown of
+  // a double-click cancels this, so highlighting a word never flashes the card.
+  function scheduleWordLookup(x: number, y: number): boolean {
+    if (!dictReady || !current) return false;
+    const hit = wordHitAt(x, y);
+    if (!hit) return false;
+    cancelWordLookup();
+    const at = {
+      x: hit.rect.left + hit.rect.width / 2,
+      top: hit.rect.top,
+      bottom: hit.rect.bottom,
+    };
+    wordTimerRef.current = window.setTimeout(() => {
+      wordTimerRef.current = null;
+      void runLookup(hit.word, hit.offset, hit.offset + hit.word.length, at);
+    }, 160);
+    return true;
+  }
+
+  // Any fresh press ends the interpretation of the previous click, and leaving
+  // the reader must not fire a lookup afterwards.
+  useEffect(() => {
+    const onDown = () => cancelWordLookup();
+    window.addEventListener('mousedown', onDown);
+    return () => {
+      window.removeEventListener('mousedown', onDown);
+      cancelWordLookup();
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // Pronunciation via the WebView's built-in speech synthesis: no network, no
   // bundled audio, works offline.
@@ -1783,7 +1966,15 @@ export default function Reader() {
           </div>
         </aside>
       )}
-      <div className="reader-stage" ref={stageRef} onClick={onStageClick}>
+      <div
+        className="reader-stage"
+        ref={stageRef}
+        onClick={onStageClick}
+        onMouseDown={onStageMouseDown}
+        onMouseMove={onStageMouseMove}
+        onMouseUp={onStageMouseUp}
+        onMouseLeave={onStageMouseUp}
+      >
         <div
           className={`reader-spread${fxOut ? ' fx-out' : ''}`}
           ref={spreadRef}
@@ -1793,18 +1984,24 @@ export default function Reader() {
           }}
         >
           {/* Covered page edges: the rest of the book peeking out from behind the
-              current sheet(s), so it reads like an open book. Shown only when there
-              are actually pages on that side. */}
+              current sheet(s), so it reads like an open book. Each side only
+              appears when the book actually continues that way — the stack is
+              also the target for a page-edge click, and an edge that leads
+              nowhere would be a promise the click cannot keep. */}
           {geometryReady && (
             <>
-              <div
-                className="book-edge left"
-                style={{ left: -bookEdgeVisible, width: bookEdgeW, height: sheetHeight }}
-              />
-              <div
-                className="book-edge right"
-                style={{ left: viewWidth - bookEdgeTuck, width: bookEdgeW, height: sheetHeight }}
-              />
+              {pageIndex > 0 && (
+                <div
+                  className="book-edge left"
+                  style={{ left: -bookEdgeVisible, width: bookEdgeW, height: sheetHeight }}
+                />
+              )}
+              {pageIndex + pagesPerView < pageCount && (
+                <div
+                  className="book-edge right"
+                  style={{ left: viewWidth - bookEdgeTuck, width: bookEdgeW, height: sheetHeight }}
+                />
+              )}
             </>
           )}
           {geometryReady &&
