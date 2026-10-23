@@ -1,12 +1,17 @@
 # EpubMaker
 
-EPUB 电子书维护与生成工具。本地运行的**桌面应用**（Wails v2，Go 后端 + TypeScript 前端），用来把手上的 epub 导进来，读、改、拆、再导出去。后端已用 Go 重写，不再依赖 Node 服务。
+EPUB 电子书维护与生成工具。本地运行的**桌面应用**（Wails v2，Go 后端 + React 前端），
+把手上的 epub 导进来，读、改、拆、再导出去。同时兼顾英文原著的阅读与学习。
+
+## 功能
 
 - **导入** —— 拖入 epub，自动解析元数据、目录、章节与全部资源
-- **阅读** —— 侧栏目录 + 排版干净的阅读器，记住上次读到哪一章，方向键翻章
+- **阅读** —— 侧栏目录 + 干净的排版，记住上次读到哪一章；滚动 / 分页两种模式
+- **查词** —— 划选单词即时查本地词库：音标、中文释义、原型、发音（离线）
+- **生词本** —— 查过的词自动沉淀（跨书），带原句与出处，可跳回原文
 - **整理** —— 改书名/作者/简介/封面，改章节标题与正文 HTML，拖拽排序，新增、删除、合并章节
-- **拆分** —— 把一本书按章节切成多本，自动只携带各分卷真正引用到的图片、样式与字体
-- **导出** —— 生成符合 EPUB 3 规范的文件下载（同时带 nav + ncx，兼容老阅读器）
+- **拆分** —— 按章节把一本书切成多本，每卷只携带真正引用到的图片、样式与字体
+- **导出** —— 生成符合 EPUB 3 规范的文件（同时带 nav + ncx，兼容老阅读器）
 
 ## 技术栈
 
@@ -14,119 +19,126 @@ EPUB 电子书维护与生成工具。本地运行的**桌面应用**（Wails v2
 | --- | --- |
 | 语言 | Go（后端）+ TypeScript（前端） |
 | 桌面框架 | Wails v2（WebView2，单可执行文件） |
-| 后端 | Go（`app/internal/*`，零依赖 EPUB/XML/WebDAV，仅标准库 + Wails） |
+| 后端 | Go，零依赖 EPUB/XML/WebDAV（`app/internal/*`） |
 | 数据库 | SQLite（modernc.org/sqlite，纯 Go 无 cgo） |
-| EPUB 引擎 | 自研解析/生成（`app/internal/epub`），无第三方 epub 库 |
+| 词库 | ECDICT（CSV 导入 → 独立 SQLite） |
 | 前端 | React 18 + Vite + React Router，DOMPurify 净化正文 |
+
+前后端之间**只有 Wails 进程内绑定**（`window.go.app.Backend.*`），没有 HTTP、没有端口。
 
 ## 快速开始
 
-```bash
-# 桌面应用（需要 Go 工具链与 Wails CLI）
-cd app
-go build ./...          # 先确保后端编译通过
-wails dev               # 构建前端 + 启动桌面应用 + 热更新
-wails build             # 产出 EpubMaker.exe
-wails build -nsis       # 产出 Windows 安装包（含 .epub 文件关联，需本机装 NSIS）
+首选入口是仓库根的 `run.ps1`（PowerShell 7 / Windows PowerShell 5.1 均可，无参数即打印帮助）：
 
-# 仅前端（可选）
-npm run dev:web         # vite 开发服务器
+```powershell
+.\run.ps1            # 帮助
+.\run.ps1 dev        # 桌面开发：vite watcher + 编译 Go + 窗口热更新
+.\run.ps1 build      # 生产 exe
+.\run.ps1 nsis       # 生产 exe + NSIS 安装包（需本机装 NSIS）
+.\run.ps1 test       # 前端 typecheck + go vet + go test
+.\run.ps1 web        # 仅前端 vite（7800）；没有 Go 后端，只能调样式
+.\run.ps1 clean      # 清 web/dist、app/frontend/dist、app/build/bin
 ```
 
-后端单元 / 端到端测试（隔离在临时目录里跑，不影响真实数据；涉及 SQLite 需关闭沙箱）：
+短参数 `-d / -b / -n / -t / -w / -c`；`-Verbose` 打开子进程输出。
+
+底层等价命令（排查时用）：
 
 ```bash
-cd app && go test ./...
-cd app && go test ./internal/api/... -run TestE2ELifecycle
+cd app && go build ./... && go vet ./... && go test ./...
+cd app && wails dev        # 首次会静默编译几十秒才弹窗
+cd app && wails build -nsis
 ```
+
+> 涉及 SQLite 的测试在沙箱环境里会卡住，需要放开沙箱运行。
+> `npm run dev:web` 单独跑前端时 `window.go` 不存在，业务功能不可用。
+
+## 词库
+
+查词依赖本地 ECDICT 词库，需要在书架页点「导入词库」选 `ecdict.csv`，或用命令行：
+
+```bash
+cd app && go run ./cmd/dictimport /path/to/ecdict.csv
+```
+
+全量词库约 77 万条 / 98MB，导入约 8 秒，装到 `~/.epubmaker/dict/dict.db`。
+词库**不从网络下载**（官方源实测 1.4 KB/s），请自备 csv 或随安装包分发。
+
+不装词库时其他功能完全正常，只是划词会提示未收录。
 
 ## 存储位置
 
-所有运行时数据都放在 **`~/.epubmaker`**（可用环境变量 `EPUBMAKER_HOME` 整体改到别处）：
+所有运行时数据都在 `~/.epubmaker`（`EPUBMAKER_HOME` 可整体改到别处）：
 
 ```
 ~/.epubmaker/
-├── config.json          # 配置文件，首次启动自动生成
+├── config.json          # 首次启动自动生成
 ├── data/
-│   ├── epubmaker.db     # SQLite 数据库
+│   ├── epubmaker.db     # SQLite：书目、章节、标注、书签、生词本
 │   └── books/<bookId>/
-│       ├── content/     # 解包后的章节 XHTML、图片、CSS、字体
+│       ├── content/     # 解包后的章节 XHTML、图片、CSS、字体（保持 zip 内原路径）
 │       └── original.epub
-├── exports/             # 导出生成的 epub
-├── logs/                # 按天分文件的运行日志
-└── tmp/
+├── data/trash/          # 回收站（软删除的书目录整体 rename 到这里）
+├── dict/dict.db         # 本地词库
+├── exports/  logs/  tmp/
 ```
 
 ### config.json
 
 ```jsonc
 {
-  "port": 7801,
-  "host": "127.0.0.1",
   "dataDir": "data",        // 相对路径基于 ~/.epubmaker；也可填绝对路径挪到别的盘
   "exportDir": "exports",
   "logDir": "logs",
   "tmpDir": "tmp",
+  "dictDir": "dict",
   "logLevel": "info",       // debug | info | warn | error
   "maxUploadSizeMb": 300,
   "keepOriginalEpub": true  // 导入时是否保留原始 epub 副本
 }
 ```
 
-改完重启服务生效。`port` / `host` 也可以用 `EPUBMAKER_PORT`、`EPUBMAKER_HOST` 临时覆盖。
+改完重启应用生效。旧版遗留的 `port` / `host` 字段已无作用（本应用不监听端口）。
 
 ## 目录结构
 
 ```
 EpubMaker/
 ├── app/
-│   ├── main.go              # Wails 入口：组装 mux、绑定原生能力、解析命令行 .epub
-│   ├── main_test.go         # 校验前端产物已 embed
-│   ├── wails.json           # Wails 配置（前端目录、NSIS、.epub 文件关联）
-│   ├── build/               # Wails 构建资产：appicon.png、epubFileIcon.png（.epub 关联图标）、
-│   │                        # windows/{info.json,installer/*.nsi}（NSIS 模板，bin/ 不入库）
-│   ├── frontend/dist/       # 占位目录，仅 .gitkeep 入库；wails build 时由 scripts/sync-frontend-dist.js
-│   │                        # 从 web/dist 镜像内容，再被 //go:embed 打包进二进制
-│   ├── internal/
-│   │   ├── api/             # 所有 /api 路由（books/trash/chapters/assets/webdav）
-│   │   ├── epub/            # OCF/OPF/NCX/NAV 解析与流式构建（零依赖）
-│   │   ├── html/            # 正文抽取、链接改写、引用收集
-│   │   ├── library/         # 导入 / 渲染 / 导出 / 封面 / 拆分
-│   │   ├── webdav/          # WebDAV 客户端（test/list/import）
-│   │   ├── storage/         # 内容文件映射 + 回收站（软删除）
-│   │   ├── app/             # Wails 绑定（原生文件对话框、命令行导入）
-│   │   ├── server/          # 桌面 HTTP 表面（SPA 回退，无代理）；静态文件由 Wails embed 直供
-│   │   ├── db/  config/  mime/
-│   └── go.mod
-├── scripts/
-│   └── sync-frontend-dist.js  # wails build 时把 web/dist 镜像到 app/frontend/dist
-└── web/src/
-    ├── pages/{Library,Reader,Editor,Split}.tsx
-    ├── api.ts  toast.tsx  styles.css
+│   ├── main.go              # Wails 入口：绑定原生能力、解析命令行 .epub
+│   ├── wails.json           # 前端目录、NSIS、.epub 文件关联
+│   ├── build/               # 构建资产：appicon.png、epubFileIcon.png、NSIS 模板
+│   ├── frontend/dist/       # 构建时由 scripts/sync-frontend-dist.js 镜像，再被 //go:embed 打包
+│   ├── cmd/dictimport/      # 命令行词库安装器
+│   └── internal/
+│       ├── app/             # Wails 绑定（Backend / App / learning）
+│       ├── epub/            # OCF/OPF/NCX/NAV 解析与流式构建
+│       ├── library/         # 导入 / 渲染 / 导出 / 封面 / 拆分
+│       ├── dict/            # ECDICT 词库
+│       ├── vocab/           # 生词本
+│       ├── storage/         # 内容文件映射 + 回收站
+│       ├── db/ config/ html/ mime/ webdav/
+│       └── go.mod
+├── web/src/
+│   ├── pages/               # Library Reader Editor Split Bookmarks Annotations Trash WebDav
+│   ├── api.ts               # 绑定的唯一封装层
+│   ├── overlay.ts           # 浮层定位（保证不越出视窗）
+│   └── styles.css
+├── docs/                    # 排查手册、设计取舍
+├── scripts/sync-frontend-dist.js
+└── run.ps1
 ```
-
-## API 一览
-
-| 方法 | 路径 | 说明 |
-| --- | --- | --- |
-| GET | `/api/config` | 查看当前生效的存储路径 |
-| GET | `/api/books?keyword=` | 书籍列表 / 搜索 |
-| POST | `/api/books/import` | 上传导入（multipart，字段 `files`，支持多选） |
-| GET/PATCH/DELETE | `/api/books/:id` | 书籍详情 / 修改元数据 / 删除 |
-| GET/POST | `/api/books/:id/chapters` | 章节列表 / 新增章节 |
-| GET | `/api/books/:id/chapters/:cid/render` | 阅读用正文（资源链接已改写） |
-| GET | `/api/books/:id/chapters/:cid/source` | 编辑用 HTML 源码 |
-| PATCH/DELETE | `/api/books/:id/chapters/:cid` | 改标题与正文 / 从目录移除 |
-| POST | `/api/books/:id/chapters/reorder` | 重排章节 |
-| POST | `/api/books/:id/chapters/merge` | 合并章节 |
-| GET | `/api/books/:id/images` | 书内图片（用于选封面） |
-| GET | `/api/books/:id/assets/*` | 读取书内任意资源 |
-| POST | `/api/books/:id/split` | 拆分成多本 |
-| GET | `/api/books/:id/export` | 导出 epub 下载 |
 
 ## 实现上的几个取舍
 
-- **路径策略**：所有资源以「原 zip 内的完整路径」为主键存盘，导入导出保持一致，章节间相对引用（`../images/x.png`）天然可用。导出时生成的 `epubmaker.opf` / `epubmaker-nav.xhtml` / `epubmaker-toc.ncx` 放在包根，避免与原书文件重名。
-- **阅读排版**：阅读器不加载原书 CSS，统一用一套干净的中文排版；图片链接实时改写到 `/api/books/:id/assets/...`，正文经 DOMPurify 净化后渲染。
-- **拆分带资源**：按章节正文里的引用递归收集（含 CSS 里的 `url()`），样式表与封面始终携带，避免分卷排版丢失又不至于每卷都复制整本的图片。
-- **删除章节**：只从目录中移除，正文文件保留在磁盘上，避免误删被其他章节引用的内容。
+- **路径策略**：资源以「原 zip 内完整路径」为主键存盘，导入导出保持一致，章节间相对引用天然可用。
+  导出时生成的 `epubmaker.opf` / `epubmaker-nav.xhtml` / `epubmaker-toc.ncx` 放在包根，避免与原书重名。
+- **阅读排版**：不加载原书 CSS，统一一套干净排版；正文经 DOMPurify 净化后渲染。
+- **翻页**：章内瞬时切换，不做动画；章节切换 130ms 淡入淡出只为盖住加载空窗。
+- **拆分带资源**：按正文引用递归收集（含 CSS 里的 `url()`），样式表与封面始终携带。
+- **删除章节**：只从目录移除，正文文件保留在磁盘。
+- **查词**：词卡是 `position: fixed` 独立图层，永不进入文档流——分页按内容高度算页数，
+  进入流会改变页数导致跳页。
+
+更多「为什么这样设计」见 [`docs/decisions.md`](docs/decisions.md)，踩坑排查见
+[`docs/troubleshooting.md`](docs/troubleshooting.md)，改代码前的约定见 [`AGENTS.md`](AGENTS.md)。

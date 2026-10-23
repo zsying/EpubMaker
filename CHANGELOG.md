@@ -5,7 +5,24 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
-Nothing yet.
+### Added
+
+- **Dictionary lookup** — select a word in the reader to see phonetic, gloss and
+  base form without leaving the page. Backed by a local ECDICT SQLite database
+  (`internal/dict`) with lemma table and suffix fallback; installable from the
+  library page or `go run ./cmd/dictimport <csv>` (770,611 entries, ~98 MB).
+- **Vocabulary notebook** — looked-up words settle into a cross-book notebook
+  with the sentence and location they came from (`internal/vocab`). Words ranked
+  in the top 5000 by frequency are never auto-filed; everything else needs a
+  second lookup. Manual adding always works.
+- **Pronunciation** — uses the WebView's built-in speech synthesis, so no audio
+  files ship with the app.
+
+### Fixed
+
+- The lookup card, selection toolbar and annotation popover now stay inside the
+  window: they are clamped sideways and flip to the other side of the text when
+  the preferred direction has no room.
 
 ## [0.1.0] — 2026-10-09
 
