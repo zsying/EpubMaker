@@ -64,6 +64,26 @@ export interface VocabEntry {
   updatedAt: string;
 }
 
+/**
+ * A notebook row as the notebook page renders it: the stored entry plus its
+ * dictionary gloss and the titles of the place it was met. `bookTitle` is empty
+ * when that book has since been deleted — the word stays, the trail does not.
+ */
+export interface VocabItem extends VocabEntry {
+  bookTitle: string;
+  chapterTitle: string;
+  phonetic: string;
+  translation: string;
+}
+
+export interface VocabStats {
+  total: number;
+  new: number;
+  learning: number;
+  known: number;
+  ignored: number;
+}
+
 export interface DictStatus {
   installed: boolean;
   path: string;
@@ -370,7 +390,9 @@ export const api = {
     context: string
   ) => call<VocabEntry>('VocabAdd', term, surface, bookId, chapterId, offset, context),
 
-  listVocab: (status: string, keyword: string) => call<VocabEntry[]>('ListVocab', status, keyword),
+  listVocab: (status: string, keyword: string) => call<VocabItem[]>('ListVocab', status, keyword),
+
+  vocabStats: () => call<VocabStats>('VocabStats'),
 
   setVocabStatus: (vid: string, status: string) => call<boolean>('SetVocabStatus', vid, status),
 

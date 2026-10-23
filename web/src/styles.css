@@ -2092,3 +2092,165 @@ a {
     padding: 28px 20px 40px;
   }
 }
+
+/* ------------------------------ vocabulary notebook ------------------------------ */
+
+.vocab-search {
+  width: 220px;
+  height: 32px;
+}
+
+.vocab-filters {
+  display: flex;
+  gap: 6px;
+  margin-bottom: 14px;
+}
+
+.vocab-wordline {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  margin-bottom: 4px;
+}
+
+.vocab-word {
+  font-size: 17px;
+  font-weight: 650;
+  letter-spacing: 0.2px;
+}
+
+/* Status is a quiet label, not a badge to collect: the list is read, not scored. */
+.vocab-status {
+  font-size: 11px;
+  padding: 1px 7px;
+  border-radius: 20px;
+  background: #eef1f6;
+  color: var(--text-3);
+}
+
+.vocab-status.s-learning {
+  background: #fff4e2;
+  color: #9a6300;
+}
+
+.vocab-status.s-known {
+  background: #e8f6ec;
+  color: #256b3b;
+}
+
+.vocab-trans {
+  font-size: 13.5px;
+  color: var(--text-2);
+  margin-bottom: 6px;
+  white-space: pre-line;
+}
+
+.vocab-hit {
+  background: rgba(255, 214, 102, 0.5);
+  color: inherit;
+  border-radius: 2px;
+  padding: 0 1px;
+}
+
+.vocab-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  justify-content: center;
+  padding-right: 8px;
+}
+
+/* Review pass */
+.review-card {
+  max-width: 520px;
+  margin: 24px auto;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  padding: 36px 28px 28px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+}
+
+.review-word {
+  font-size: 30px;
+  font-weight: 650;
+  letter-spacing: 0.3px;
+}
+
+.review-phon {
+  font-size: 13px;
+  color: var(--text-3);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+.review-reveal {
+  margin-top: 14px;
+  width: 100%;
+  padding: 14px;
+  border: 1px dashed var(--border-strong);
+  border-radius: 10px;
+  background: var(--panel-2);
+  color: var(--text-3);
+  font-family: inherit;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.review-reveal:hover {
+  border-color: #b9c0cd;
+  color: var(--text-2);
+}
+
+.review-trans {
+  margin-top: 10px;
+  font-size: 15px;
+  line-height: 1.7;
+  color: var(--text);
+  white-space: pre-line;
+  text-align: center;
+}
+
+.review-context {
+  font-size: 13px;
+  color: var(--text-2);
+  line-height: 1.7;
+  text-align: center;
+  max-width: 440px;
+}
+
+.review-actions {
+  display: flex;
+  gap: 10px;
+  margin-top: 16px;
+}
+
+/* Landing highlight for "jump back to the sentence" in scrolling mode. Fixed so
+   it can never take part in the text layout. */
+.jump-flash {
+  position: fixed;
+  z-index: 55;
+  pointer-events: none;
+  border-radius: 3px;
+  background: rgba(255, 214, 102, 0.55);
+  box-shadow: 0 0 0 2px rgba(255, 214, 102, 0.35);
+  animation: jump-flash 1.4s ease-out forwards;
+}
+
+@keyframes jump-flash {
+  0% {
+    opacity: 0;
+  }
+  15% {
+    opacity: 1;
+  }
+  70% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0;
+  }
+}

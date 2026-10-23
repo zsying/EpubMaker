@@ -7,6 +7,7 @@ import Trash from './pages/Trash';
 import WebDav from './pages/WebDav';
 import Bookmarks from './pages/Bookmarks';
 import Annotations from './pages/Annotations';
+import Vocab from './pages/Vocab';
 import { Toaster } from './toast';
 
 export default function App() {
@@ -31,6 +32,9 @@ export default function App() {
           <Link to="/annotations" className="btn ghost">
             划线
           </Link>
+          <Link to="/vocab" className="btn ghost">
+            生词本
+          </Link>
           <Link to="/webdav" className="btn ghost">
             WebDAV
           </Link>
@@ -48,6 +52,7 @@ export default function App() {
             <Route path="/" element={<Library />} />
             <Route path="/bookmarks" element={<Bookmarks />} />
             <Route path="/annotations" element={<Annotations />} />
+            <Route path="/vocab" element={<Vocab />} />
             <Route path="/trash" element={<Trash />} />
             <Route path="/webdav" element={<WebDav />} />
             <Route path="/books/:id/edit" element={<Editor />} />

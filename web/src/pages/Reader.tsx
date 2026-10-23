@@ -268,6 +268,22 @@ function getSelectionOffsets(root: HTMLElement, range: Range): { start: number; 
   return b < a ? { start: b, end: a } : { start: a, end: b };
 }
 
+// The text node holding a character offset, with the offset inside it. Paged
+// mode never needs this — it maps offsets to pages during measurement — but
+// scrolling mode has no page map, so "jump back to the sentence" has to walk
+// the rendered text directly.
+function textNodeAt(root: HTMLElement, offset: number): { node: Text; offset: number } | null {
+  const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+  let seen = 0;
+  let n: Node | null;
+  while ((n = walker.nextNode())) {
+    const len = (n.textContent || '').length;
+    if (seen + len > offset) return { node: n as Text, offset: offset - seen };
+    seen += len;
+  }
+  return null;
+}
+
 // The sentence surrounding [start,end) in the rendered chapter text, capped so
 // a paragraph-long sentence cannot bloat a notebook entry. Used as the example
 // context saved alongside a looked-up word.
@@ -394,6 +410,9 @@ export default function Reader() {
   // would change the page count and throw the reader off their page.
   const [lookupCard, setLookupCard] = useState<LookupCardState>(null);
   const [lookupBusy, setLookupBusy] = useState(false);
+  // A jump from the notebook or an annotation list has to be visible, not just
+  // correct: this is a transient highlight over the landed-on text.
+  const [flash, setFlash] = useState<{ left: number; top: number; width: number; height: number } | null>(null);
 
   // Overlay placement: the selection toolbar prefers the space above the text,
   // the dictionary card and annotation popover the space below. Each flips to
@@ -535,6 +554,35 @@ export default function Reader() {
     () => annotations.filter((a) => a.chapterId === current),
     [annotations, current]
   );
+
+  // Scroll-mode counterpart of the paged offset restore. Paged mode resolves
+  // the offset to a page during measurement; scrolling mode has no page map, so
+  // it moves the container itself once the chapter HTML is committed.
+  useEffect(() => {
+    if (mode !== 'scroll') return;
+    const target = restoreOffsetRef.current;
+    const root = contentRef.current;
+    const scroller = mainRef.current;
+    if (target === null || !root || !scroller) return;
+    restoreOffsetRef.current = null;
+
+    const hit = textNodeAt(root, target);
+    if (!hit) return;
+    const range = document.createRange();
+    const end = Math.min(hit.offset + 1, (hit.node.textContent || '').length);
+    range.setStart(hit.node, Math.min(hit.offset, end));
+    range.setEnd(hit.node, end);
+
+    const rect = range.getBoundingClientRect();
+    const top = rect.top - scroller.getBoundingClientRect().top + scroller.scrollTop - scroller.clientHeight / 3;
+    scroller.scrollTo({ top: Math.max(0, top), behavior: 'auto' });
+
+    // Measured again after scrolling so the highlight lands on the right line.
+    const after = range.getBoundingClientRect();
+    setFlash({ left: after.left - 2, top: after.top - 3, width: Math.max(after.width, 6), height: after.height + 6 });
+    const timer = window.setTimeout(() => setFlash(null), 1400);
+    return () => window.clearTimeout(timer);
+  }, [safeHtml, mode]);
 
   /* ---- imperatively set content + highlights (paged mode) ---- */
   useLayoutEffect(() => {
@@ -1315,8 +1363,20 @@ export default function Reader() {
           </div>
 
           <article className="reader-paper">
-            <div className="reader-content" style={{ fontSize }} dangerouslySetInnerHTML={{ __html: safeHtml }} />
+            <div
+              className="reader-content"
+              ref={contentRef}
+              style={{ fontSize }}
+              dangerouslySetInnerHTML={{ __html: safeHtml }}
+            />
           </article>
+
+          {flash && (
+            <div
+              className="jump-flash"
+              style={{ left: flash.left, top: flash.top, width: flash.width, height: flash.height }}
+            />
+          )}
 
           <div className="reader-nav">
             <button className="btn" disabled={!prev} onClick={() => prev && openChapter(prev.id)}>
