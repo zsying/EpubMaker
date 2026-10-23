@@ -29,9 +29,25 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 - **Batch delete** — deletion is behind a mode in the notebook header: rows
   become checkboxes, selection can be inverted, and nothing goes until a
   confirmation names the count.
+- **One-click lookup** — a single click on a word opens its card; no selection
+  needed. The pointer is resolved with the browser's caret hit test and expanded
+  to the word around it, so clicking the margin, a space or a number does
+  nothing. Double-clicking still selects (and reaches the highlight colours)
+  without flashing a card on the way.
+- **Page turning on the book itself** — clicking the covered page stack or the
+  empty space beside the book turns, and so does holding the mouse in that edge
+  and pulling the paper sideways (one page per gesture). The turn zones follow
+  the book instead of a fixed share of the window, so the text column is never a
+  page-turn surface.
 
 ### Fixed
 
+- The notebook detour banner no longer gets covered by the bottom chrome bar that
+  slides out when the pointer approaches the bottom edge: the edge probe is off
+  for the whole detour, and the banner outranks the chrome when the bars are
+  opened on purpose.
+- The covered page stacks are only drawn when the book continues that way,
+  instead of always promising a turn in both directions.
 - The lookup card, selection toolbar and annotation popover now stay inside the
   window: they are clamped sideways and flip to the other side of the text when
   the preferred direction has no room.
