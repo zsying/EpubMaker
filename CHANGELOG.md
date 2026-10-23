@@ -42,6 +42,13 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Fixed
 
+- Escape now dismisses what is on top of the page before leaving it: the word
+  card, the selection toolbar, an annotation popover, the contents / bookmarks /
+  annotations drawers, and the menu bar each take one press, and only a reader
+  with nothing left to close goes back to the library. A bar raised by hovering
+  the page edge counts as the same layer and stays down until the pointer
+  leaves the edge, and a focused note field swallows the press instead of
+  closing the book.
 - The notebook detour banner no longer gets covered by the bottom chrome bar that
   slides out when the pointer approaches the bottom edge: the edge probe is off
   for the whole detour, and the banner outranks the chrome when the bars are

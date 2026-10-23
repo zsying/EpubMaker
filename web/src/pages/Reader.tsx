@@ -415,6 +415,11 @@ export default function Reader() {
   const [pagesPerView, setPagesPerView] = useState(1);
   const [chromeOpen, setChromeOpen] = useState(false);
   const [chromeHover, setChromeHover] = useState(false);
+  // Set when Escape dismisses a chrome bar that the pointer is hovering open.
+  // Without it the very next mousemove would raise the bar again, so Escape
+  // would never get a second press to leave the reader with. Cleared as soon
+  // as the pointer leaves the edge band, which is also how the bar comes back.
+  const hoverDismissedRef = useRef(false);
 
   // page-turn cross-dissolve for CHAPTER turns: while true the whole spread is
   // faded out so a different chapter's HTML (not yet measured) can be swapped
@@ -1324,23 +1329,50 @@ export default function Reader() {
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
+      const inField =
+        e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement;
 
-      // Backspace exits the reader.
-      if (e.key === 'Backspace') {
-        e.preventDefault();
+      // Escape peels one layer at a time: whatever is floating over the page
+      // goes first, and only a reader with nothing left to dismiss leaves the
+      // book. Otherwise Escape would silently close the book while a word card
+      // or the menu bar was open — exactly the press someone makes to get rid
+      // of the overlay.
+      if (e.key === 'Escape') {
+        // Overlays are checked innermost first.
+        if (lookupCard) { setLookupCard(null); return; }
+        if (popover) { setPopover(null); return; }
+        if (sel) { setSel(null); return; }
+        if (tocOpen) { setTocOpen(false); return; }
+        if (bmOpen) { setBmOpen(false); return; }
+        if (annOpen) { setAnnOpen(false); return; }
+        // A bar raised by hovering the edge is not state anyone chose, but it
+        // is still on screen. Both ways of showing it count as one layer: the
+        // pointer is usually resting in the edge band when the bars are open,
+        // so dismissing only `chromeOpen` would leave the bar up and cost a
+        // second press. The hover probe stays muted until the pointer leaves
+        // the band, which keeps this from turning into a fight with mousemove.
+        if (chromeOpen || chromeHover) {
+          setChromeOpen(false);
+          if (chromeHover) {
+            hoverDismissedRef.current = true;
+            setChromeHover(false);
+          }
+          return;
+        }
+        // Typing somewhere (a note) must not throw the reader out of the book.
+        if (inField) {
+          (e.target as HTMLElement).blur();
+          return;
+        }
         exitReading();
         return;
       }
 
-      if (e.key === 'Escape') {
-        // Close any open overlay first; otherwise exit the reader.
-        if (popover) { setPopover(null); return; }
-        if (sel) { setSel(null); return; }
-        if (bmOpen) { setBmOpen(false); return; }
-        if (annOpen) { setAnnOpen(false); return; }
-        if (tocOpen) { setTocOpen(false); return; }
-        if (chromeOpen) { setChromeOpen(false); return; }
+      if (inField) return;
+
+      // Backspace exits the reader.
+      if (e.key === 'Backspace') {
+        e.preventDefault();
         exitReading();
         return;
       }
@@ -1368,7 +1400,7 @@ export default function Reader() {
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [mode, prev, next, pageIndex, pageCount, chromeOpen, popover, sel, bmOpen, annOpen, tocOpen, current, id, detour]);
+  }, [mode, prev, next, pageIndex, pageCount, chromeOpen, chromeHover, popover, sel, bmOpen, annOpen, tocOpen, lookupCard, current, id, detour]);
 
   /* ---- hover the top/bottom edge to reveal the reader chrome (paged) ---- */
   useEffect(() => {
@@ -1390,6 +1422,13 @@ export default function Reader() {
         const y = e.clientY;
         const h = window.innerHeight;
         const near = y < EDGE || y > h - EDGE;
+        // Leaving the band re-arms the probe, so a dismissed bar comes back
+        // when the pointer returns to the edge later on.
+        if (!near) hoverDismissedRef.current = false;
+        if (near && hoverDismissedRef.current) {
+          setChromeHover(false);
+          return;
+        }
         // Functional update avoids stale closures and only re-renders on change.
         setChromeHover((prev) => (prev === near ? prev : near));
       });
