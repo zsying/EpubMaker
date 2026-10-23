@@ -2737,3 +2737,379 @@ a {
     white-space: nowrap;
   }
 }
+
+/* ------------------------------ mobile reader chrome ------------------------------
+   WeChat Read / Tomato style: top bar = back + chapter title + page star;
+   bottom = chapter slider + a five-slot action row. Phone-only (touchPrimary);
+   the desktop chrome below is untouched. */
+
+.chrome-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 38px;
+  height: 38px;
+  border: none;
+  background: transparent;
+  color: #e8eaed;
+  border-radius: 50%;
+  cursor: pointer;
+  flex: none;
+  padding: 0;
+  -webkit-tap-highlight-color: transparent;
+}
+.chrome-icon:active {
+  background: rgba(255, 255, 255, 0.14);
+}
+.chrome-icon:disabled {
+  opacity: 0.35;
+}
+.chrome-icon.text {
+  width: auto;
+  height: 30px;
+  padding: 0 12px;
+  border-radius: 15px;
+  background: rgba(255, 255, 255, 0.08);
+  color: #cfd4da;
+  font-size: 12.5px;
+  font-family: var(--font);
+}
+.chrome-icon.star.on {
+  color: var(--accent);
+}
+
+.m-top {
+  justify-content: space-between;
+  gap: 6px;
+  padding: 8px 10px;
+  padding-top: calc(8px + env(safe-area-inset-top));
+}
+.m-title {
+  flex: 1 1 auto;
+  min-width: 0;
+  text-align: center;
+  font-size: 14px;
+  font-weight: 550;
+  color: #fff;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.m-bottom {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 4px;
+  padding: 8px 14px calc(8px + env(safe-area-inset-bottom));
+}
+.m-slider-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.m-slider {
+  -webkit-appearance: none;
+  appearance: none;
+  flex: 1;
+  height: 28px;
+  margin: 0;
+  background: transparent;
+  cursor: pointer;
+}
+.m-slider::-webkit-slider-runnable-track {
+  height: 3px;
+  border-radius: 2px;
+  background: rgba(255, 255, 255, 0.28);
+}
+.m-slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  margin-top: -7.5px;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: #fff;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.4);
+}
+.m-slider-pct {
+  text-align: center;
+  font-size: 11px;
+  line-height: 1.2;
+  color: #aab1bd;
+  user-select: none;
+}
+.m-tabs {
+  display: flex;
+}
+.m-tab {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 3px;
+  padding: 7px 0 4px;
+  border: none;
+  background: none;
+  color: #cfd4da;
+  font-size: 11px;
+  font-family: var(--font);
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+.m-tab:active {
+  opacity: 0.65;
+}
+.m-aa {
+  height: 20px;
+  display: flex;
+  align-items: center;
+  font-size: 15px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+
+/* the Aa settings sheet */
+.rd-sheet {
+  padding-bottom: calc(14px + env(safe-area-inset-bottom));
+}
+.rd-set-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 14px 18px;
+  border-bottom: 1px solid var(--border);
+}
+.rd-set-row.last {
+  border-bottom: none;
+}
+.rd-set-label {
+  font-size: 14px;
+  color: var(--text-2);
+  flex: none;
+}
+.rd-set-ctrl {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+.rd-a {
+  width: 52px;
+  height: 40px;
+  border: 1px solid var(--border-strong);
+  border-radius: 10px;
+  background: var(--panel-2);
+  color: var(--text);
+  font-size: 16px;
+  font-family: var(--font);
+  cursor: pointer;
+}
+.rd-a:active {
+  background: var(--panel);
+}
+.rd-font-preview {
+  min-width: 44px;
+  text-align: center;
+  font-family: var(--font-serif);
+  line-height: 1;
+  color: var(--text);
+}
+.rd-seg {
+  display: flex;
+  background: var(--panel-2);
+  border-radius: 9px;
+  padding: 3px;
+}
+.rd-seg button {
+  border: none;
+  background: transparent;
+  padding: 7px 20px;
+  border-radius: 7px;
+  font-size: 13px;
+  font-family: var(--font);
+  color: var(--text-2);
+  cursor: pointer;
+}
+.rd-seg button.on {
+  background: var(--panel);
+  color: var(--text);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.14);
+  font-weight: 600;
+}
+.rd-themes {
+  display: flex;
+  gap: 18px;
+}
+.rd-theme {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 5px;
+  border: none;
+  background: none;
+  font-size: 11px;
+  font-family: var(--font);
+  color: var(--text-2);
+  cursor: pointer;
+  padding: 0;
+}
+.rd-theme-dot {
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  border: 1px solid rgba(0, 0, 0, 0.15);
+}
+.rd-theme.t-paper .rd-theme-dot { background: linear-gradient(180deg, #fdfbf6, #f3efe5); }
+.rd-theme.t-green .rd-theme-dot { background: #cde8cf; }
+.rd-theme.t-dark .rd-theme-dot { background: #16181c; }
+.rd-theme.on .rd-theme-dot {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+/* ------------------------------ reading themes ------------------------------
+   Pure CSS recolouring driven by `.reader.theme-*`. Text metrics change with
+   colours, but pagination re-measures on any relayout, so no JS involvement. */
+.reader {
+  position: relative;
+}
+.reader.theme-green {
+  --rd-bg: #cde8cf;
+  --rd-paper: #cde8cf;
+  --rd-desk: #b8d6bb;
+  --rd-text: #24352a;
+  --rd-head: #16281c;
+  --rd-muted: #52705c;
+  --rd-border: rgba(0, 0, 0, 0.1);
+}
+.reader.theme-dark {
+  --rd-bg: #121417;
+  --rd-paper: #14161a;
+  --rd-desk: #0b0d0f;
+  --rd-text: #9aa3ad;
+  --rd-head: #ccd3da;
+  --rd-muted: #6b7480;
+  --rd-border: rgba(255, 255, 255, 0.08);
+}
+.reader[class*='theme-'] .reader-main {
+  background: var(--rd-bg);
+}
+.reader[class*='theme-'] .reader-paper {
+  background: var(--rd-paper);
+  border-color: var(--rd-border);
+  box-shadow: none;
+}
+.reader[class*='theme-'] .reader-paged,
+.reader[class*='theme-'].reader-paged {
+  background: var(--rd-desk);
+}
+.reader[class*='theme-'] .page-sheet,
+.reader[class*='theme-'] .page-sheet.left,
+.reader[class*='theme-'] .page-sheet.right {
+  background: var(--rd-paper);
+}
+.reader[class*='theme-'] .reader-content {
+  color: var(--rd-text);
+}
+.reader[class*='theme-'] .reader-content h1,
+.reader[class*='theme-'] .reader-content h2,
+.reader[class*='theme-'] .reader-content h3,
+.reader[class*='theme-'] .reader-content h4 {
+  color: var(--rd-head);
+}
+.reader[class*='theme-'] .reader-content blockquote {
+  color: var(--rd-muted);
+}
+.reader[class*='theme-'] .page-sheet .page-num {
+  color: var(--rd-muted);
+  opacity: 0.8;
+}
+.reader[class*='theme-'] .reader-toolbar {
+  background: var(--rd-bg);
+  border-bottom-color: var(--rd-border);
+}
+.reader[class*='theme-'] .toc {
+  border-right-color: var(--rd-border);
+}
+.reader[class*='theme-'] .toc-item,
+.reader[class*='theme-'] .toc-head {
+  color: var(--rd-text);
+}
+.reader[class*='theme-'] .toc-item:hover {
+  background: rgba(127, 127, 127, 0.12);
+}
+
+/* Phone reader refinements: overlay clamping, touch targets, drawer side. */
+@media (max-width: 640px) {
+  /* The scroll-mode sticky toolbar (A-/A+/翻页模式/整理/书架) is replaced by
+     the mobile chrome; the detour banner above it stays. */
+  .reader-toolbar {
+    display: none;
+  }
+
+  /* Reading apps open their TOC from the left; so do our drawers on a phone. */
+  .drawer-mask {
+    justify-content: flex-start;
+  }
+  .drawer {
+    border-radius: 0 14px 14px 0;
+  }
+  .drawer-item,
+  .drawer-row {
+    padding-left: 6px;
+    padding-right: 6px;
+  }
+  .drawer-row-main {
+    padding: 12px 10px;
+  }
+  .drawer-row-title {
+    font-size: 14px;
+  }
+
+  /* The dictionary card at 330px overflows a 360px screen; clamp it and give
+     the lookup/touch controls real finger-sized targets. */
+  .dict-card {
+    width: min(340px, calc(100vw - 20px));
+    max-height: 56vh;
+  }
+  .ann-popover {
+    width: min(300px, calc(100vw - 24px));
+  }
+  .sel-toolbar {
+    padding: 8px;
+    gap: 10px;
+    border-radius: 10px;
+  }
+  .sel-lookup {
+    height: 30px;
+    padding: 0 14px;
+    font-size: 13px;
+  }
+  .sel-toolbar .swatch {
+    width: 28px;
+    height: 28px;
+  }
+
+  /* The detour banner's one-line layout cannot fit a phone row. */
+  .detour-bar {
+    flex-wrap: wrap;
+    white-space: normal;
+  }
+
+  .reader-paper {
+    margin: 14px 10px 50px;
+    padding: 22px 18px 36px;
+  }
+
+  /* Chapter-end nav buttons double as swipe targets; make them thumb-sized. */
+  .reader-nav {
+    padding: 0 14px;
+  }
+  .reader-nav .btn {
+    padding: 12px 8px;
+  }
+
+  /* The scroll-mode sheet keeps its paper margins minimal on a phone. */
+  .reader-main {
+    scroll-behavior: auto;
+  }
+}

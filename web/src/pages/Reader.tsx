@@ -9,7 +9,19 @@ import { wordAt } from '../wordHit';
 
 const FONT_KEY = 'epubmaker.fontSize';
 const MODE_KEY = 'epubmaker.readMode';
+const THEME_KEY = 'epubmaker.readTheme';
 const TOC_DOCK_KEY = 'epubmaker.tocDocked';
+
+// Reading surface themes. Only the phone shows the settings panel today, but
+// the class applies to both hosts: the colours are plain CSS overrides on
+// `.reader.theme-*`, so pagination is untouched (text metrics change, but the
+// measure pass re-runs on any relayout anyway).
+type ReadTheme = 'paper' | 'green' | 'dark';
+const THEMES: Array<{ id: ReadTheme; label: string }> = [
+  { id: 'paper', label: '纸白' },
+  { id: 'green', label: '护眼' },
+  { id: 'dark', label: '夜间' },
+];
 // Width of the docked TOC sidebar (kept in sync with --toc-dock-w in styles.css
 // and the .toc sidebar width in scroll mode for visual consistency).
 const TOC_DOCK_W = 268;
@@ -464,6 +476,7 @@ export default function Reader() {
   const [fontSize, setFontSize] = useState(() => Number(localStorage.getItem(FONT_KEY)) || 17);
 
   const [mode, setMode] = useState<ReadMode>(() => (localStorage.getItem(MODE_KEY) as ReadMode) || 'scroll');
+  const [theme, setTheme] = useState<ReadTheme>(() => (localStorage.getItem(THEME_KEY) as ReadTheme) || 'paper');
 
   // paged reading state
   const [pageIndex, setPageIndex] = useState(0);
@@ -503,6 +516,9 @@ export default function Reader() {
 
   // overlays
   const [tocOpen, setTocOpen] = useState(false);
+  // Mobile reading settings sheet (font size / mode / theme). Phone-only
+  // entry point, so it starts closed everywhere.
+  const [settingsOpen, setSettingsOpen] = useState(false);
   // Docked TOC mode: the chapter list is pinned as a persistent sidebar on the
   // left instead of opening as a transient drawer.
   const [tocDocked, setTocDocked] = useState(() => localStorage.getItem(TOC_DOCK_KEY) === '1');
@@ -678,6 +694,7 @@ export default function Reader() {
 
   useEffect(() => localStorage.setItem(FONT_KEY, String(fontSize)), [fontSize]);
   useEffect(() => localStorage.setItem(MODE_KEY, mode), [mode]);
+  useEffect(() => localStorage.setItem(THEME_KEY, theme), [theme]);
   useEffect(() => localStorage.setItem(TOC_DOCK_KEY, tocDocked ? '1' : '0'), [tocDocked]);
 
   // The docked TOC is 268px of a 390px phone — 122px left for the text. It is a
@@ -1441,11 +1458,18 @@ export default function Reader() {
         active = false;
         return;
       }
-      // A drawer is modal: the page behind it is not interactive, and dragging
-      // inside the drawer (its chapter list scrolls) must not turn pages
-      // underneath it.
+      // Modal surfaces own their gestures: dragging inside the drawer's chapter
+      // list, the settings sheet or the chrome bars (its slider is a horizontal
+      // drag!) must never turn pages underneath.
       const target = e.target as HTMLElement | null;
-      if (target && target.closest('.drawer-mask')) {
+      if (
+        target &&
+        (target.closest('.drawer-mask') ||
+          target.closest('.sheet-mask') ||
+          target.closest('.reader-chrome') ||
+          target.closest('input') ||
+          target.closest('textarea'))
+      ) {
         active = false;
         return;
       }
@@ -1575,6 +1599,7 @@ export default function Reader() {
         if (lookupCard) { setLookupCard(null); return; }
         if (popover) { setPopover(null); return; }
         if (sel) { setSel(null); return; }
+        if (settingsOpen) { setSettingsOpen(false); return; }
         if (tocOpen) { setTocOpen(false); return; }
         if (bmOpen) { setBmOpen(false); return; }
         if (annOpen) { setAnnOpen(false); return; }
@@ -1633,7 +1658,7 @@ export default function Reader() {
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [mode, prev, next, pageIndex, pageCount, chromeOpen, chromeHover, popover, sel, bmOpen, annOpen, tocOpen, lookupCard, current, id, detour]);
+  }, [mode, prev, next, pageIndex, pageCount, chromeOpen, chromeHover, popover, sel, bmOpen, annOpen, tocOpen, settingsOpen, lookupCard, current, id, detour]);
 
   /* ---- hover the top/bottom edge to reveal the reader chrome (paged) ---- */
   useEffect(() => {
@@ -1757,6 +1782,13 @@ export default function Reader() {
       }
       const selection = window.getSelection();
       if (selection && !selection.isCollapsed && selection.toString().trim()) return;
+      // Touch division of labour, same as paged mode: a tap on a word looks it
+      // up; a tap on blank space toggles the chrome, which is the only way a
+      // phone reaches the toolbar in scrolling mode.
+      if (touchPrimary && !scheduleWordLookup(e.clientX, e.clientY)) {
+        setChromeOpen((o) => !o);
+        return;
+      }
       scheduleWordLookup(e.clientX, e.clientY);
     }
     root.addEventListener('mouseup', onMouseUp);
@@ -1771,7 +1803,7 @@ export default function Reader() {
     // `html` is a dependency because on a cold open the content node does not
     // exist yet when this effect first runs — without it the listeners would
     // never attach and selecting text would do nothing.
-  }, [mode, annotations, html, current, dictReady]);
+  }, [mode, annotations, html, current, dictReady, touchPrimary]);
 
   /* ---- dictionary / vocabulary ---- */
 
@@ -1950,7 +1982,9 @@ export default function Reader() {
   async function addBookmarkNow() {
     if (!current) return;
     try {
-      const off = offsetForPage(pageIndex);
+      // Both modes anchor to a source character offset; scrolling has no page
+      // map, so the anchor is whatever text sits at the top of the pane.
+      const off = mode === 'paged' ? offsetForPage(pageIndex) : offsetAtViewportTop();
       const b = await api.addBookmark(id, current, off, '');
       setBookmarks((prev) => [...prev, b]);
       toast('已添加书签', 'success');
@@ -1963,9 +1997,29 @@ export default function Reader() {
     try {
       await api.deleteBookmark(bid);
       setBookmarks((prev) => prev.filter((x) => x.id !== bid));
+      toast('已删除书签', 'success');
     } catch (e) {
       toastError(e);
     }
+  }
+
+  // The bookmark standing for "this page" (phone: the star in the top bar).
+  // Paged mode matches exactly via the offset->page map; scrolling compares
+  // against the offset at the top of the pane with slack, because the pane
+  // moves in pixel steps the map does not model.
+  function currentPageBookmark(): Bookmark | null {
+    if (!current) return null;
+    if (mode === 'paged') {
+      return bookmarks.find((b) => b.chapterId === current && pageIndexForOffset(b.anchor) === pageIndex) ?? null;
+    }
+    const top = offsetAtViewportTop();
+    return bookmarks.find((b) => b.chapterId === current && Math.abs(b.anchor - top) < 500) ?? null;
+  }
+
+  async function togglePageBookmark() {
+    const existing = currentPageBookmark();
+    if (existing) await removeBookmark(existing.id);
+    else await addBookmarkNow();
   }
 
   function jumpBookmark(b: Bookmark) {
@@ -1980,6 +2034,131 @@ export default function Reader() {
   /* ---- render ---- */
   if (loading) return <div className="loading">加载中…</div>;
   if (!book) return <div className="page empty">书籍不存在</div>;
+
+  /* ---- mobile chrome (微信读书 / 番茄 style) ----
+     Top bar: back + chapter title + a page-bookmark star. Bottom: (paged) a
+     chapter slider between 上一章/下一章, a percentage caption, and a five-slot
+     action row (目录 · 书签 · 划线 · 整理 · 设置). The desktop keeps its own
+     bars — the two never render together, gated on touchPrimary. */
+  // Only measured while the mobile chrome is actually up: in scroll mode the
+  // helper walks text nodes, and doing that on every desktop render is waste.
+  const pageBookmark = touchPrimary && chromeOpen ? currentPageBookmark() : null;
+
+  const iconBack = (
+    <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M15 18l-6-6 6-6" />
+    </svg>
+  );
+  const iconBookmark = (filled: boolean) => (
+    <svg viewBox="0 0 24 24" width="20" height="20" fill={filled ? 'currentColor' : 'none'} stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M6 4h12v17l-6-4.2L6 21z" />
+    </svg>
+  );
+  const iconToc = (
+    <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+      <path d="M4 6h16M4 12h16M4 18h10" />
+    </svg>
+  );
+  const iconPen = (
+    <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M12 20h9" />
+      <path d="M16.5 3.5a2.12 2.12 0 013 3L7 19l-4 1 1-4z" />
+    </svg>
+  );
+  const iconEdit = (
+    <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M11 4H4v16h16v-7" />
+      <path d="M17.5 3.5a2.12 2.12 0 013 3L13 14l-4 1 1-4z" />
+    </svg>
+  );
+
+  const mTabsRow = (
+    <div className="m-tabs">
+      <button className="m-tab" onClick={() => setTocOpen(true)}>
+        {iconToc}
+        <span>目录</span>
+      </button>
+      <button className="m-tab" onClick={() => setBmOpen(true)}>
+        {iconBookmark(false)}
+        <span>书签</span>
+      </button>
+      <button className="m-tab" onClick={() => setAnnOpen(true)}>
+        {iconPen}
+        <span>划线</span>
+      </button>
+      <button className="m-tab" onClick={() => nav(`/books/${id}/edit`)}>
+        {iconEdit}
+        <span>整理</span>
+      </button>
+      <button className="m-tab" onClick={() => setSettingsOpen(true)}>
+        <span className="m-aa">Aa</span>
+        <span>设置</span>
+      </button>
+    </div>
+  );
+
+  const mTopBar = (
+    <div className="reader-chrome top m-top">
+      <button className="chrome-icon" onClick={exitReading} aria-label={detour ? '返回生词本' : '返回书架'}>
+        {iconBack}
+      </button>
+      <div className="m-title">{currentChapter?.title || book.title}</div>
+      <button
+        className={`chrome-icon star${pageBookmark ? ' on' : ''}`}
+        onClick={togglePageBookmark}
+        aria-label={pageBookmark ? '移除本页书签' : '添加书签'}
+      >
+        {iconBookmark(!!pageBookmark)}
+      </button>
+    </div>
+  );
+
+  // Paged bottom bar: the slider is chapter-local (what 番茄 does) — chapter
+  // jumps live on its two ends. Dragging only moves pageIndex, so the offset
+  // map stays valid and no re-measure is needed.
+  const mBottomPaged = (
+    <div className="reader-chrome bottom m-bottom">
+      <div className="m-slider-row">
+        <button
+          className="chrome-icon text"
+          disabled={!prev}
+          onClick={() => prev && openChapter(prev.id, { type: 'last' })}
+        >
+          上一章
+        </button>
+        <input
+          className="m-slider"
+          type="range"
+          min={0}
+          max={Math.max(0, maxPageIndex)}
+          value={Math.min(pageIndex, maxPageIndex)}
+          onChange={(e) => {
+            setLookupCard(null);
+            setSel(null);
+            setPopover(null);
+            setPageIndex(Number(e.target.value));
+          }}
+          aria-label="阅读进度"
+        />
+        <button
+          className="chrome-icon text"
+          disabled={!next}
+          onClick={() => next && openChapter(next.id, { type: 'first' })}
+        >
+          下一章
+        </button>
+      </div>
+      <div className="m-slider-pct">
+        {Math.round(progressPct)}% · 第 {pageIndex + 1}/{pageCount} 页
+      </div>
+      {mTabsRow}
+    </div>
+  );
+
+  const mBottomScroll = (
+    <div className="reader-chrome bottom m-bottom">{mTabsRow}</div>
+  );
+
 
   // Overlays live outside both reading layouts: they are viewport-anchored, and
   // keeping one copy is what makes "select a word, look it up" work while
@@ -2090,6 +2269,54 @@ export default function Reader() {
           </div>
         </div>
       )}
+
+      {/* mobile reading settings (Aa) */}
+      {settingsOpen && (
+        <div className="sheet-mask" onClick={() => setSettingsOpen(false)}>
+          <div className="sheet rd-sheet" onClick={(e) => e.stopPropagation()}>
+            <div className="rd-set-row">
+              <span className="rd-set-label">字号</span>
+              <div className="rd-set-ctrl">
+                <button className="rd-a" onClick={() => setFontSize((f) => Math.max(13, f - 1))}>
+                  A−
+                </button>
+                <span className="rd-font-preview" style={{ fontSize: Math.min(fontSize, 30) }}>
+                  字
+                </span>
+                <button className="rd-a" onClick={() => setFontSize((f) => Math.min(26, f + 1))}>
+                  A+
+                </button>
+              </div>
+            </div>
+            <div className="rd-set-row">
+              <span className="rd-set-label">翻页</span>
+              <div className="rd-seg">
+                <button className={mode === 'paged' ? 'on' : ''} onClick={() => setMode('paged')}>
+                  翻页
+                </button>
+                <button className={mode === 'scroll' ? 'on' : ''} onClick={() => setMode('scroll')}>
+                  滚动
+                </button>
+              </div>
+            </div>
+            <div className="rd-set-row last">
+              <span className="rd-set-label">背景</span>
+              <div className="rd-themes">
+                {THEMES.map((t) => (
+                  <button
+                    key={t.id}
+                    className={`rd-theme t-${t.id}${theme === t.id ? ' on' : ''}`}
+                    onClick={() => setTheme(t.id)}
+                  >
+                    <span className="rd-theme-dot" />
+                    <span>{t.label}</span>
+                  </button>
+                ))}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </>
   );
 
@@ -2101,7 +2328,7 @@ export default function Reader() {
   const detourBar = detour ? (
     <div
       className={`detour-bar${mode === 'paged' ? ' floating' : ''}`}
-      style={mode === 'paged' && chromeOpen ? { bottom: 58 } : undefined}
+      style={mode === 'paged' && chromeOpen ? { bottom: touchPrimary ? 132 : 58 } : undefined}
     >
       <span className="detour-word">{detour.word}</span>
       <span className="detour-hint">生词本跳转 · 临时查看，不记录阅读进度</span>
@@ -2125,7 +2352,7 @@ export default function Reader() {
 
   if (mode === 'scroll') {
     return (
-      <div className="reader">
+      <div className={'reader' + (theme !== 'paper' ? ` theme-${theme}` : '')}>
         <aside className="toc">
           <div className="toc-head">
             目录 · {chapters.length} 章
@@ -2211,6 +2438,13 @@ export default function Reader() {
             </button>
           </div>
         </div>
+
+        {touchPrimary && chromeOpen && (
+          <>
+            {mTopBar}
+            {mBottomScroll}
+          </>
+        )}
       </div>
     );
   }
@@ -2232,7 +2466,15 @@ export default function Reader() {
   const visibleSheets = geometryReady ? Math.min(pagesPerView, Math.max(0, pageCount - pageIndex)) : 0;
 
   return (
-    <div className={"reader reader-paged" + (tocDocked ? " toc-docked" : "") + (fillLayout ? " reader-fill" : "")} ref={readerRef}>
+    <div
+      className={
+        'reader reader-paged' +
+        (tocDocked ? ' toc-docked' : '') +
+        (fillLayout ? ' reader-fill' : '') +
+        (theme !== 'paper' ? ` theme-${theme}` : '')
+      }
+      ref={readerRef}
+    >
       {tocDocked && (
         <aside className="toc-dock">
           <div className="toc-head">
@@ -2366,8 +2608,18 @@ export default function Reader() {
 
       {detourBar}
 
-      {(chromeOpen || chromeHover) && (
-        <>
+      {/* Phone gets its own bars (top: back/title/star; bottom: slider + tabs);
+          desktop keeps the original single-row chrome with hover reveal. */}
+      {touchPrimary ? (
+        chromeOpen && (
+          <>
+            {mTopBar}
+            {mBottomPaged}
+          </>
+        )
+      ) : (
+        (chromeOpen || chromeHover) && (
+          <>
           <div className="reader-chrome top">
             <div className="chrome-left">
               <button className="btn sm" onClick={() => nav(detour ? '/vocab' : '/')}>
@@ -2429,6 +2681,7 @@ export default function Reader() {
             </button>
           </div>
         </>
+        )
       )}
 
       {/* TOC drawer */}
