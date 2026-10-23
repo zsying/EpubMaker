@@ -18,6 +18,11 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   top/bottom margin to toggle the chrome, the edges to turn, a word to look it
   up. Long-press selection drives the lookup toolbar (a touch screen never fires
   `mouseup`), and a swipe still turns the page while a word card is open.
+- **A phone-shaped shelf** — the top bar and import controls now fit a phone.
+  Five nav items laid out to 539px on a 390px screen with no scroll, so
+  「生词本」 and 「WebDAV」 were painted past the edge; the import buttons opened
+  native dialogs a phone does not have. Import on the phone goes through WebDAV,
+  the one route that exists there.
 
 ## [0.2.0] — 2026-10-23
 
