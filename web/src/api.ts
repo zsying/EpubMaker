@@ -9,6 +9,67 @@
 // window.go.app.App (SelectEpubFiles / SelectCoverFile); the chosen filesystem
 // path is read on the Go side, so no multipart upload is required.
 
+/** One dictionary headword as the reader popover renders it. */
+export interface WordDetail {
+  word: string;
+  phonetic: string;
+  /** Chinese translation, newline separated ("\n" already unescaped server-side). */
+  translation: string;
+  /** English definition, newline separated. */
+  definition: string;
+  pos: string;
+  tag: string;
+  collins: number;
+  frq: number;
+  bnc: number;
+}
+
+/**
+ * Result of looking a word up while reading.
+ *
+ * `entry` is the word as it was met — ECDICT ships inflected forms as their own
+ * headwords, and those often define nothing but "past tense of X". `base` is
+ * the lemma behind it, present only when it differs, so the popover can show
+ * the real meaning instead of a cross-reference.
+ */
+export interface LookupResult {
+  found: boolean;
+  query: string;
+  matched: string;
+  lemmatized: boolean;
+  entry?: WordDetail | null;
+  base?: WordDetail | null;
+  /** Top-5000 basic vocabulary: never auto-added to the notebook. */
+  common: boolean;
+  /** How many times this word has been looked up (0 for basic vocabulary). */
+  seenCount: number;
+  /** Whether this lookup put the word in the notebook. */
+  recorded: boolean;
+  vocabId: string;
+}
+
+/** A notebook entry. Words are global — they outlive the book they came from. */
+export interface VocabEntry {
+  id: string;
+  term: string;
+  surface: string;
+  bookId: string;
+  chapterId: string;
+  /** Character offset inside the chapter, for jumping back to the sentence. */
+  offset: number;
+  context: string;
+  status: 'new' | 'learning' | 'known' | 'ignored';
+  lookups: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface DictStatus {
+  installed: boolean;
+  path: string;
+  entries: number;
+}
+
 export interface Book {
   id: string;
   title: string;
@@ -285,5 +346,33 @@ export const api = {
     call<WebDavEntry[]>('WebdavList', conn, dirPath),
 
   webdavImport: (conn: WebDavConn, items: { path: string; name: string }[]) =>
-    call<{ books: Book[]; errors: string[] }>('WebdavImport', conn, items)
+    call<{ books: Book[]; errors: string[] }>('WebdavImport', conn, items),
+
+  /* ---------------- reading: dictionary / vocabulary ---------------- */
+
+  dictStatus: () => call<DictStatus>('DictStatus'),
+
+  /** Opens the native csv picker; returns '' when the user cancels. */
+  selectDictFile: () => callApp<string>('SelectDictFile'),
+
+  /** Builds the local dictionary from an ECDICT csv chosen on disk. Blocking. */
+  dictImport: (csvPath: string) => call<{ entries: number; path: string }>('DictImportCSV', csvPath),
+
+  lookupWord: (bookId: string, chapterId: string, offset: number, word: string, context: string) =>
+    call<LookupResult>('LookupWord', bookId, chapterId, offset, word, context),
+
+  vocabAdd: (
+    term: string,
+    surface: string,
+    bookId: string,
+    chapterId: string,
+    offset: number,
+    context: string
+  ) => call<VocabEntry>('VocabAdd', term, surface, bookId, chapterId, offset, context),
+
+  listVocab: (status: string, keyword: string) => call<VocabEntry[]>('ListVocab', status, keyword),
+
+  setVocabStatus: (vid: string, status: string) => call<boolean>('SetVocabStatus', vid, status),
+
+  deleteVocab: (vid: string) => call<boolean>('DeleteVocab', vid)
 };

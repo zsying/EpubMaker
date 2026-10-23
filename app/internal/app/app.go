@@ -91,3 +91,16 @@ func (a *App) SelectCoverFile() string {
 	})
 	return path
 }
+
+// SelectDictFile opens a native dialog for an ECDICT-format csv. The file is
+// read and imported on the Go side, so the 60 MB+ dictionary never passes
+// through the WebView.
+func (a *App) SelectDictFile() string {
+	path, _ := runtime.OpenFileDialog(a.ctx, runtime.OpenDialogOptions{
+		Title: "选择词库文件 (ECDICT csv)",
+		Filters: []runtime.FileFilter{
+			{DisplayName: "ECDICT 词库 (*.csv)", Pattern: "*.csv"},
+		},
+	})
+	return path
+}

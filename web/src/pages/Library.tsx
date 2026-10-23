@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import { api, AppPaths, Book, downloadDataUrl } from '../api';
+import { api, AppPaths, Book, DictStatus, downloadDataUrl } from '../api';
 import { toast, toastError } from '../toast';
 
 export default function Library() {
@@ -10,6 +10,10 @@ export default function Library() {
   const [importing, setImporting] = useState(false);
   const [over, setOver] = useState(false);
   const [paths, setPaths] = useState<AppPaths | null>(null);
+  // Local ECDICT dictionary: imported from a csv chosen on disk. Without it the
+  // reader's lookup is disabled, so its state is surfaced here.
+  const [dict, setDict] = useState<DictStatus | null>(null);
+  const [dictBusy, setDictBusy] = useState(false);
   const nav = useNavigate();
 
   const load = useCallback(async (kw?: string) => {
@@ -26,6 +30,7 @@ export default function Library() {
   useEffect(() => {
     void load();
     api.paths().then(setPaths).catch(() => undefined);
+    api.dictStatus().then(setDict).catch(() => undefined);
   }, [load]);
 
   useEffect(() => {
@@ -58,6 +63,26 @@ export default function Library() {
     }
   }
 
+  // Opens the native csv picker and builds the local dictionary. This blocks
+  // for a few seconds on the full 770k-entry ECDICT export.
+  async function doImportDict() {
+    if (dict?.installed && !confirm(`已安装词库（${dict.entries} 条）。重新导入会覆盖现有词库，继续？`)) {
+      return;
+    }
+    try {
+      const path = await api.selectDictFile();
+      if (!path) return;
+      setDictBusy(true);
+      const res = await api.dictImport(path);
+      toast(`词库导入完成：${res.entries} 条`, 'success');
+      setDict(await api.dictStatus());
+    } catch (e) {
+      toastError(e);
+    } finally {
+      setDictBusy(false);
+    }
+  }
+
   async function remove(book: Book) {
     if (!confirm(`确定删除《${book.title}》？该书将移入回收站，可随时恢复。`)) return;
     try {
@@ -78,6 +103,14 @@ export default function Library() {
         <Link className="btn ghost" to="/trash">
           回收站
         </Link>
+        <button
+          className="btn ghost"
+          disabled={dictBusy}
+          title={dict?.installed ? `词库路径：${dict.path}` : '尚未安装词库，查词功能不可用'}
+          onClick={() => void doImportDict()}
+        >
+          {dictBusy ? '导入词库…' : dict?.installed ? `词库 ${dict.entries} 条` : '导入词库'}
+        </button>
         <input
           className="input"
           style={{ width: 220 }}

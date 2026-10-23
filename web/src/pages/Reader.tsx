@@ -1,7 +1,7 @@
 import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent } from 'react';
 import { Link, useLocation, useNavigate, useParams } from 'react-router-dom';
 import DOMPurify from 'dompurify';
-import { api, Annotation, Book, Bookmark, Chapter, TocEntry } from '../api';
+import { api, Annotation, Book, Bookmark, Chapter, LookupResult, TocEntry } from '../api';
 import { Caret } from '../Caret';
 import { toast, toastError } from '../toast';
 
@@ -187,6 +187,15 @@ type PageIntent = { type: 'first' | 'last' | 'restore'; offset?: number } | null
 
 type SelState = { x: number; y: number; start: number; end: number; text: string } | null;
 type PopoverState = { x: number; y: number; ann: Annotation } | null;
+// `offset`/`context` are captured at lookup time so a manual "add to notebook"
+// can still record where the word came from.
+type LookupCardState = {
+  x: number;
+  y: number;
+  res: LookupResult;
+  offset: number;
+  context: string;
+} | null;
 
 const COLORS = ['yellow', 'green', 'red'] as const;
 
@@ -207,6 +216,22 @@ function getSelectionOffsets(root: HTMLElement, range: Range): { start: number; 
   const a = charOffset(root, range.startContainer, range.startOffset);
   const b = charOffset(root, range.endContainer, range.endOffset);
   return b < a ? { start: b, end: a } : { start: a, end: b };
+}
+
+// The sentence surrounding [start,end) in the rendered chapter text, capped so
+// a paragraph-long sentence cannot bloat a notebook entry. Used as the example
+// context saved alongside a looked-up word.
+function sentenceAt(root: HTMLElement, start: number, end: number): string {
+  const text = root.textContent || '';
+  const isBreak = (c: string) => c === '.' || c === '!' || c === '?' || c === '\n';
+  let s = start;
+  while (s > 0 && start - s < 220 && !isBreak(text[s - 1])) s--;
+  let e = end;
+  while (e < text.length && e - end < 220 && !isBreak(text[e])) e++;
+  return text
+    .slice(s, e + 1)
+    .replace(/\s+/g, ' ')
+    .trim();
 }
 
 // Wraps the character ranges of each annotation in <mark> elements. Operates on
@@ -312,6 +337,13 @@ export default function Reader() {
   const [sel, setSel] = useState<SelState>(null);
   const [popover, setPopover] = useState<PopoverState>(null);
   const [noteDraft, setNoteDraft] = useState('');
+
+  // Dictionary card for a word picked out of the page. It is positioned in
+  // viewport coordinates and rendered outside the page flow on purpose: this
+  // reader paginates by measuring content height, so anything joining the flow
+  // would change the page count and throw the reader off their page.
+  const [lookupCard, setLookupCard] = useState<LookupCardState>(null);
+  const [lookupBusy, setLookupBusy] = useState(false);
 
   const mainRef = useRef<HTMLDivElement>(null);
   const stageRef = useRef<HTMLDivElement>(null);
@@ -977,6 +1009,8 @@ export default function Reader() {
     if (!el || mode !== 'paged') return;
     const root = el;
     function onMouseUp() {
+      // Any new interaction in the text dismisses the previous dictionary card.
+      setLookupCard(null);
       const selection = window.getSelection();
       if (!selection || selection.isCollapsed || !selection.toString().trim()) {
         setSel(null);
@@ -1015,6 +1049,57 @@ export default function Reader() {
       root.removeEventListener('click', onClick);
     };
   }, [mode, annotations]);
+
+  /* ---- dictionary / vocabulary ---- */
+
+  async function lookupSelection() {
+    if (!sel || !current) return;
+    const word = sel.text.trim();
+    if (!word) return;
+    const root = contentRef.current;
+    const context = root ? sentenceAt(root, sel.start, sel.end) : '';
+    const at = { x: sel.x, y: sel.y };
+    const offset = sel.start;
+    setSel(null);
+    setLookupBusy(true);
+    try {
+      const res = await api.lookupWord(id, current, offset, word, context);
+      setLookupCard({ ...at, res, offset, context });
+    } catch (e) {
+      toastError(e);
+    } finally {
+      setLookupBusy(false);
+    }
+  }
+
+  // Pronunciation via the WebView's built-in speech synthesis: no network, no
+  // bundled audio, works offline.
+  function speak(text: string) {
+    if (!text) return;
+    try {
+      const u = new SpeechSynthesisUtterance(text);
+      u.lang = 'en-US';
+      u.rate = 0.9;
+      window.speechSynthesis.cancel();
+      window.speechSynthesis.speak(u);
+    } catch {
+      /* speech synthesis unavailable in this WebView */
+    }
+  }
+
+  async function addCardToNotebook() {
+    if (!lookupCard) return;
+    const { res, offset, context } = lookupCard;
+    const entry = res.entry;
+    if (!entry) return;
+    try {
+      const v = await api.vocabAdd(entry.word, res.query || entry.word, id, current || '', offset, context);
+      setLookupCard({ ...lookupCard, res: { ...res, recorded: true, vocabId: v.id } });
+      toast('已加入生词本', 'success');
+    } catch (e) {
+      toastError(e);
+    }
+  }
 
   /* ---- annotation / bookmark actions ---- */
   async function createAnnotation(color: string) {
@@ -1491,9 +1576,73 @@ export default function Reader() {
       {/* selection toolbar */}
       {sel && (
         <div className="sel-toolbar" style={{ left: sel.x, top: sel.y }}>
+          <button className="sel-lookup" title="查词" onClick={lookupSelection} disabled={lookupBusy}>
+            {lookupBusy ? '查询中' : '查词'}
+          </button>
           {COLORS.map((c) => (
             <button key={c} className={`swatch sw-${c}`} title={c} onClick={() => createAnnotation(c)} />
           ))}
+        </div>
+      )}
+
+      {/* dictionary card — fixed layer, never part of the page layout */}
+      {lookupCard && (
+        <div className="dict-card" style={{ left: lookupCard.x, top: lookupCard.y + 14 }}>
+          <button className="dict-close" title="关闭" onClick={() => setLookupCard(null)}>
+            ×
+          </button>
+          {!lookupCard.res.found || !lookupCard.res.entry ? (
+            <div className="dict-miss">
+              词库未收录 <b>{lookupCard.res.query}</b>
+            </div>
+          ) : (
+            <>
+              <div className="dict-head">
+                <span className="dict-word">{lookupCard.res.entry.word}</span>
+                {lookupCard.res.entry.phonetic && (
+                  <span className="dict-phon">/{lookupCard.res.entry.phonetic}/</span>
+                )}
+                <button
+                  className="dict-speak"
+                  title="朗读"
+                  onClick={() => speak(lookupCard.res.entry?.word || '')}
+                >
+                  发音
+                </button>
+              </div>
+              {lookupCard.res.entry.translation ? (
+                <div className="dict-trans">{lookupCard.res.entry.translation}</div>
+              ) : (
+                <div className="dict-trans muted">{lookupCard.res.entry.definition || '暂无释义'}</div>
+              )}
+              {lookupCard.res.base && (
+                <div className="dict-base">
+                  <span className="dict-base-label">原型</span>
+                  <b>{lookupCard.res.base.word}</b>
+                  {lookupCard.res.base.phonetic && (
+                    <span className="dict-phon">/{lookupCard.res.base.phonetic}/</span>
+                  )}
+                  {lookupCard.res.base.translation && (
+                    <div className="dict-base-trans">{lookupCard.res.base.translation}</div>
+                  )}
+                </div>
+              )}
+              <div className="dict-foot">
+                {lookupCard.res.recorded ? (
+                  <span className="dict-saved">已在生词本</span>
+                ) : (
+                  <>
+                    <span className="muted">
+                      {lookupCard.res.common ? '常用词，不自动收录' : '再查一次自动收录'}
+                    </span>
+                    <button className="btn sm" onClick={addCardToNotebook}>
+                      加入生词本
+                    </button>
+                  </>
+                )}
+              </div>
+            </>
+          )}
         </div>
       )}
 

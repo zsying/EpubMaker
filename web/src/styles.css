@@ -1133,6 +1133,120 @@ a {
   border-radius: 8px;
   box-shadow: 0 6px 18px rgba(0, 0, 0, 0.3);
 }
+
+.sel-lookup {
+  height: 22px;
+  padding: 0 9px;
+  border: 0;
+  border-radius: 4px;
+  background: var(--accent);
+  color: #fff;
+  font-family: var(--font);
+  font-size: 12px;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.sel-lookup:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+/* Dictionary card: a fixed overlay above the page. It must never join the page
+   flow — paginated mode measures content height, so an in-flow card would
+   change the page count and move the reader. */
+.dict-card {
+  position: fixed;
+  z-index: 62;
+  transform: translateX(-50%);
+  width: 330px;
+  max-height: 62vh;
+  overflow-y: auto;
+  padding: 12px 14px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  font-size: 13px;
+  line-height: 1.6;
+}
+.dict-close {
+  position: absolute;
+  top: 6px;
+  right: 8px;
+  width: 20px;
+  height: 20px;
+  border: 0;
+  background: transparent;
+  color: var(--text-3);
+  font-size: 16px;
+  line-height: 1;
+  cursor: pointer;
+}
+.dict-head {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding-right: 18px;
+}
+.dict-word {
+  font-family: var(--font-serif);
+  font-size: 19px;
+  font-weight: 600;
+  color: var(--text);
+}
+.dict-phon {
+  color: var(--text-2);
+  font-size: 12px;
+}
+.dict-speak {
+  margin-left: auto;
+  padding: 2px 8px;
+  border: 1px solid var(--border-strong);
+  border-radius: 6px;
+  background: var(--panel-2);
+  color: var(--text-2);
+  font-size: 12px;
+  cursor: pointer;
+}
+.dict-trans {
+  margin-top: 8px;
+  color: var(--text);
+  white-space: pre-line;
+}
+.dict-base {
+  margin-top: 10px;
+  padding-top: 8px;
+  border-top: 1px dashed var(--border);
+  color: var(--text-2);
+}
+.dict-base-label {
+  margin-right: 6px;
+  color: var(--text-3);
+  font-size: 11px;
+}
+.dict-base-trans {
+  margin-top: 2px;
+  white-space: pre-line;
+}
+.dict-foot {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 10px;
+  padding-top: 8px;
+  border-top: 1px solid var(--border);
+  font-size: 12px;
+}
+.dict-foot .btn {
+  margin-left: auto;
+}
+.dict-saved {
+  color: var(--ok);
+}
+.dict-miss {
+  padding-right: 18px;
+  color: var(--text-2);
+}
 .swatch {
   width: 22px;
   height: 22px;
