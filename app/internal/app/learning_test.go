@@ -351,8 +351,9 @@ func TestVocabStatsCountsByStatus(t *testing.T) {
 	}
 }
 
-// The review session is built from the queue, not from whatever the notebook
-// page happened to have loaded, and graded words keep their meaning attached.
+// The review session is built from the schedule, not from whatever the notebook
+// page happened to have loaded: a word graded a moment ago is not due again yet,
+// and graded words keep their meaning attached when it does come back.
 func TestVocabQueueIsTheReviewSession(t *testing.T) {
 	resetPolicy(t)
 	b := &Backend{}
@@ -371,7 +372,26 @@ func TestVocabQueueIsTheReviewSession(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	// Both words are now scheduled — one ten minutes out, one a day out — so
+	// nothing is due and the session is empty.
 	q, err := b.VocabQueue(0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(q) != 0 {
+		t.Fatalf("queue = %+v, want nothing due yet", q)
+	}
+
+	// Ten minutes later the missed word comes back.
+	d, err := db.Open()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := d.Exec(`UPDATE vocab SET due_at = ? WHERE id = ?`,
+		time.Now().UTC().Add(-time.Minute).Format("2006-01-02T15:04:05Z"), missed.ID); err != nil {
+		t.Fatal(err)
+	}
+	q, err = b.VocabQueue(0)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -3,6 +3,7 @@ package vocab
 import (
 	"os"
 	"testing"
+	"time"
 
 	"epubmaker-desktop/internal/db"
 )
@@ -254,7 +255,7 @@ func TestDropSeen(t *testing.T) {
 
 // "learning" must mean something earned: a word the reader has never been
 // asked about is still new, and only a failed review puts it in progress.
-func TestGradeMovesThroughLearningToKnown(t *testing.T) {
+func TestGradeWalksTheSM2Ladder(t *testing.T) {
 	reset(t)
 	v, err := Record("blorp", "blorp", "b1", "c1", 10, "a blorp appeared")
 	if err != nil {
@@ -262,6 +263,56 @@ func TestGradeMovesThroughLearningToKnown(t *testing.T) {
 	}
 	if v.Status != StatusNew || v.Reviews != 0 || v.LastReviewedAt != "" {
 		t.Fatalf("fresh entry already looks reviewed: %+v", v)
+	}
+	if v.DueAt != "" || v.IntervalDays != 0 {
+		t.Fatalf("a new word must be due immediately: %+v", v)
+	}
+
+	// SM-2 over a fresh word: 1 day, 6 days, then interval x ease. The status
+	// only turns `known` when the interval is evidence (three weeks), not after
+	// one lucky pass.
+	want := []struct {
+		interval float64
+		status   string
+	}{{1, StatusLearning}, {6, StatusLearning}, {16, StatusLearning}, {45, StatusKnown}}
+
+	prevDue := ""
+	for i, w := range want {
+		got, err := Grade(v.ID, true)
+		if err != nil {
+			t.Fatalf("Grade(true) #%d: %v", i+1, err)
+		}
+		if got.IntervalDays != w.interval {
+			t.Fatalf("pass %d: interval = %v days, want %v", i+1, got.IntervalDays, w.interval)
+		}
+		if got.Status != w.status {
+			t.Fatalf("pass %d: status = %q, want %q", i+1, got.Status, w.status)
+		}
+		if got.DueAt == "" || got.DueAt == prevDue {
+			t.Fatalf("pass %d: due_at not scheduled forward: %q", i+1, got.DueAt)
+		}
+		if got.Reviews != i+1 {
+			t.Fatalf("pass %d: reviews = %d", i+1, got.Reviews)
+		}
+		prevDue = got.DueAt
+	}
+}
+
+func TestGradeMissSendsTheWordBackToTheTenMinuteStep(t *testing.T) {
+	reset(t)
+	v, err := Record("blorp", "blorp", "b1", "c1", 0, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Grade(v.ID, true); err != nil { // 1 day
+		t.Fatal(err)
+	}
+	hit, err := Grade(v.ID, true) // 6 days
+	if err != nil {
+		t.Fatal(err)
+	}
+	if hit.Ease <= startEase {
+		t.Fatalf("a hit should raise ease: %v", hit.Ease)
 	}
 
 	missed, err := Grade(v.ID, false)
@@ -271,22 +322,50 @@ func TestGradeMovesThroughLearningToKnown(t *testing.T) {
 	if missed.Status != StatusLearning {
 		t.Errorf("status after a miss = %q, want %q", missed.Status, StatusLearning)
 	}
-	if missed.Reviews != 1 || missed.LastReviewedAt == "" {
+	if missed.Reviews != 3 || missed.LastReviewedAt == "" {
 		t.Errorf("a miss must be recorded: reviews=%d last=%q", missed.Reviews, missed.LastReviewedAt)
 	}
-
-	hit, err := Grade(v.ID, true)
+	// Ten minutes, not a day: the word should come back while the miss is fresh.
+	if missed.IntervalDays <= 0 || missed.IntervalDays > 0.01 {
+		t.Errorf("interval after a miss = %v days, want the relearning step", missed.IntervalDays)
+	}
+	if missed.Streak != 0 || missed.Lapses != 1 {
+		t.Errorf("streak/lapses = %d/%d, want 0/1", missed.Streak, missed.Lapses)
+	}
+	if missed.Ease >= hit.Ease {
+		t.Errorf("a miss should lower ease: %v -> %v", hit.Ease, missed.Ease)
+	}
+	// …and the next clean pass earns a day before stretching out again, rather
+	// than jumping straight back to the six-day step.
+	back, err := Grade(v.ID, true)
 	if err != nil {
-		t.Fatalf("Grade(true): %v", err)
+		t.Fatal(err)
 	}
-	if hit.Status != StatusKnown {
-		t.Errorf("status after a hit = %q, want %q", hit.Status, StatusKnown)
+	if back.IntervalDays != 1 {
+		t.Errorf("interval after relearning = %v days, want 1", back.IntervalDays)
 	}
-	if hit.Reviews != 2 {
-		t.Errorf("reviews = %d, want 2", hit.Reviews)
+}
+
+func TestEaseHasAFloor(t *testing.T) {
+	reset(t)
+	v, err := Record("blorp", "blorp", "b1", "c1", 0, "")
+	if err != nil {
+		t.Fatal(err)
 	}
-	if hit.LastReviewedAt == missed.LastReviewedAt {
-		t.Error("last_reviewed_at did not move forward")
+	for i := 0; i < 12; i++ {
+		if _, err := Grade(v.ID, false); err != nil {
+			t.Fatal(err)
+		}
+	}
+	got, err := Get("blorp")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Ease != minEase {
+		t.Errorf("ease = %v, want it clamped at %v", got.Ease, minEase)
+	}
+	if got.Lapses != 12 {
+		t.Errorf("lapses = %d, want 12", got.Lapses)
 	}
 }
 
@@ -297,26 +376,33 @@ func TestGradeUnknownID(t *testing.T) {
 	}
 }
 
-// The queue is a session plan, not the whole notebook: never-reviewed words
-// come first, then the ones seen longest ago, and mastered words stay out.
-func TestQueueOrdersNeverReviewedFirstThenOldest(t *testing.T) {
+// The queue is a schedule, not the notebook: only words whose interval has
+// expired, plus the ones that were never scheduled at all.
+func TestQueueReturnsOnlyDueWords(t *testing.T) {
 	reset(t)
 	ids := map[string]string{}
-	for _, term := range []string{"alpha", "beta", "gamma"} {
+	for _, term := range []string{"never", "overdue", "later", "ignored"} {
 		v, err := Record(term, term, "b1", "c1", 0, "")
 		if err != nil {
 			t.Fatal(err)
 		}
 		ids[term] = v.ID
 	}
-	// beta is reviewed first, then gamma: gamma is the more recent miss.
-	if _, err := Grade(ids["beta"], false); err != nil {
-		t.Fatal(err)
+	setDue := func(term, at string) {
+		t.Helper()
+		d, err := db.Open()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := d.Exec(`UPDATE vocab SET due_at = ? WHERE term = ?`, at, term); err != nil {
+			t.Fatal(err)
+		}
 	}
-	if _, err := Grade(ids["gamma"], false); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := Grade(ids["alpha"], true); err != nil {
+	now := time.Now()
+	setDue("overdue", dueIso(now.Add(-2*time.Hour)))
+	setDue("later", dueIso(now.Add(72*time.Hour)))
+	setDue("ignored", dueIso(now.Add(-2*time.Hour))) // due, but ignored
+	if err := UpdateStatus(ids["ignored"], StatusIgnored); err != nil {
 		t.Fatal(err)
 	}
 
@@ -328,17 +414,94 @@ func TestQueueOrdersNeverReviewedFirstThenOldest(t *testing.T) {
 	for _, it := range q {
 		got = append(got, it.Term)
 	}
-	// alpha is known and must not appear; beta was reviewed before gamma, so it
-	// has waited longer and comes first.
-	if len(got) != 2 || got[0] != "beta" || got[1] != "gamma" {
-		t.Fatalf("queue = %v, want [beta gamma]", got)
+	// Never-scheduled first, then the most overdue. "later" is not due yet and
+	// "ignored" is out for good.
+	if len(got) != 2 || got[0] != "never" || got[1] != "overdue" {
+		t.Fatalf("queue = %v, want [never overdue]", got)
 	}
 
 	capped, err := Queue(1)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(capped) != 1 || capped[0].Term != "beta" {
-		t.Errorf("Queue(1) = %+v, want just beta", capped)
+	if len(capped) != 1 || capped[0].Term != "never" {
+		t.Errorf("Queue(1) = %+v, want just never", capped)
+	}
+}
+
+// A mastered word is not banished: it comes back when its long interval is up.
+func TestQueueBringsKnownWordsBackWhenDue(t *testing.T) {
+	reset(t)
+	v, err := Record("blorp", "blorp", "b1", "c1", 0, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 4; i++ {
+		if _, err := Grade(v.ID, true); err != nil {
+			t.Fatal(err)
+		}
+	}
+	got, err := Get("blorp")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Status != StatusKnown {
+		t.Fatalf("status = %q, want known", got.Status)
+	}
+	q, err := Queue(0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(q) != 0 {
+		t.Fatalf("a word due in %v days is not due now: %+v", got.IntervalDays, q)
+	}
+
+	// Bring its due date into the past: it must return.
+	d, err := db.Open()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := d.Exec(`UPDATE vocab SET due_at = ? WHERE id = ?`, dueIso(time.Now().Add(-time.Minute)), v.ID); err != nil {
+		t.Fatal(err)
+	}
+	q, err = Queue(0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(q) != 1 || q[0].Term != "blorp" {
+		t.Fatalf("overdue mastered word did not come back: %+v", q)
+	}
+}
+
+// Marking a word known by hand schedules a check instead of hiding it forever.
+func TestUpdateStatusKnownSchedulesACheck(t *testing.T) {
+	reset(t)
+	v, err := Record("blorp", "blorp", "b1", "c1", 0, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := UpdateStatus(v.ID, StatusKnown); err != nil {
+		t.Fatal(err)
+	}
+	got, err := Get("blorp")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.IntervalDays < manualKnownDays {
+		t.Errorf("interval = %v days, want at least %d", got.IntervalDays, manualKnownDays)
+	}
+	if got.DueAt == "" {
+		t.Fatal("a hand-marked word must be scheduled")
+	}
+	if got.Reviews != 0 {
+		t.Errorf("marking known is not a review: reviews = %d", got.Reviews)
+	}
+
+	st, err := CountByStatus()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st.Due != 0 {
+		t.Errorf("due = %d, want 0 for a word scheduled three weeks out", st.Due)
 	}
 }

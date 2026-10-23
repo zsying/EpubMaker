@@ -12,6 +12,7 @@ import (
 	"database/sql"
 	"encoding/hex"
 	"errors"
+	"math"
 	"strings"
 	"time"
 
@@ -47,8 +48,25 @@ type Entry struct {
 	// two, `learning` would be a label with no memory behind it.
 	Reviews        int    `json:"reviews"`
 	LastReviewedAt string `json:"lastReviewedAt"`
-	CreatedAt      string `json:"createdAt"`
-	UpdatedAt      string `json:"updatedAt"`
+
+	// Spaced-repetition state (SM-2 in days).
+	//
+	// IntervalDays is how long the current gap is; 0 means "never scheduled",
+	// which for a brand-new word means "due now". Ease is the SM-2 easiness
+	// factor: it starts at 2.5, grows 0.1 per successful review and drops 0.32
+	// per miss, so a word that keeps being forgotten comes back faster and
+	// faster instead of marching on a fixed calendar.
+	IntervalDays float64 `json:"intervalDays"`
+	Ease         float64 `json:"ease"`
+	// DueAt is RFC3339 UTC ("2026-11-02T09:00:00Z"); empty means due now.
+	DueAt string `json:"dueAt"`
+	// Streak counts consecutive successful reviews, Lapses the total misses.
+	// Streak decides the SM-2 step (1 day, 6 days, then interval × ease).
+	Streak int `json:"streak"`
+	Lapses int `json:"lapses"`
+
+	CreatedAt string `json:"createdAt"`
+	UpdatedAt string `json:"updatedAt"`
 }
 
 // ListOpts filters List. Zero values mean "no filter".
@@ -59,12 +77,15 @@ type ListOpts struct {
 }
 
 const columns = `id, term, surface, book_id, chapter_id, start_offset, context, status,
-                 lookups, reviews, last_reviewed_at, created_at, updated_at`
+                 lookups, reviews, last_reviewed_at,
+                 interval_days, ease, due_at, streak, lapses,
+                 created_at, updated_at`
 
 func scan(row interface{ Scan(...any) error }) (*Entry, error) {
 	e := &Entry{}
 	err := row.Scan(&e.ID, &e.Term, &e.Surface, &e.BookID, &e.ChapterID,
 		&e.Offset, &e.Context, &e.Status, &e.Lookups, &e.Reviews, &e.LastReviewedAt,
+		&e.IntervalDays, &e.Ease, &e.DueAt, &e.Streak, &e.Lapses,
 		&e.CreatedAt, &e.UpdatedAt)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
@@ -146,6 +167,7 @@ type ListItem struct {
 // would drop the word along with the book it came from.
 const listSelect = `SELECT v.id, v.term, v.surface, v.book_id, v.chapter_id, v.start_offset,
 	             v.context, v.status, v.lookups, v.reviews, v.last_reviewed_at,
+	             v.interval_days, v.ease, v.due_at, v.streak, v.lapses,
 	             v.created_at, v.updated_at,
 	             COALESCE(b.title, ''), COALESCE(c.title, '')
 	      FROM vocab v
@@ -176,6 +198,7 @@ func queryList(where []string, args []any, order string, limit int) ([]ListItem,
 		var it ListItem
 		if err := rows.Scan(&it.ID, &it.Term, &it.Surface, &it.BookID, &it.ChapterID,
 			&it.Offset, &it.Context, &it.Status, &it.Lookups, &it.Reviews, &it.LastReviewedAt,
+			&it.IntervalDays, &it.Ease, &it.DueAt, &it.Streak, &it.Lapses,
 			&it.CreatedAt, &it.UpdatedAt, &it.BookTitle, &it.ChapterTitle); err != nil {
 			return nil, err
 		}
@@ -200,16 +223,19 @@ func List(o ListOpts) ([]ListItem, error) {
 	return queryList(where, args, `v.updated_at DESC`, o.Limit)
 }
 
-// Queue is the next review session: everything not yet mastered, words nobody
-// has asked about yet first, then the ones seen longest ago. `limit` keeps a
-// session finite — a pass that can never be finished is one the reader stops
-// starting.
+// Queue is the next review session: every word that has come due. Nothing is
+// included merely because it is unmastered — a word scheduled for next week is
+// not a word you should be asked about today.
+//
+// Words that were never scheduled (due_at empty, i.e. every word at import)
+// come first: they are the ones the reader has never managed to answer. After
+// that the most overdue comes first. `limit` keeps a pass finite — a session
+// that can never be finished is one the reader stops starting.
 func Queue(limit int) ([]ListItem, error) {
 	return queryList(
-		[]string{`v.status IN (?, ?)`},
-		[]any{StatusNew, StatusLearning},
-		// Empty last_reviewed_at sorts first: never reviewed beats overdue.
-		`(v.last_reviewed_at = '') DESC, v.last_reviewed_at ASC, v.updated_at ASC`,
+		[]string{`v.status <> ?`, `(v.due_at = '' OR v.due_at <= ?)`},
+		[]any{StatusIgnored, dueIso(time.Now())},
+		`(v.due_at = '') DESC, v.due_at ASC, v.updated_at ASC`,
 		limit,
 	)
 }
@@ -221,6 +247,9 @@ type Stats struct {
 	Learning int `json:"learning"`
 	Known    int `json:"known"`
 	Ignored  int `json:"ignored"`
+	// Due is what the review button should offer: words whose schedule has come
+	// up, not simply every word not yet mastered.
+	Due int `json:"due"`
 }
 
 // CountByStatus aggregates the notebook in a single pass.
@@ -253,19 +282,47 @@ func CountByStatus() (*Stats, error) {
 			st.Ignored = n
 		}
 	}
-	return st, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	if err := d.QueryRow(
+		`SELECT COUNT(*) FROM vocab WHERE status <> ? AND (due_at = '' OR due_at <= ?)`,
+		StatusIgnored, dueIso(time.Now()),
+	).Scan(&st.Due); err != nil {
+		return nil, err
+	}
+	return st, nil
 }
 
 // UpdateStatus moves an entry between new / learning / known / ignored.
+//
+// Marking a word known by hand is a claim, not a review: it does not touch the
+// review counters, but it does put the word on the schedule three weeks out
+// rather than hiding it, because a claim is exactly what the schedule is there
+// to check later. `ignored` is the real exit from the queue — those words never
+// come back.
 func UpdateStatus(id, status string) error {
 	if !validStatus[status] {
 		return errors.New("vocab: invalid status " + status)
 	}
+	now := nowIso()
 	d, err := db.Open()
 	if err != nil {
 		return err
 	}
-	res, err := d.Exec(`UPDATE vocab SET status = ?, updated_at = ? WHERE id = ?`, status, nowIso(), id)
+	var res sql.Result
+	if status == StatusKnown {
+		res, err = d.Exec(`
+			UPDATE vocab
+			   SET status = ?, updated_at = ?,
+			       interval_days = MAX(interval_days, ?),
+			       due_at = CASE WHEN due_at = '' OR due_at < ? THEN ? ELSE due_at END
+			 WHERE id = ?`,
+			status, now, manualKnownDays, dueIso(time.Now().Add(manualKnownDays*day)),
+			dueIso(time.Now().Add(manualKnownDays*day)), id)
+	} else {
+		res, err = d.Exec(`UPDATE vocab SET status = ?, updated_at = ? WHERE id = ?`, status, now, id)
+	}
 	if err != nil {
 		return err
 	}
@@ -279,24 +336,105 @@ func UpdateStatus(id, status string) error {
 	return nil
 }
 
-// Grade records one review outcome. A hit masters the word; a miss puts it in
-// `learning`, which is the only thing that does — a word the reader has not
-// been asked about yet is still `new`. Every grade is counted, so the notebook
-// can show "reviewed 3 times, last on ..." instead of pretending.
+/* --------------------------- spaced repetition ---------------------------- */
+
+// The scheduler is SM-2 (Wozniak, 1987), reduced to the two grades the card
+// actually offers. Keeping the real formula matters because the alternative —
+// "ask everything that is not mastered, forever" — is not spaced repetition at
+// all, it is the same list every day in a different order.
+const (
+	startEase = 2.5
+	minEase   = 1.3
+	maxEase   = 2.8
+
+	// A miss sends the word to a short relearning step instead of a full day:
+	// the point is to meet it again in the same sitting, while the miss is
+	// fresh, not tomorrow.
+	relearnStep = 10 * time.Minute
+
+	// A word counts as mastered on evidence, not on a click: once its interval
+	// reaches three weeks — 1 → 6 → 16 → 45 days, four clean passes.
+	masterIntervalDays = 21
+
+	// A hand-marked "已掌握" schedules the next check this far out.
+	manualKnownDays = 21
+)
+
+const day = 24 * time.Hour
+
+// dueIso formats a schedule time so that string comparison in SQL is also
+// chronological order: fixed width, UTC, second precision. (RFC3339Nano is not
+// orderable as text — "…:00.5Z" sorts before "…:00Z".)
+func dueIso(t time.Time) string {
+	return t.UTC().Format("2006-01-02T15:04:05Z")
+}
+
+// Grade records one review outcome and schedules the next one. A hit walks the
+// SM-2 ladder (1 day, 6 days, then interval × ease) and nudges ease up; a miss
+// drops back to the ten-minute step and pulls ease down, so a word that keeps
+// being forgotten keeps coming back sooner.
+//
+// Every grade is counted, so the notebook can show "reviewed 3 times, last on
+// ..." instead of pretending.
 func Grade(id string, known bool) (*Entry, error) {
-	status := StatusLearning
-	if known {
-		status = StatusKnown
+	cur, err := GetByID(id)
+	if err != nil {
+		return nil, err
 	}
-	now := nowIso()
+	if cur == nil {
+		return nil, sql.ErrNoRows
+	}
+
+	now := time.Now().UTC()
+	ease := cur.Ease
+	if ease <= 0 {
+		ease = startEase
+	}
+
+	status := StatusLearning
+	streak := cur.Streak
+	lapses := cur.Lapses
+	var interval float64
+
+	if known {
+		switch {
+		case cur.IntervalDays <= 0:
+			// Never scheduled: first clean pass is worth a day.
+			interval = 1
+		case cur.IntervalDays < 1:
+			// Back from a relearning step: earn the day before stretching out.
+			interval = 1
+		case cur.IntervalDays < 6:
+			interval = 6
+		default:
+			interval = math.Round(cur.IntervalDays * ease)
+			if interval < 1 {
+				interval = 1
+			}
+		}
+		ease = math.Min(maxEase, ease+0.1)
+		streak++
+		if interval >= masterIntervalDays {
+			status = StatusKnown
+		}
+	} else {
+		interval = relearnStep.Hours() / 24
+		ease = math.Max(minEase, ease-0.32)
+		streak = 0
+		lapses++
+	}
+
+	due := now.Add(time.Duration(interval * float64(day)))
 	d, err := db.Open()
 	if err != nil {
 		return nil, err
 	}
 	res, err := d.Exec(`
 		UPDATE vocab
-		   SET status = ?, reviews = reviews + 1, last_reviewed_at = ?, updated_at = ?
-		 WHERE id = ?`, status, now, now, id)
+		   SET status = ?, reviews = reviews + 1, last_reviewed_at = ?, updated_at = ?,
+		       interval_days = ?, ease = ?, due_at = ?, streak = ?, lapses = ?
+		 WHERE id = ?`,
+		status, nowIso(), nowIso(), interval, ease, dueIso(due), streak, lapses, id)
 	if err != nil {
 		return nil, err
 	}

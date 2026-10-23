@@ -7,6 +7,7 @@ import (
 	"database/sql"
 	"os"
 	"path/filepath"
+	"time"
 
 	_ "modernc.org/sqlite"
 
@@ -130,6 +131,14 @@ CREATE TABLE IF NOT EXISTS vocab (
   lookups INTEGER NOT NULL DEFAULT 1,
   reviews INTEGER NOT NULL DEFAULT 0,
   last_reviewed_at TEXT NOT NULL DEFAULT '',
+  -- Spaced repetition state. due_at is RFC3339 in UTC at second precision and
+  -- an empty string means "never scheduled" (due now), which is also what every
+  -- row created before scheduling existed gets.
+  interval_days REAL NOT NULL DEFAULT 0,
+  ease REAL NOT NULL DEFAULT 2.5,
+  due_at TEXT NOT NULL DEFAULT '',
+  streak INTEGER NOT NULL DEFAULT 0,
+  lapses INTEGER NOT NULL DEFAULT 0,
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL
 );
@@ -165,6 +174,22 @@ func migrate(d *sql.DB) error {
 	// evidence behind it and the review queue could not be ordered.
 	_, _ = d.Exec(`ALTER TABLE vocab ADD COLUMN reviews INTEGER NOT NULL DEFAULT 0`)
 	_, _ = d.Exec(`ALTER TABLE vocab ADD COLUMN last_reviewed_at TEXT NOT NULL DEFAULT ''`)
+	// Migration: the review queue was an order, not a schedule. Existing rows
+	// start with due_at = '' (due now) and the default ease, so the first pass
+	// over an old notebook simply schedules everything from scratch.
+	_, _ = d.Exec(`ALTER TABLE vocab ADD COLUMN interval_days REAL NOT NULL DEFAULT 0`)
+	_, _ = d.Exec(`ALTER TABLE vocab ADD COLUMN ease REAL NOT NULL DEFAULT 2.5`)
+	_, _ = d.Exec(`ALTER TABLE vocab ADD COLUMN due_at TEXT NOT NULL DEFAULT ''`)
+	_, _ = d.Exec(`ALTER TABLE vocab ADD COLUMN streak INTEGER NOT NULL DEFAULT 0`)
+	_, _ = d.Exec(`ALTER TABLE vocab ADD COLUMN lapses INTEGER NOT NULL DEFAULT 0`)
+	// Words already marked known were "never asked again" under the old model.
+	// Left at due_at = '' they would all flood the first scheduled pass, which is
+	// the opposite of what the reader said about them. Give them the same three
+	// weeks a hand-marked word gets; the WHERE makes this a one-time backfill.
+	// (learning/new words stay due now — they genuinely need asking.)
+	_, _ = d.Exec(`UPDATE vocab SET interval_days = 21, due_at = ?
+	                WHERE status = 'known' AND due_at = ''`,
+		time.Now().UTC().Add(21*24*time.Hour).Format("2006-01-02T15:04:05Z"))
 	return nil
 }
 
