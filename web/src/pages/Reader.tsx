@@ -1,7 +1,7 @@
 import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent } from 'react';
 import { Link, useLocation, useNavigate, useParams } from 'react-router-dom';
 import DOMPurify from 'dompurify';
-import { api, Annotation, Book, Bookmark, Chapter, LookupResult, TocEntry } from '../api';
+import { api, Annotation, Book, Bookmark, Chapter, LookupResult, ReadingProgress, TocEntry } from '../api';
 import { Caret } from '../Caret';
 import { toast, toastError } from '../toast';
 import { Anchor, EDGE_GAP, placeOverlay } from '../overlay';
@@ -201,6 +201,20 @@ type LookupCardState = {
   context: string;
 } | null;
 
+// A visit opened from the notebook: "show me where I met this word". It is a
+// detour, not reading — the position it opens at must not become the reading
+// position, which is why the whole session disables progress saving.
+type Detour = { word: string; surface: string; offset: number };
+
+// Pseudo-annotation id for the word being looked at. Prefixing it keeps it from
+// colliding with real annotation ids, and the click handler skips it because
+// there is nothing to open.
+const ANCHOR_ID = '__vocab_anchor';
+
+/** A range that can be wrapped by applyHighlights. Real annotations satisfy it
+ * structurally; the anchor mark is a bare literal. */
+type Highlight = { id: string; startOffset: number; endOffset: number; color?: string };
+
 // Keeps a fixed-position overlay anchored to a point on screen *and* fully
 // inside the viewport. Two problems this solves, both visible at the margins of
 // the reader: a card centred on a word near the right edge loses half its width
@@ -300,9 +314,30 @@ function sentenceAt(root: HTMLElement, start: number, end: number): string {
     .trim();
 }
 
+// The word a notebook jump points at. Offsets are stored as "where the
+// selection started", so the stored surface text is trusted while it still
+// matches and a word run is used when it has gone stale or was never stored.
+function wordRangeAt(
+  root: HTMLElement,
+  offset: number,
+  candidates: string[],
+): { start: number; end: number } | null {
+  const text = root.textContent || '';
+  if (offset < 0 || offset >= text.length) return null;
+  const rest = text.slice(offset, offset + 64);
+  for (const c of candidates) {
+    const needle = (c || '').trim();
+    if (needle && rest.toLowerCase().startsWith(needle.toLowerCase())) {
+      return { start: offset, end: offset + needle.length };
+    }
+  }
+  const m = /^[A-Za-z][A-Za-z'’-]*/.exec(rest);
+  return m ? { start: offset, end: offset + m[0].length } : null;
+}
+
 // Wraps the character ranges of each annotation in <mark> elements. Operates on
 // the raw text nodes of `root` (run after innerHTML is set, before any mutation).
-function applyHighlights(root: HTMLElement, anns: Annotation[]) {
+function applyHighlights(root: HTMLElement, anns: Highlight[]) {
   const sorted = [...anns].sort((x, y) => x.startOffset - y.startOffset);
   const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
   const textNodes: Text[] = [];
@@ -342,6 +377,14 @@ export default function Reader() {
   const { id = '', chapterId } = useParams();
   const nav = useNavigate();
   const loc = useLocation();
+
+  // Read once on mount: the router keeps this state for the whole visit, but a
+  // chapter change inside the reader must not re-open a detour.
+  const [detour, setDetour] = useState<Detour | null>(
+    () => (loc.state as { detour?: Detour } | null)?.detour ?? null,
+  );
+  // Where the reader actually was before being pulled here from the notebook.
+  const [origin, setOrigin] = useState<ReadingProgress | null>(null);
 
   const [book, setBook] = useState<Book | null>(null);
   const [chapters, setChapters] = useState<Chapter[]>([]);
@@ -485,6 +528,8 @@ export default function Reader() {
         setToc(tocEntries ?? []);
         setBookmarks(bms);
         setAnnotations(anns);
+        // Kept so a detour can offer "back to where I actually was".
+        setOrigin(prog);
 
         const exists = (cid: string | undefined) => !!cid && cs.some((c) => c.id === cid);
         const target =
@@ -516,9 +561,15 @@ export default function Reader() {
   /* ---- render current chapter HTML ---- */
   useEffect(() => {
     if (!current) return;
-    if (mode === 'scroll') {
+    // A detour from the notebook never writes progress: the reader is here to
+    // look at one word, and opening the book again should return them to where
+    // they were actually reading.
+    if (mode === 'scroll' && !detour) {
       localStorage.setItem(posKey(id), current);
-      api.saveProgress(id, current, 0, 1).catch(() => {});
+      // Writing the chapter start here would clobber the position that is about
+      // to be restored a moment later, so it only happens when there is nothing
+      // to restore and the pane really is at the top.
+      if (restoreOffsetRef.current === null) api.saveProgress(id, current, 0, 1).catch(() => {});
     }
     (async () => {
       try {
@@ -561,35 +612,48 @@ export default function Reader() {
   useEffect(() => {
     if (mode !== 'scroll') return;
     const target = restoreOffsetRef.current;
-    const root = contentRef.current;
-    const scroller = mainRef.current;
-    if (target === null || !root || !scroller) return;
+    if (target === null || !contentRef.current) return;
     restoreOffsetRef.current = null;
 
-    const hit = textNodeAt(root, target);
-    if (!hit) return;
-    const range = document.createRange();
-    const end = Math.min(hit.offset + 1, (hit.node.textContent || '').length);
-    range.setStart(hit.node, Math.min(hit.offset, end));
-    range.setEnd(hit.node, end);
-
-    const rect = range.getBoundingClientRect();
-    const top = rect.top - scroller.getBoundingClientRect().top + scroller.scrollTop - scroller.clientHeight / 3;
-    scroller.scrollTo({ top: Math.max(0, top), behavior: 'auto' });
-
-    // Measured again after scrolling so the highlight lands on the right line.
-    const after = range.getBoundingClientRect();
+    const after = scrollTextTo(target);
+    if (!after) return;
+    // The word you came here for keeps its highlight, so a fading flash on top
+    // of it would only repeat itself.
+    if (detour) return;
+    // Landing counts as a position: record it, otherwise a reader who jumps
+    // back and leaves immediately would find the old anchor next time.
+    if (current) api.saveProgress(id, current, target, 1).catch(() => {});
     setFlash({ left: after.left - 2, top: after.top - 3, width: Math.max(after.width, 6), height: after.height + 6 });
     const timer = window.setTimeout(() => setFlash(null), 1400);
     return () => window.clearTimeout(timer);
-  }, [safeHtml, mode]);
+  }, [safeHtml, mode, detour]);
+
+  // The word a notebook jump points at stays lit for as long as you are on the
+  // page. A 1.4s flash is enough to find a bookmark; it is not enough to study
+  // a word, and this visit exists precisely to look at the word in context.
+  useEffect(() => {
+    if (mode !== 'scroll' || !detour) return;
+    const el = contentRef.current;
+    if (!el || el.querySelector('mark.hl-vocab')) return;
+    const r = wordRangeAt(el, detour.offset, [detour.surface, detour.word]);
+    if (!r) return;
+    applyHighlights(el, [{ id: ANCHOR_ID, startOffset: r.start, endOffset: r.end, color: 'vocab' }]);
+  }, [safeHtml, mode, detour]);
 
   /* ---- imperatively set content + highlights (paged mode) ---- */
   useLayoutEffect(() => {
     const el = contentRef.current;
     if (!el || mode !== 'paged') return;
     el.innerHTML = safeHtml;
-    applyHighlights(el, annotationsForChapter);
+    // The detour word is wrapped exactly like a highlight, so it survives page
+    // turns: the markup lives in the chapter, not in a floating layer.
+    const anchor = detour ? wordRangeAt(el, detour.offset, [detour.surface, detour.word]) : null;
+    applyHighlights(
+      el,
+      anchor
+        ? [...annotationsForChapter, { id: ANCHOR_ID, startOffset: anchor.start, endOffset: anchor.end, color: 'vocab' }]
+        : annotationsForChapter,
+    );
     el.querySelectorAll('img').forEach((img) => {
       if (!img.complete) {
         img.addEventListener('load', scheduleMeasure, { once: true });
@@ -598,7 +662,7 @@ export default function Reader() {
     });
     scheduleMeasure();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [safeHtml, annotationsForChapter, mode]);
+  }, [safeHtml, annotationsForChapter, mode, detour]);
 
   /* ---- measure pages (paged mode) ---- */
   useEffect(() => {
@@ -872,15 +936,97 @@ export default function Reader() {
     });
   }
 
+  // Moves the reading pane so `target` sits a third of the way down, and
+  // returns the on-screen box of that character so the caller can point at it.
+  // Extracted because two things need it: the restore that runs when a chapter
+  // is rendered, and "back to where I was" inside a detour (same chapter).
+  function scrollTextTo(target: number): DOMRect | null {
+    const root = contentRef.current;
+    const scroller = mainRef.current;
+    if (!root || !scroller) return null;
+    const hit = textNodeAt(root, target);
+    if (!hit) return null;
+    const range = document.createRange();
+    const end = Math.min(hit.offset + 1, (hit.node.textContent || '').length);
+    range.setStart(hit.node, Math.min(hit.offset, end));
+    range.setEnd(hit.node, end);
+
+    const rect = range.getBoundingClientRect();
+    const top = rect.top - scroller.getBoundingClientRect().top + scroller.scrollTop - scroller.clientHeight / 3;
+    scroller.scrollTo({ top: Math.max(0, top), behavior: 'auto' });
+
+    // Measured again after scrolling so the caller's highlight lands on the
+    // right line rather than where the text used to be.
+    return range.getBoundingClientRect();
+  }
+
+  function flashAt(box: { left: number; top: number; width: number; height: number }) {
+    setFlash({ left: box.left - 2, top: box.top - 3, width: Math.max(box.width, 6), height: box.height + 6 });
+    window.setTimeout(() => setFlash(null), 1400);
+  }
+
+  // The character offset at the top of the reading pane. Scrolling has no page
+  // map, so this is what turns "where I stopped" into the same kind of anchor
+  // the paged reader stores — without it every scroll-mode position collapses
+  // to "start of the chapter".
+  function offsetAtViewportTop(): number {
+    const root = contentRef.current;
+    const scroller = mainRef.current;
+    if (!root || !scroller) return 0;
+    const box = scroller.getBoundingClientRect();
+    const x = box.left + Math.min(120, scroller.clientWidth / 2);
+    const y = box.top + 6;
+    const doc = document as Document & {
+      caretRangeFromPoint?: (x: number, y: number) => Range | null;
+    };
+    const caret = doc.caretRangeFromPoint?.(x, y);
+    if (caret && caret.startContainer.nodeType === Node.TEXT_NODE && root.contains(caret.startContainer)) {
+      return charOffset(root, caret.startContainer, caret.startOffset);
+    }
+    // Fallback for engines without caretRangeFromPoint: the first text node
+    // that reaches past the top edge. Coarse (whole node), still better than 0.
+    const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+    let seen = 0;
+    let n: Node | null;
+    while ((n = walker.nextNode())) {
+      const len = (n.textContent || '').length;
+      const r = document.createRange();
+      r.selectNodeContents(n);
+      if (r.getBoundingClientRect().bottom > y) return seen;
+      seen += len;
+    }
+    return seen;
+  }
+
   /* ---- progress persistence (paged mode) ---- */
   useEffect(() => {
-    if (mode !== 'paged' || !current) return;
+    if (mode !== 'paged' || !current || detour) return;
     const t = setTimeout(() => {
       const off = offsetForPage(pageIndex);
       api.saveProgress(id, current, off, pageCount).catch(() => {});
     }, 600);
     return () => clearTimeout(t);
-  }, [mode, current, pageIndex, pageCount, id]);
+  }, [mode, current, pageIndex, pageCount, id, detour]);
+
+  /* ---- progress persistence (scrolling mode) ---- */
+  useEffect(() => {
+    if (mode !== 'scroll' || !current || detour) return;
+    const scroller = mainRef.current;
+    if (!scroller) return;
+    let timer = 0;
+    const onScroll = () => {
+      window.clearTimeout(timer);
+      timer = window.setTimeout(() => {
+        api.saveProgress(id, current, offsetAtViewportTop(), 1).catch(() => {});
+      }, 800);
+    };
+    scroller.addEventListener('scroll', onScroll, { passive: true });
+    return () => {
+      scroller.removeEventListener('scroll', onScroll);
+      window.clearTimeout(timer);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [mode, current, id, detour, safeHtml]);
 
   const idx = chapters.findIndex((c) => c.id === current);
   const prev = idx > 0 ? chapters[idx - 1] : null;
@@ -1032,11 +1178,50 @@ export default function Reader() {
     return () => stage.removeEventListener('wheel', onWheel);
   }, [mode, pageIndex, pageCount, pagesPerView, prev, next]);
 
+  /* ---- detour (opened from the notebook) ---- */
+  // Adopts the detour position as the reading position. Deliberately explicit:
+  // it is the only way a notebook visit is allowed to overwrite progress.
+  function resumeFromDetour() {
+    setDetour(null);
+    if (!current) return;
+    const off = mode === 'paged' ? offsetForPage(pageIndex) : offsetAtViewportTop();
+    api.saveProgress(id, current, off, mode === 'paged' ? pageCount : 1).catch(() => {});
+    toast('已从当前位置继续阅读', 'success');
+  }
+
+  // Goes back to where the reader actually was. The detour ends here: they are
+  // standing on their own reading position again, so saving progress from now
+  // on records the same place rather than a place they never chose.
+  function backToLastReading() {
+    if (!origin || !origin.chapterId) return;
+    setDetour(null);
+    if (origin.chapterId !== current) {
+      openChapter(origin.chapterId, { type: 'restore', offset: origin.positionOffset });
+      return;
+    }
+    if (mode === 'paged') {
+      restoreOffsetRef.current = origin.positionOffset;
+      scheduleMeasure();
+      return;
+    }
+    const box = scrollTextTo(origin.positionOffset);
+    if (box) flashAt(box);
+  }
+
   /* ---- keyboard ---- */
   function exitReading() {
+    // Leaving a detour returns to the notebook and leaves the reading position
+    // alone — that is the whole point of the visit.
+    if (detour) {
+      nav('/vocab');
+      return;
+    }
     // Persist current position before leaving so progress isn't lost.
     if (current) {
-      const off = mode === 'paged' ? offsetForPage(pageIndex) : 0;
+      // Scrolling has no page index, so the anchor has to come from the text at
+      // the top of the pane — writing 0 here is what made "last read" always
+      // mean "start of the chapter".
+      const off = mode === 'paged' ? offsetForPage(pageIndex) : offsetAtViewportTop();
       const total = mode === 'paged' ? pageCount : 1;
       api.saveProgress(id, current, off, total).catch(() => {});
     }
@@ -1089,7 +1274,7 @@ export default function Reader() {
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [mode, prev, next, pageIndex, pageCount, chromeOpen, popover, sel, bmOpen, annOpen, tocOpen, current, id]);
+  }, [mode, prev, next, pageIndex, pageCount, chromeOpen, popover, sel, bmOpen, annOpen, tocOpen, current, id, detour]);
 
   /* ---- hover the top/bottom edge to reveal the reader chrome (paged) ---- */
   useEffect(() => {
@@ -1151,7 +1336,9 @@ export default function Reader() {
     function onClick(e: MouseEvent) {
       const target = e.target as HTMLElement;
       const mark = target.closest('mark.hl') as HTMLElement | null;
-      if (mark && mark.dataset.annId) {
+      // The detour anchor is a mark without an annotation behind it; stopping
+      // the event for it would swallow a page turn on that word.
+      if (mark && mark.dataset.annId && mark.dataset.annId !== ANCHOR_ID) {
         e.stopPropagation();
         const ann = annotations.find((a) => a.id === mark.dataset.annId);
         if (ann) {
@@ -1419,6 +1606,30 @@ export default function Reader() {
     </>
   );
 
+  // The banner that explains a detour and offers the two ways out of it. It is
+  // the only place in the reader that admits it is not a normal visit.
+  const detourBar = detour ? (
+    <div className={`detour-bar${mode === 'paged' ? ' floating' : ''}`}>
+      <span className="detour-word">{detour.word}</span>
+      <span className="detour-hint">生词本跳转 · 临时查看，不记录阅读进度</span>
+      <span className="detour-gap" />
+      <button
+        className="btn sm"
+        disabled={!origin}
+        onClick={backToLastReading}
+        title={origin ? '回到上次读到的地方' : '这本书还没有阅读记录'}
+      >
+        回到上次阅读
+      </button>
+      <button className="btn sm" onClick={resumeFromDetour} title="把当前位置记为阅读进度，正常往下读">
+        从此处继续读
+      </button>
+      <button className="btn sm" onClick={() => nav('/vocab')}>
+        返回生词本
+      </button>
+    </div>
+  ) : null;
+
   if (mode === 'scroll') {
     return (
       <div className="reader">
@@ -1450,31 +1661,34 @@ export default function Reader() {
         </aside>
 
         <div className="reader-main" ref={mainRef}>
-          <div className="reader-toolbar">
-            <div className="crumb">
-              <strong>{book.title}</strong>
-              <span>·</span>
-              <span>{book.author || '未知作者'}</span>
+          <div className="reader-head">
+            {detourBar}
+            <div className="reader-toolbar">
+              <div className="crumb">
+                <strong>{book.title}</strong>
+                <span>·</span>
+                <span>{book.author || '未知作者'}</span>
+              </div>
+              <span style={{ flex: 1 }} />
+              <button className="btn sm" onClick={() => setFontSize((f) => Math.max(13, f - 1))}>
+                A−
+              </button>
+              <span className="muted" style={{ fontSize: 12, minWidth: 30, textAlign: 'center' }}>
+                {fontSize}
+              </span>
+              <button className="btn sm" onClick={() => setFontSize((f) => Math.min(26, f + 1))}>
+                A+
+              </button>
+              <button className="btn sm" onClick={() => setMode('paged')}>
+                翻页模式
+              </button>
+              <Link className="btn sm" to={`/books/${id}/edit`}>
+                整理
+              </Link>
+              <button className="btn sm" onClick={() => nav(detour ? '/vocab' : '/')}>
+                {detour ? '生词本' : '书架'}
+              </button>
             </div>
-            <span style={{ flex: 1 }} />
-            <button className="btn sm" onClick={() => setFontSize((f) => Math.max(13, f - 1))}>
-              A−
-            </button>
-            <span className="muted" style={{ fontSize: 12, minWidth: 30, textAlign: 'center' }}>
-              {fontSize}
-            </span>
-            <button className="btn sm" onClick={() => setFontSize((f) => Math.min(26, f + 1))}>
-              A+
-            </button>
-            <button className="btn sm" onClick={() => setMode('paged')}>
-              翻页模式
-            </button>
-            <Link className="btn sm" to={`/books/${id}/edit`}>
-              整理
-            </Link>
-            <button className="btn sm" onClick={() => nav('/')}>
-              书架
-            </button>
           </div>
 
           <article className="reader-paper">
@@ -1637,12 +1851,14 @@ export default function Reader() {
         </div>
       </div>
 
+      {detourBar}
+
       {(chromeOpen || chromeHover) && (
         <>
           <div className="reader-chrome top">
             <div className="chrome-left">
-              <button className="btn sm" onClick={() => nav('/')}>
-                ← 书架
+              <button className="btn sm" onClick={() => nav(detour ? '/vocab' : '/')}>
+                {detour ? '← 生词本' : '← 书架'}
               </button>
               <div className="crumb">
                 <strong>{book.title}</strong>

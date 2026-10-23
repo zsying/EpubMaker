@@ -2289,3 +2289,68 @@ a {
   font-size: 12px;
   margin-left: 4px;
 }
+
+/* ------------------------------ notebook detour ------------------------------ */
+
+/* In scrolling mode the banner is part of the sticky header so it stays in
+   sight; the toolbar underneath keeps its own styling and loses its stickiness
+   to the wrapper. */
+.reader-head {
+  position: sticky;
+  top: 0;
+  z-index: 6;
+}
+
+.reader-head .reader-toolbar {
+  position: static;
+}
+
+.detour-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 18px;
+  background: var(--accent-soft);
+  border-bottom: 1px solid #ccd9ff;
+  font-size: 13px;
+  color: var(--text-2);
+  white-space: nowrap;
+}
+
+.detour-word {
+  font-weight: 650;
+  color: var(--accent);
+}
+
+.detour-hint {
+  color: var(--text-2);
+}
+
+.detour-gap {
+  flex: 1;
+}
+
+/* In the paged reader the banner floats above the sheet instead of pushing the
+   page down: pagination is measured from content height, so anything that
+   changes the layout would silently move the reader to another page. */
+.detour-bar.floating {
+  position: absolute;
+  left: 50%;
+  bottom: 18px;
+  transform: translateX(-50%);
+  z-index: 25;
+  max-width: calc(100% - 40px);
+  border: 1px solid #ccd9ff;
+  border-radius: 999px;
+  padding: 8px 10px 8px 16px;
+  background: rgba(234, 240, 255, 0.97);
+  box-shadow: 0 6px 24px rgba(16, 24, 40, 0.14);
+  backdrop-filter: blur(8px);
+}
+
+/* The word you came back for. Kept visually distinct from a real highlight so
+   it never looks like something you made by hand. */
+.reader-content mark.hl-vocab {
+  background: #ffe9a8;
+  box-shadow: 0 0 0 1px #f0cf6a inset;
+}
