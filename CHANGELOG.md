@@ -42,6 +42,13 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Fixed
 
+- The shelf no longer blanks itself on every visit. Returning from a book, the
+  notebook or the trash used to unmount the page and rebuild it from nothing:
+  a "加载中…" line where the grid had been, then every cover decoding again.
+  The page now keeps its last answer across navigations, paints it immediately
+  and refreshes underneath, asks the backend once per visit instead of twice,
+  and puts imported or deleted books on the shelf as they happen rather than
+  after a full reload.
 - Escape now dismisses what is on top of the page before leaving it: the word
   card, the selection toolbar, an annotation popover, the contents / bookmarks /
   annotations drawers, and the menu bar each take one press, and only a reader
