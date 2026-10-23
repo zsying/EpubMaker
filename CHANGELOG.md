@@ -20,14 +20,26 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 - **Notebook page** — every word with its gloss, the sentence it was met in and
   the book it came from; filter by status, search, mark as known, delete. Clicking
   a row jumps back to that line in the book (scrolling mode included, with the
-  landing text flashed). A one-pass review shows the word first and the gloss on
+  word kept highlighted). A one-pass review shows the word first and the gloss on
   click.
+- **Review history** — every grade bumps a review counter and a timestamp, so
+  "学习中" means "you were asked and did not know it" rather than nothing at all.
+  The review session is a capped queue ordered by never-reviewed, then
+  longest-unwatched, and offers 认识 / 不记得 / 跳过.
+- **Batch delete** — deletion is behind a mode in the notebook header: rows
+  become checkboxes, selection can be inverted, and nothing goes until a
+  confirmation names the count.
 
 ### Fixed
 
 - The lookup card, selection toolbar and annotation popover now stay inside the
   window: they are clamped sideways and flip to the other side of the text when
   the preferred direction has no room.
+- A notebook jump no longer overwrites the reading position, and Backspace during
+  one returns to the notebook. The visitor gets a banner with "back to where I
+  was" and "continue reading from here".
+- Scrolling mode stored offset 0 on every save, so "last read" always meant
+  "start of the chapter". It now records the character at the top of the pane.
 - Selecting a word did nothing in scrolling mode, which is the default: the
   selection listener and the overlay layer only existed in the paginated view.
 
