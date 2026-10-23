@@ -217,9 +217,9 @@ export default function Library() {
         e.preventDefault();
         dragDepth.current = 0;
         setOver(false);
-        // Native bridge present: the same drop arrives with real paths, and
-        // importing here as well would import twice. Without it (a plain
-        // browser) there is no path to read, so fall back to the picker.
+        // Native bridge live: the same drop arrives with real paths, and
+        // importing here as well would import twice. Otherwise (a plain browser)
+        // there is no path to read, so fall back to the picker.
         if (!canResolveDropPaths()) void pickAndImport();
       }}
     >

@@ -19,6 +19,10 @@ type WailsRuntime = {
   OnFileDrop?: (cb: (x: number, y: number, paths: string[]) => void, useDropTarget: boolean) => void;
 };
 
+type WailsFlags = {
+  flags?: { enableWailsDragAndDrop?: boolean };
+};
+
 const listeners = new Set<DropListener>();
 let started = false;
 
@@ -26,9 +30,17 @@ function runtime(): WailsRuntime | undefined {
   return (window as unknown as { runtime?: WailsRuntime }).runtime;
 }
 
-/** True inside the desktop app, where a drop can be resolved to real paths. */
+/**
+ * True when a drop can be turned into filesystem paths. Requires both the
+ * runtime method and the flag the Go side sets from `EnableFileDrop`: with the
+ * option off, the runtime still swallows the drop (no navigation) but never
+ * resolves paths, so the caller has to fall back to the picker instead of
+ * waiting for a callback that will not come.
+ */
 export function canResolveDropPaths(): boolean {
-  return typeof runtime()?.OnFileDrop === 'function';
+  if (typeof runtime()?.OnFileDrop !== 'function') return false;
+  const wails = (window as unknown as { wails?: WailsFlags }).wails;
+  return wails?.flags?.enableWailsDragAndDrop !== false;
 }
 
 /** Registers the window-wide drop bridge once. Safe to call repeatedly. */
