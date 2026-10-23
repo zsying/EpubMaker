@@ -237,22 +237,52 @@ export interface WebDavTestResult {
   error?: string;
 }
 
+/**
+ * True when the page is hosted by the Wails v3 runtime (the Android build).
+ *
+ * v2 injects generated bindings on window.go; v3 installs its transport on
+ * window._wails and expects calls to be made through Call.ByName. One bundle
+ * serves both, and the transport is chosen per call.
+ */
+function hasV3Runtime(): boolean {
+  return typeof window !== 'undefined' && '_wails' in window;
+}
+
+/**
+ * Calls a v3 service method by name.
+ *
+ * Imported lazily on purpose: the desktop build never loads this chunk, and a
+ * v2 host cannot fail at module-evaluation time on a runtime it does not have.
+ */
+async function callV3<T>(name: string, args: unknown[]): Promise<T> {
+  const { Call } = await import('@wailsio/runtime');
+  return (await Call.ByName(name, ...args)) as T;
+}
+
 /** Calls a bound backend method: window.go.app.Backend.<method>(...args). */
 async function call<T>(method: string, ...args: unknown[]): Promise<T> {
   const fn = (window as any).go?.app?.Backend?.[method];
-  if (typeof fn !== 'function') {
-    throw new Error('后端尚未就绪，请稍候重试');
+  if (typeof fn === 'function') {
+    return (await fn(...args)) as T;
   }
-  return (await fn(...args)) as T;
+  if (hasV3Runtime()) {
+    return await callV3<T>(`Backend.${method}`, args);
+  }
+  throw new Error('后端尚未就绪，请稍候重试');
 }
 
 /** Calls a bound App (native integration) method: window.go.app.App.<method>. */
 async function callApp<T>(method: string, ...args: unknown[]): Promise<T> {
   const fn = (window as any).go?.app?.App?.[method];
-  if (typeof fn !== 'function') {
-    throw new Error('无法打开系统文件选择框，请通过 Wails 启动应用');
+  if (typeof fn === 'function') {
+    return (await fn(...args)) as T;
   }
-  return (await fn(...args)) as T;
+  // Native dialogs are desktop-only: App is built on the v2 runtime, so the
+  // mobile host binds Backend alone. Say so instead of returning undefined.
+  if (hasV3Runtime()) {
+    throw new Error('此功能仅在桌面版提供');
+  }
+  throw new Error('无法打开系统文件选择框，请通过 Wails 启动应用');
 }
 
 /** Triggers a browser download from an inline data: URL. */
