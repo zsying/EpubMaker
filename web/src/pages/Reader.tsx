@@ -1,9 +1,11 @@
 import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent } from 'react';
 import { Link, useLocation, useNavigate, useParams } from 'react-router-dom';
 import DOMPurify from 'dompurify';
-import { api, Annotation, Book, Bookmark, Chapter, TocEntry } from '../api';
+import { api, Annotation, Book, Bookmark, Chapter, LookupResult, ReadingProgress, TocEntry } from '../api';
 import { Caret } from '../Caret';
 import { toast, toastError } from '../toast';
+import { Anchor, EDGE_GAP, placeOverlay } from '../overlay';
+import { wordAt } from '../wordHit';
 
 const FONT_KEY = 'epubmaker.fontSize';
 const MODE_KEY = 'epubmaker.readMode';
@@ -185,8 +187,80 @@ type ReadMode = 'scroll' | 'paged';
 // number), so the target page is re-derived from the current layout.
 type PageIntent = { type: 'first' | 'last' | 'restore'; offset?: number } | null;
 
-type SelState = { x: number; y: number; start: number; end: number; text: string } | null;
+// `y`/`bottom` are the selection's viewport edges: overlays flip from one side
+// of the text to the other when there is no room in their preferred direction.
+type SelState = { x: number; y: number; bottom: number; start: number; end: number; text: string } | null;
 type PopoverState = { x: number; y: number; ann: Annotation } | null;
+// `offset`/`context` are captured at lookup time so a manual "add to notebook"
+// can still record where the word came from.
+type LookupCardState = {
+  x: number;
+  top: number;
+  bottom: number;
+  res: LookupResult;
+  offset: number;
+  context: string;
+} | null;
+
+// A visit opened from the notebook: "show me where I met this word". It is a
+// detour, not reading — the position it opens at must not become the reading
+// position, which is why the whole session disables progress saving.
+type Detour = { word: string; surface: string; offset: number };
+
+// Pseudo-annotation id for the word being looked at. Prefixing it keeps it from
+// colliding with real annotation ids, and the click handler skips it because
+// there is nothing to open.
+const ANCHOR_ID = '__vocab_anchor';
+
+/** A range that can be wrapped by applyHighlights. Real annotations satisfy it
+ * structurally; the anchor mark is a bare literal. */
+type Highlight = { id: string; startOffset: number; endOffset: number; color?: string };
+
+// Keeps a fixed-position overlay anchored to a point on screen *and* fully
+// inside the viewport. Two problems this solves, both visible at the margins of
+// the reader: a card centred on a word near the right edge loses half its width
+// off-screen, and a card opened near the bottom is cut off vertically.
+//
+// The size is only known after layout, so the overlay starts hidden and is
+// revealed once measured — otherwise it would paint once at its clipped
+// position. `revision` re-measures when the content changes height, e.g. when
+// the dictionary card grows its "already saved" footer.
+function useAnchoredOverlay(anchor: Anchor | null, prefer: 'above' | 'below', gap: number, revision: unknown) {
+  const ref = useRef<HTMLDivElement>(null);
+  const [pos, setPos] = useState<{ left: number; top: number } | null>(null);
+
+  useLayoutEffect(() => {
+    const el = ref.current;
+    if (!anchor || !el) {
+      setPos(null);
+      return;
+    }
+    const measure = () => {
+      setPos(
+        placeOverlay(
+          anchor,
+          { width: el.offsetWidth, height: el.offsetHeight },
+          { width: window.innerWidth, height: window.innerHeight },
+          prefer,
+          gap,
+        ),
+      );
+    };
+    measure();
+    window.addEventListener('resize', measure);
+    return () => window.removeEventListener('resize', measure);
+  }, [anchor?.x, anchor?.top, anchor?.bottom, prefer, gap, revision]);
+
+  return { ref, pos };
+}
+
+// Overlays are invisible for the single frame before their measured size is
+// known, so they never paint once at a clipped position.
+function overlayStyle(pos: { left: number; top: number } | null) {
+  return pos
+    ? { left: pos.left, top: pos.top, visibility: 'visible' as const }
+    : { left: 0, top: 0, visibility: 'hidden' as const };
+}
 
 const COLORS = ['yellow', 'green', 'red'] as const;
 
@@ -209,9 +283,62 @@ function getSelectionOffsets(root: HTMLElement, range: Range): { start: number; 
   return b < a ? { start: b, end: a } : { start: a, end: b };
 }
 
+// The text node holding a character offset, with the offset inside it. Paged
+// mode never needs this — it maps offsets to pages during measurement — but
+// scrolling mode has no page map, so "jump back to the sentence" has to walk
+// the rendered text directly.
+function textNodeAt(root: HTMLElement, offset: number): { node: Text; offset: number } | null {
+  const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+  let seen = 0;
+  let n: Node | null;
+  while ((n = walker.nextNode())) {
+    const len = (n.textContent || '').length;
+    if (seen + len > offset) return { node: n as Text, offset: offset - seen };
+    seen += len;
+  }
+  return null;
+}
+
+// The sentence surrounding [start,end) in the rendered chapter text, capped so
+// a paragraph-long sentence cannot bloat a notebook entry. Used as the example
+// context saved alongside a looked-up word.
+function sentenceAt(root: HTMLElement, start: number, end: number): string {
+  const text = root.textContent || '';
+  const isBreak = (c: string) => c === '.' || c === '!' || c === '?' || c === '\n';
+  let s = start;
+  while (s > 0 && start - s < 220 && !isBreak(text[s - 1])) s--;
+  let e = end;
+  while (e < text.length && e - end < 220 && !isBreak(text[e])) e++;
+  return text
+    .slice(s, e + 1)
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+// The word a notebook jump points at. Offsets are stored as "where the
+// selection started", so the stored surface text is trusted while it still
+// matches and a word run is used when it has gone stale or was never stored.
+function wordRangeAt(
+  root: HTMLElement,
+  offset: number,
+  candidates: string[],
+): { start: number; end: number } | null {
+  const text = root.textContent || '';
+  if (offset < 0 || offset >= text.length) return null;
+  const rest = text.slice(offset, offset + 64);
+  for (const c of candidates) {
+    const needle = (c || '').trim();
+    if (needle && rest.toLowerCase().startsWith(needle.toLowerCase())) {
+      return { start: offset, end: offset + needle.length };
+    }
+  }
+  const m = /^[A-Za-z][A-Za-z'’-]*/.exec(rest);
+  return m ? { start: offset, end: offset + m[0].length } : null;
+}
+
 // Wraps the character ranges of each annotation in <mark> elements. Operates on
 // the raw text nodes of `root` (run after innerHTML is set, before any mutation).
-function applyHighlights(root: HTMLElement, anns: Annotation[]) {
+function applyHighlights(root: HTMLElement, anns: Highlight[]) {
   const sorted = [...anns].sort((x, y) => x.startOffset - y.startOffset);
   const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
   const textNodes: Text[] = [];
@@ -252,6 +379,14 @@ export default function Reader() {
   const nav = useNavigate();
   const loc = useLocation();
 
+  // Read once on mount: the router keeps this state for the whole visit, but a
+  // chapter change inside the reader must not re-open a detour.
+  const [detour, setDetour] = useState<Detour | null>(
+    () => (loc.state as { detour?: Detour } | null)?.detour ?? null,
+  );
+  // Where the reader actually was before being pulled here from the notebook.
+  const [origin, setOrigin] = useState<ReadingProgress | null>(null);
+
   const [book, setBook] = useState<Book | null>(null);
   const [chapters, setChapters] = useState<Chapter[]>([]);
   // Hierarchical table of contents (empty for books imported before hierarchy support).
@@ -280,6 +415,11 @@ export default function Reader() {
   const [pagesPerView, setPagesPerView] = useState(1);
   const [chromeOpen, setChromeOpen] = useState(false);
   const [chromeHover, setChromeHover] = useState(false);
+  // Set when Escape dismisses a chrome bar that the pointer is hovering open.
+  // Without it the very next mousemove would raise the bar again, so Escape
+  // would never get a second press to leave the reader with. Cleared as soon
+  // as the pointer leaves the edge band, which is also how the bar comes back.
+  const hoverDismissedRef = useRef(false);
 
   // page-turn cross-dissolve for CHAPTER turns: while true the whole spread is
   // faded out so a different chapter's HTML (not yet measured) can be swapped
@@ -313,11 +453,49 @@ export default function Reader() {
   const [popover, setPopover] = useState<PopoverState>(null);
   const [noteDraft, setNoteDraft] = useState('');
 
+  // Dictionary card for a word picked out of the page. It is positioned in
+  // viewport coordinates and rendered outside the page flow on purpose: this
+  // reader paginates by measuring content height, so anything joining the flow
+  // would change the page count and throw the reader off their page.
+  const [lookupCard, setLookupCard] = useState<LookupCardState>(null);
+  const [lookupBusy, setLookupBusy] = useState(false);
+  // Whether a dictionary is installed at all. A click on a word looks it up
+  // only when there is something to look it up in; otherwise every click would
+  // answer "not in the dictionary", which is noise rather than help.
+  const [dictReady, setDictReady] = useState(false);
+  // A jump from the notebook or an annotation list has to be visible, not just
+  // correct: this is a transient highlight over the landed-on text.
+  const [flash, setFlash] = useState<{ left: number; top: number; width: number; height: number } | null>(null);
+
+  // Overlay placement: the selection toolbar prefers the space above the text,
+  // the dictionary card and annotation popover the space below. Each flips to
+  // the other side when its preferred direction has no room, and all three are
+  // clamped sideways, so a word picked at the margin of the window no longer
+  // pushes its card partly off screen.
+  const selPos = useAnchoredOverlay(sel && { x: sel.x, top: sel.y, bottom: sel.bottom }, 'above', EDGE_GAP, sel?.start);
+  const dictPos = useAnchoredOverlay(
+    lookupCard && { x: lookupCard.x, top: lookupCard.top, bottom: lookupCard.bottom },
+    'below',
+    14,
+    `${lookupCard?.res.found}-${lookupCard?.res.recorded}`,
+  );
+  const popPos = useAnchoredOverlay(popover && { x: popover.x, top: popover.y, bottom: popover.y }, 'below', 0, popover?.ann.id);
+
   const mainRef = useRef<HTMLDivElement>(null);
   const stageRef = useRef<HTMLDivElement>(null);
   const spreadRef = useRef<HTMLDivElement>(null);
   const columnsRef = useRef<HTMLDivElement>(null);
   const contentRef = useRef<HTMLDivElement>(null);
+
+  // A bare click on a word is deferred by a few milliseconds before it looks
+  // anything up. The mousedown of a double-click cancels the pending lookup, so
+  // double-clicking a word to select (and highlight) it never flashes a card on
+  // the way to the selection toolbar.
+  const wordTimerRef = useRef<number | null>(null);
+  // When a drag in the page edge turned a page, the click that follows the
+  // mouseup must not turn a second one.
+  const dragRef = useRef<{ x: number; y: number; fired: boolean } | null>(null);
+  const turnedAtRef = useRef(0);
   const pageIntentRef = useRef<PageIntent>(null);
   // Layout-independent restore target: a source character offset to land on.
   // Kept in a ref (not a one-shot intent) so it survives across measure passes
@@ -370,6 +548,8 @@ export default function Reader() {
         setToc(tocEntries ?? []);
         setBookmarks(bms);
         setAnnotations(anns);
+        // Kept so a detour can offer "back to where I actually was".
+        setOrigin(prog);
 
         const exists = (cid: string | undefined) => !!cid && cs.some((c) => c.id === cid);
         const target =
@@ -398,12 +578,26 @@ export default function Reader() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id]);
 
+  /* ---- is there a dictionary to look words up in? ---- */
+  useEffect(() => {
+    api
+      .dictStatus()
+      .then((s) => setDictReady(s.installed))
+      .catch(() => setDictReady(false));
+  }, []);
+
   /* ---- render current chapter HTML ---- */
   useEffect(() => {
     if (!current) return;
-    if (mode === 'scroll') {
+    // A detour from the notebook never writes progress: the reader is here to
+    // look at one word, and opening the book again should return them to where
+    // they were actually reading.
+    if (mode === 'scroll' && !detour) {
       localStorage.setItem(posKey(id), current);
-      api.saveProgress(id, current, 0, 1).catch(() => {});
+      // Writing the chapter start here would clobber the position that is about
+      // to be restored a moment later, so it only happens when there is nothing
+      // to restore and the pane really is at the top.
+      if (restoreOffsetRef.current === null) api.saveProgress(id, current, 0, 1).catch(() => {});
     }
     (async () => {
       try {
@@ -440,12 +634,54 @@ export default function Reader() {
     [annotations, current]
   );
 
+  // Scroll-mode counterpart of the paged offset restore. Paged mode resolves
+  // the offset to a page during measurement; scrolling mode has no page map, so
+  // it moves the container itself once the chapter HTML is committed.
+  useEffect(() => {
+    if (mode !== 'scroll') return;
+    const target = restoreOffsetRef.current;
+    if (target === null || !contentRef.current) return;
+    restoreOffsetRef.current = null;
+
+    const after = scrollTextTo(target);
+    if (!after) return;
+    // The word you came here for keeps its highlight, so a fading flash on top
+    // of it would only repeat itself.
+    if (detour) return;
+    // Landing counts as a position: record it, otherwise a reader who jumps
+    // back and leaves immediately would find the old anchor next time.
+    if (current) api.saveProgress(id, current, target, 1).catch(() => {});
+    setFlash({ left: after.left - 2, top: after.top - 3, width: Math.max(after.width, 6), height: after.height + 6 });
+    const timer = window.setTimeout(() => setFlash(null), 1400);
+    return () => window.clearTimeout(timer);
+  }, [safeHtml, mode, detour]);
+
+  // The word a notebook jump points at stays lit for as long as you are on the
+  // page. A 1.4s flash is enough to find a bookmark; it is not enough to study
+  // a word, and this visit exists precisely to look at the word in context.
+  useEffect(() => {
+    if (mode !== 'scroll' || !detour) return;
+    const el = contentRef.current;
+    if (!el || el.querySelector('mark.hl-vocab')) return;
+    const r = wordRangeAt(el, detour.offset, [detour.surface, detour.word]);
+    if (!r) return;
+    applyHighlights(el, [{ id: ANCHOR_ID, startOffset: r.start, endOffset: r.end, color: 'vocab' }]);
+  }, [safeHtml, mode, detour]);
+
   /* ---- imperatively set content + highlights (paged mode) ---- */
   useLayoutEffect(() => {
     const el = contentRef.current;
     if (!el || mode !== 'paged') return;
     el.innerHTML = safeHtml;
-    applyHighlights(el, annotationsForChapter);
+    // The detour word is wrapped exactly like a highlight, so it survives page
+    // turns: the markup lives in the chapter, not in a floating layer.
+    const anchor = detour ? wordRangeAt(el, detour.offset, [detour.surface, detour.word]) : null;
+    applyHighlights(
+      el,
+      anchor
+        ? [...annotationsForChapter, { id: ANCHOR_ID, startOffset: anchor.start, endOffset: anchor.end, color: 'vocab' }]
+        : annotationsForChapter,
+    );
     el.querySelectorAll('img').forEach((img) => {
       if (!img.complete) {
         img.addEventListener('load', scheduleMeasure, { once: true });
@@ -454,7 +690,7 @@ export default function Reader() {
     });
     scheduleMeasure();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [safeHtml, annotationsForChapter, mode]);
+  }, [safeHtml, annotationsForChapter, mode, detour]);
 
   /* ---- measure pages (paged mode) ---- */
   useEffect(() => {
@@ -728,15 +964,97 @@ export default function Reader() {
     });
   }
 
+  // Moves the reading pane so `target` sits a third of the way down, and
+  // returns the on-screen box of that character so the caller can point at it.
+  // Extracted because two things need it: the restore that runs when a chapter
+  // is rendered, and "back to where I was" inside a detour (same chapter).
+  function scrollTextTo(target: number): DOMRect | null {
+    const root = contentRef.current;
+    const scroller = mainRef.current;
+    if (!root || !scroller) return null;
+    const hit = textNodeAt(root, target);
+    if (!hit) return null;
+    const range = document.createRange();
+    const end = Math.min(hit.offset + 1, (hit.node.textContent || '').length);
+    range.setStart(hit.node, Math.min(hit.offset, end));
+    range.setEnd(hit.node, end);
+
+    const rect = range.getBoundingClientRect();
+    const top = rect.top - scroller.getBoundingClientRect().top + scroller.scrollTop - scroller.clientHeight / 3;
+    scroller.scrollTo({ top: Math.max(0, top), behavior: 'auto' });
+
+    // Measured again after scrolling so the caller's highlight lands on the
+    // right line rather than where the text used to be.
+    return range.getBoundingClientRect();
+  }
+
+  function flashAt(box: { left: number; top: number; width: number; height: number }) {
+    setFlash({ left: box.left - 2, top: box.top - 3, width: Math.max(box.width, 6), height: box.height + 6 });
+    window.setTimeout(() => setFlash(null), 1400);
+  }
+
+  // The character offset at the top of the reading pane. Scrolling has no page
+  // map, so this is what turns "where I stopped" into the same kind of anchor
+  // the paged reader stores — without it every scroll-mode position collapses
+  // to "start of the chapter".
+  function offsetAtViewportTop(): number {
+    const root = contentRef.current;
+    const scroller = mainRef.current;
+    if (!root || !scroller) return 0;
+    const box = scroller.getBoundingClientRect();
+    const x = box.left + Math.min(120, scroller.clientWidth / 2);
+    const y = box.top + 6;
+    const doc = document as Document & {
+      caretRangeFromPoint?: (x: number, y: number) => Range | null;
+    };
+    const caret = doc.caretRangeFromPoint?.(x, y);
+    if (caret && caret.startContainer.nodeType === Node.TEXT_NODE && root.contains(caret.startContainer)) {
+      return charOffset(root, caret.startContainer, caret.startOffset);
+    }
+    // Fallback for engines without caretRangeFromPoint: the first text node
+    // that reaches past the top edge. Coarse (whole node), still better than 0.
+    const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+    let seen = 0;
+    let n: Node | null;
+    while ((n = walker.nextNode())) {
+      const len = (n.textContent || '').length;
+      const r = document.createRange();
+      r.selectNodeContents(n);
+      if (r.getBoundingClientRect().bottom > y) return seen;
+      seen += len;
+    }
+    return seen;
+  }
+
   /* ---- progress persistence (paged mode) ---- */
   useEffect(() => {
-    if (mode !== 'paged' || !current) return;
+    if (mode !== 'paged' || !current || detour) return;
     const t = setTimeout(() => {
       const off = offsetForPage(pageIndex);
       api.saveProgress(id, current, off, pageCount).catch(() => {});
     }, 600);
     return () => clearTimeout(t);
-  }, [mode, current, pageIndex, pageCount, id]);
+  }, [mode, current, pageIndex, pageCount, id, detour]);
+
+  /* ---- progress persistence (scrolling mode) ---- */
+  useEffect(() => {
+    if (mode !== 'scroll' || !current || detour) return;
+    const scroller = mainRef.current;
+    if (!scroller) return;
+    let timer = 0;
+    const onScroll = () => {
+      window.clearTimeout(timer);
+      timer = window.setTimeout(() => {
+        api.saveProgress(id, current, offsetAtViewportTop(), 1).catch(() => {});
+      }, 800);
+    };
+    scroller.addEventListener('scroll', onScroll, { passive: true });
+    return () => {
+      scroller.removeEventListener('scroll', onScroll);
+      window.clearTimeout(timer);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [mode, current, id, detour, safeHtml]);
 
   const idx = chapters.findIndex((c) => c.id === current);
   const prev = idx > 0 ? chapters[idx - 1] : null;
@@ -827,6 +1145,9 @@ export default function Reader() {
   }
 
   function turn(delta: number) {
+    // The card points at a word on the page being left behind.
+    cancelWordLookup();
+    setLookupCard(null);
     const step = turnStep;
     if (delta > 0) {
       if (pageIndex + step <= maxPageIndex) setPageIndex(pageIndex + step);
@@ -843,6 +1164,26 @@ export default function Reader() {
     if (pageIndex > maxPageIndex) setPageIndex(maxPageIndex);
   }, [mode, pageCount, pagesPerView]);
 
+  // Which page-turn zone a viewport x sits in: -1 the covered pages to the left
+  // of the book, 0 the page itself, 1 the covered pages to the right.
+  //
+  // The zones are measured from the BOOK, not from the window: on a wide screen
+  // all the empty space flanking the book still turns pages, and on any screen
+  // the book's own outer margin does too — that margin is the "stack of paper"
+  // the reader aims at. A proportional share of the window (18% each side) used
+  // to turn pages from inside the text column on small windows, which is where
+  // words are.
+  function turnZoneAt(clientX: number): -1 | 0 | 1 {
+    const spread = spreadRef.current;
+    if (!spread) return 0;
+    const r = spread.getBoundingClientRect();
+    if (r.width <= 0) return 0;
+    const band = Math.min(marginPx, 26);
+    if (clientX < r.left + band) return -1;
+    if (clientX > r.right - band) return 1;
+    return 0;
+  }
+
   function onStageClick(e: ReactMouseEvent) {
     // Ignore clicks on interactive content and active text selections.
     const target = e.target as HTMLElement;
@@ -858,16 +1199,64 @@ export default function Reader() {
     const selection = window.getSelection();
     if (selection && selection.toString().trim()) return;
 
+    // A drag along the page edge already turned; the click on mouseup must not
+    // turn again.
+    if (Date.now() - turnedAtRef.current < 300) return;
+
+    const zone = turnZoneAt(e.clientX);
+    if (zone < 0) {
+      turn(-1);
+      return;
+    }
+    if (zone > 0) {
+      turn(1);
+      return;
+    }
+
+    // One click on a word is enough to look it up — no selection needed.
+    if (scheduleWordLookup(e.clientX, e.clientY)) return;
+
     const stage = stageRef.current;
     if (!stage) return;
     const rect = stage.getBoundingClientRect();
     const ratio = (e.clientX - rect.left) / rect.width;
 
-    // Fixed zones: narrow edges turn pages, small center toggles chrome,
-    // the broad middle band is left for text selection / links.
-    if (ratio < 0.18) turn(-1);
-    else if (ratio > 0.82) turn(1);
-    else if (ratio > 0.42 && ratio < 0.58) setChromeOpen((o) => !o);
+    // The narrow middle band toggles the chrome. Everything else in the page is
+    // left to text selection and links.
+    if (ratio > 0.42 && ratio < 0.58) setChromeOpen((o) => !o);
+  }
+
+  /* ---- drag along the page edge to turn ---- */
+  // Pressing in a page-turn zone and pulling the paper sideways turns a page:
+  // pulling left walks forward through the book, pulling right walks back. One
+  // turn per gesture, so a long drag cannot skip a dozen pages.
+  const DRAG_TURN_PX = 44;
+
+  function onStageMouseDown(e: ReactMouseEvent) {
+    dragRef.current = null;
+    if (e.button !== 0) return;
+    if (turnZoneAt(e.clientX) === 0) return;
+    // The margin is a page-turn surface, so a press there must not start
+    // smearing a text selection across the page.
+    e.preventDefault();
+    dragRef.current = { x: e.clientX, y: e.clientY, fired: false };
+  }
+
+  function onStageMouseMove(e: ReactMouseEvent) {
+    const d = dragRef.current;
+    if (!d || d.fired || e.buttons !== 1) return;
+    const dx = e.clientX - d.x;
+    const dy = e.clientY - d.y;
+    // Horizontal intent only: a vertical drag along the edge is a slip, not a
+    // page turn.
+    if (Math.abs(dx) < DRAG_TURN_PX || Math.abs(dx) < Math.abs(dy) * 1.4) return;
+    d.fired = true;
+    turnedAtRef.current = Date.now();
+    turn(dx < 0 ? 1 : -1);
+  }
+
+  function onStageMouseUp() {
+    dragRef.current = null;
   }
 
   /* ---- mouse wheel page turning ---- */
@@ -888,11 +1277,50 @@ export default function Reader() {
     return () => stage.removeEventListener('wheel', onWheel);
   }, [mode, pageIndex, pageCount, pagesPerView, prev, next]);
 
+  /* ---- detour (opened from the notebook) ---- */
+  // Adopts the detour position as the reading position. Deliberately explicit:
+  // it is the only way a notebook visit is allowed to overwrite progress.
+  function resumeFromDetour() {
+    setDetour(null);
+    if (!current) return;
+    const off = mode === 'paged' ? offsetForPage(pageIndex) : offsetAtViewportTop();
+    api.saveProgress(id, current, off, mode === 'paged' ? pageCount : 1).catch(() => {});
+    toast('已从当前位置继续阅读', 'success');
+  }
+
+  // Goes back to where the reader actually was. The detour ends here: they are
+  // standing on their own reading position again, so saving progress from now
+  // on records the same place rather than a place they never chose.
+  function backToLastReading() {
+    if (!origin || !origin.chapterId) return;
+    setDetour(null);
+    if (origin.chapterId !== current) {
+      openChapter(origin.chapterId, { type: 'restore', offset: origin.positionOffset });
+      return;
+    }
+    if (mode === 'paged') {
+      restoreOffsetRef.current = origin.positionOffset;
+      scheduleMeasure();
+      return;
+    }
+    const box = scrollTextTo(origin.positionOffset);
+    if (box) flashAt(box);
+  }
+
   /* ---- keyboard ---- */
   function exitReading() {
+    // Leaving a detour returns to the notebook and leaves the reading position
+    // alone — that is the whole point of the visit.
+    if (detour) {
+      nav('/vocab');
+      return;
+    }
     // Persist current position before leaving so progress isn't lost.
     if (current) {
-      const off = mode === 'paged' ? offsetForPage(pageIndex) : 0;
+      // Scrolling has no page index, so the anchor has to come from the text at
+      // the top of the pane — writing 0 here is what made "last read" always
+      // mean "start of the chapter".
+      const off = mode === 'paged' ? offsetForPage(pageIndex) : offsetAtViewportTop();
       const total = mode === 'paged' ? pageCount : 1;
       api.saveProgress(id, current, off, total).catch(() => {});
     }
@@ -901,23 +1329,50 @@ export default function Reader() {
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
+      const inField =
+        e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement;
 
-      // Backspace exits the reader.
-      if (e.key === 'Backspace') {
-        e.preventDefault();
+      // Escape peels one layer at a time: whatever is floating over the page
+      // goes first, and only a reader with nothing left to dismiss leaves the
+      // book. Otherwise Escape would silently close the book while a word card
+      // or the menu bar was open — exactly the press someone makes to get rid
+      // of the overlay.
+      if (e.key === 'Escape') {
+        // Overlays are checked innermost first.
+        if (lookupCard) { setLookupCard(null); return; }
+        if (popover) { setPopover(null); return; }
+        if (sel) { setSel(null); return; }
+        if (tocOpen) { setTocOpen(false); return; }
+        if (bmOpen) { setBmOpen(false); return; }
+        if (annOpen) { setAnnOpen(false); return; }
+        // A bar raised by hovering the edge is not state anyone chose, but it
+        // is still on screen. Both ways of showing it count as one layer: the
+        // pointer is usually resting in the edge band when the bars are open,
+        // so dismissing only `chromeOpen` would leave the bar up and cost a
+        // second press. The hover probe stays muted until the pointer leaves
+        // the band, which keeps this from turning into a fight with mousemove.
+        if (chromeOpen || chromeHover) {
+          setChromeOpen(false);
+          if (chromeHover) {
+            hoverDismissedRef.current = true;
+            setChromeHover(false);
+          }
+          return;
+        }
+        // Typing somewhere (a note) must not throw the reader out of the book.
+        if (inField) {
+          (e.target as HTMLElement).blur();
+          return;
+        }
         exitReading();
         return;
       }
 
-      if (e.key === 'Escape') {
-        // Close any open overlay first; otherwise exit the reader.
-        if (popover) { setPopover(null); return; }
-        if (sel) { setSel(null); return; }
-        if (bmOpen) { setBmOpen(false); return; }
-        if (annOpen) { setAnnOpen(false); return; }
-        if (tocOpen) { setTocOpen(false); return; }
-        if (chromeOpen) { setChromeOpen(false); return; }
+      if (inField) return;
+
+      // Backspace exits the reader.
+      if (e.key === 'Backspace') {
+        e.preventDefault();
         exitReading();
         return;
       }
@@ -945,11 +1400,19 @@ export default function Reader() {
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [mode, prev, next, pageIndex, pageCount, chromeOpen, popover, sel, bmOpen, annOpen, tocOpen, current, id]);
+  }, [mode, prev, next, pageIndex, pageCount, chromeOpen, chromeHover, popover, sel, bmOpen, annOpen, tocOpen, lookupCard, current, id, detour]);
 
   /* ---- hover the top/bottom edge to reveal the reader chrome (paged) ---- */
   useEffect(() => {
     if (mode !== 'paged') return;
+    // During a notebook detour the banner floats along the bottom edge, and a
+    // chrome bar sliding out under the pointer would cover the very buttons the
+    // reader is reaching for. The bars stay reachable: Enter, or a click in the
+    // middle of the page.
+    if (detour) {
+      setChromeHover(false);
+      return;
+    }
     const EDGE = 64; // px from the top/bottom edge that activates the chrome
     let raf = 0;
     const onMove = (e: MouseEvent) => {
@@ -959,6 +1422,13 @@ export default function Reader() {
         const y = e.clientY;
         const h = window.innerHeight;
         const near = y < EDGE || y > h - EDGE;
+        // Leaving the band re-arms the probe, so a dismissed bar comes back
+        // when the pointer returns to the edge later on.
+        if (!near) hoverDismissedRef.current = false;
+        if (near && hoverDismissedRef.current) {
+          setChromeHover(false);
+          return;
+        }
         // Functional update avoids stale closures and only re-renders on change.
         setChromeHover((prev) => (prev === near ? prev : near));
       });
@@ -969,14 +1439,16 @@ export default function Reader() {
       if (raf) cancelAnimationFrame(raf);
       setChromeHover(false);
     };
-  }, [mode]);
+  }, [mode, detour]);
 
-  /* ---- selection -> toolbar (paged) ---- */
+  /* ---- selection -> toolbar (both modes) ---- */
   useEffect(() => {
     const el = contentRef.current;
-    if (!el || mode !== 'paged') return;
+    if (!el) return;
     const root = el;
     function onMouseUp() {
+      // Any new interaction in the text dismisses the previous dictionary card.
+      setLookupCard(null);
       const selection = window.getSelection();
       if (!selection || selection.isCollapsed || !selection.toString().trim()) {
         setSel(null);
@@ -993,12 +1465,21 @@ export default function Reader() {
         return;
       }
       const rect = range.getBoundingClientRect();
-      setSel({ x: rect.left + rect.width / 2, y: rect.top - 8, start: offs.start, end: offs.end, text: selection.toString() });
+      setSel({
+        x: rect.left + rect.width / 2,
+        y: rect.top,
+        bottom: rect.bottom,
+        start: offs.start,
+        end: offs.end,
+        text: selection.toString(),
+      });
     }
     function onClick(e: MouseEvent) {
       const target = e.target as HTMLElement;
       const mark = target.closest('mark.hl') as HTMLElement | null;
-      if (mark && mark.dataset.annId) {
+      // The detour anchor is a mark without an annotation behind it; stopping
+      // the event for it would swallow a page turn on that word.
+      if (mark && mark.dataset.annId && mark.dataset.annId !== ANCHOR_ID) {
         e.stopPropagation();
         const ann = annotations.find((a) => a.id === mark.dataset.annId);
         if (ann) {
@@ -1006,7 +1487,23 @@ export default function Reader() {
           setNoteDraft(ann.note);
           setPopover({ x: r.left + r.width / 2, y: r.bottom + 8, ann });
         }
+        return;
       }
+      // Paged mode has its own click router (onStageClick) that has to weigh a
+      // click against the page-turn zones; scrolling has none, so the lookup
+      // happens here.
+      if (mode !== 'scroll') return;
+      if (
+        target.closest('a') ||
+        target.closest('button') ||
+        target.closest('input') ||
+        target.closest('textarea')
+      ) {
+        return;
+      }
+      const selection = window.getSelection();
+      if (selection && !selection.isCollapsed && selection.toString().trim()) return;
+      scheduleWordLookup(e.clientX, e.clientY);
     }
     root.addEventListener('mouseup', onMouseUp);
     root.addEventListener('click', onClick);
@@ -1014,7 +1511,134 @@ export default function Reader() {
       root.removeEventListener('mouseup', onMouseUp);
       root.removeEventListener('click', onClick);
     };
-  }, [mode, annotations]);
+    // `html` is a dependency because on a cold open the content node does not
+    // exist yet when this effect first runs — without it the listeners would
+    // never attach and selecting text would do nothing.
+  }, [mode, annotations, html, current, dictReady]);
+
+  /* ---- dictionary / vocabulary ---- */
+
+  // One lookup path for both gestures: a selection sent with 查词, and a word
+  // under a bare click. Both end up as the same card.
+  async function runLookup(
+    word: string,
+    start: number,
+    end: number,
+    at: { x: number; top: number; bottom: number },
+  ) {
+    if (!current || !word) return;
+    const root = contentRef.current;
+    const context = root ? sentenceAt(root, start, end) : '';
+    setLookupBusy(true);
+    try {
+      const res = await api.lookupWord(id, current, start, word, context);
+      setLookupCard({ ...at, res, offset: start, context });
+    } catch (e) {
+      toastError(e);
+    } finally {
+      setLookupBusy(false);
+    }
+  }
+
+  async function lookupSelection() {
+    if (!sel) return;
+    const { text, start, end } = sel;
+    const at = { x: sel.x, top: sel.y, bottom: sel.bottom };
+    setSel(null);
+    await runLookup(text.trim(), start, end, at);
+  }
+
+  // The word under a point in the page, if the point is on one at all. The
+  // caret comes from the browser's own hit test — the same one a text cursor
+  // uses — so a click in the margin or between words simply finds nothing.
+  function wordHitAt(x: number, y: number): { word: string; offset: number; rect: DOMRect } | null {
+    const root = contentRef.current;
+    if (!root) return null;
+    const doc = document as Document & {
+      caretRangeFromPoint?: (x: number, y: number) => Range | null;
+    };
+    const caret = doc.caretRangeFromPoint?.(x, y);
+    if (!caret) return null;
+    const node = caret.startContainer;
+    if (node.nodeType !== Node.TEXT_NODE || !root.contains(node)) return null;
+    const span = wordAt(node.textContent || '', caret.startOffset);
+    if (!span) return null;
+    const range = document.createRange();
+    range.setStart(node, span.start);
+    range.setEnd(node, span.end);
+    const rect = range.getBoundingClientRect();
+    if (rect.width <= 0) return null;
+    return { word: span.word, offset: charOffset(root, node, span.start), rect };
+  }
+
+  function cancelWordLookup() {
+    if (wordTimerRef.current !== null) {
+      window.clearTimeout(wordTimerRef.current);
+      wordTimerRef.current = null;
+    }
+  }
+
+  // Returns true when the point is on a word, meaning this click has become a
+  // lookup and the caller must not read it as anything else (page turn, chrome
+  // toggle). The deferral is what keeps selecting text clean: the mousedown of
+  // a double-click cancels this, so highlighting a word never flashes the card.
+  function scheduleWordLookup(x: number, y: number): boolean {
+    if (!dictReady || !current) return false;
+    const hit = wordHitAt(x, y);
+    if (!hit) return false;
+    cancelWordLookup();
+    const at = {
+      x: hit.rect.left + hit.rect.width / 2,
+      top: hit.rect.top,
+      bottom: hit.rect.bottom,
+    };
+    wordTimerRef.current = window.setTimeout(() => {
+      wordTimerRef.current = null;
+      void runLookup(hit.word, hit.offset, hit.offset + hit.word.length, at);
+    }, 160);
+    return true;
+  }
+
+  // Any fresh press ends the interpretation of the previous click, and leaving
+  // the reader must not fire a lookup afterwards.
+  useEffect(() => {
+    const onDown = () => cancelWordLookup();
+    window.addEventListener('mousedown', onDown);
+    return () => {
+      window.removeEventListener('mousedown', onDown);
+      cancelWordLookup();
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Pronunciation via the WebView's built-in speech synthesis: no network, no
+  // bundled audio, works offline.
+  function speak(text: string) {
+    if (!text) return;
+    try {
+      const u = new SpeechSynthesisUtterance(text);
+      u.lang = 'en-US';
+      u.rate = 0.9;
+      window.speechSynthesis.cancel();
+      window.speechSynthesis.speak(u);
+    } catch {
+      /* speech synthesis unavailable in this WebView */
+    }
+  }
+
+  async function addCardToNotebook() {
+    if (!lookupCard) return;
+    const { res, offset, context } = lookupCard;
+    const entry = res.entry;
+    if (!entry) return;
+    try {
+      const v = await api.vocabAdd(entry.word, res.query || entry.word, id, current || '', offset, context);
+      setLookupCard({ ...lookupCard, res: { ...res, recorded: true, vocabId: v.id } });
+      toast('已加入生词本', 'success');
+    } catch (e) {
+      toastError(e);
+    }
+  }
 
   /* ---- annotation / bookmark actions ---- */
   async function createAnnotation(color: string) {
@@ -1100,6 +1724,148 @@ export default function Reader() {
   if (loading) return <div className="loading">加载中…</div>;
   if (!book) return <div className="page empty">书籍不存在</div>;
 
+  // Overlays live outside both reading layouts: they are viewport-anchored, and
+  // keeping one copy is what makes "select a word, look it up" work while
+  // scrolling as well as while paging.
+  const overlayLayer = (
+    <>
+      {/* selection toolbar */}
+      {sel && (
+        <div className="sel-toolbar" ref={selPos.ref} style={overlayStyle(selPos.pos)}>
+          <button className="sel-lookup" title="查词" onClick={lookupSelection} disabled={lookupBusy}>
+            {lookupBusy ? '查询中' : '查词'}
+          </button>
+          {/* Highlights are painted by the paginated view only, so offering
+              colours while scrolling would promise something invisible. */}
+          {mode === 'paged' &&
+            COLORS.map((c) => (
+              <button key={c} className={`swatch sw-${c}`} title={c} onClick={() => createAnnotation(c)} />
+            ))}
+        </div>
+      )}
+
+      {/* dictionary card — fixed layer, never part of the page layout */}
+      {lookupCard && (
+        <div className="dict-card" ref={dictPos.ref} style={overlayStyle(dictPos.pos)}>
+          <button className="dict-close" title="关闭" onClick={() => setLookupCard(null)}>
+            ×
+          </button>
+          {!lookupCard.res.found || !lookupCard.res.entry ? (
+            <div className="dict-miss">
+              词库未收录 <b>{lookupCard.res.query}</b>
+            </div>
+          ) : (
+            <>
+              <div className="dict-head">
+                <span className="dict-word">{lookupCard.res.entry.word}</span>
+                {lookupCard.res.entry.phonetic && (
+                  <span className="dict-phon">/{lookupCard.res.entry.phonetic}/</span>
+                )}
+                <button
+                  className="dict-speak"
+                  title="朗读"
+                  onClick={() => speak(lookupCard.res.entry?.word || '')}
+                >
+                  发音
+                </button>
+              </div>
+              {lookupCard.res.entry.translation ? (
+                <div className="dict-trans">{lookupCard.res.entry.translation}</div>
+              ) : (
+                <div className="dict-trans muted">{lookupCard.res.entry.definition || '暂无释义'}</div>
+              )}
+              {lookupCard.res.base && (
+                <div className="dict-base">
+                  <span className="dict-base-label">原型</span>
+                  <b>{lookupCard.res.base.word}</b>
+                  {lookupCard.res.base.phonetic && (
+                    <span className="dict-phon">/{lookupCard.res.base.phonetic}/</span>
+                  )}
+                  {lookupCard.res.base.translation && (
+                    <div className="dict-base-trans">{lookupCard.res.base.translation}</div>
+                  )}
+                </div>
+              )}
+              <div className="dict-foot">
+                {lookupCard.res.recorded ? (
+                  <span className="dict-saved">已在生词本</span>
+                ) : (
+                  <>
+                    <span className="muted">
+                      {lookupCard.res.common ? '常用词，不自动收录' : '再查一次自动收录'}
+                    </span>
+                    <button className="btn sm" onClick={addCardToNotebook}>
+                      加入生词本
+                    </button>
+                  </>
+                )}
+              </div>
+            </>
+          )}
+        </div>
+      )}
+
+      {/* annotation popover */}
+      {popover && (
+        <div className="ann-popover" ref={popPos.ref} style={overlayStyle(popPos.pos)}>
+          <div className="ann-pop-colors">
+            {COLORS.map((c) => (
+              <button
+                key={c}
+                className={`swatch sw-${c}${popover.ann.color === c ? ' on' : ''}`}
+                onClick={() => changeAnnColor(c)}
+              />
+            ))}
+          </div>
+          <textarea
+            className="ann-note"
+            placeholder="添加批注…"
+            value={noteDraft}
+            onChange={(e) => setNoteDraft(e.target.value)}
+          />
+          <div className="ann-pop-actions">
+            <button className="btn sm" onClick={saveAnnNote}>
+              保存
+            </button>
+            <button className="btn sm danger" onClick={() => removeAnnotation(popover.ann.id)}>
+              删除
+            </button>
+          </div>
+        </div>
+      )}
+    </>
+  );
+
+  // The banner that explains a detour and offers the two ways out of it. It is
+  // the only place in the reader that admits it is not a normal visit.
+  //
+  // Floating above the page it sits clear of the bottom chrome instead of under
+  // it, so the buttons never end up behind a bar that appears on approach.
+  const detourBar = detour ? (
+    <div
+      className={`detour-bar${mode === 'paged' ? ' floating' : ''}`}
+      style={mode === 'paged' && chromeOpen ? { bottom: 58 } : undefined}
+    >
+      <span className="detour-word">{detour.word}</span>
+      <span className="detour-hint">生词本跳转 · 临时查看，不记录阅读进度</span>
+      <span className="detour-gap" />
+      <button
+        className="btn sm"
+        disabled={!origin}
+        onClick={backToLastReading}
+        title={origin ? '回到上次读到的地方' : '这本书还没有阅读记录'}
+      >
+        回到上次阅读
+      </button>
+      <button className="btn sm" onClick={resumeFromDetour} title="把当前位置记为阅读进度，正常往下读">
+        从此处继续读
+      </button>
+      <button className="btn sm" onClick={() => nav('/vocab')}>
+        返回生词本
+      </button>
+    </div>
+  ) : null;
+
   if (mode === 'scroll') {
     return (
       <div className="reader">
@@ -1131,36 +1897,53 @@ export default function Reader() {
         </aside>
 
         <div className="reader-main" ref={mainRef}>
-          <div className="reader-toolbar">
-            <div className="crumb">
-              <strong>{book.title}</strong>
-              <span>·</span>
-              <span>{book.author || '未知作者'}</span>
+          <div className="reader-head">
+            {detourBar}
+            <div className="reader-toolbar">
+              <div className="crumb">
+                <strong>{book.title}</strong>
+                <span>·</span>
+                <span>{book.author || '未知作者'}</span>
+              </div>
+              <span style={{ flex: 1 }} />
+              <button className="btn sm" onClick={() => setFontSize((f) => Math.max(13, f - 1))}>
+                A−
+              </button>
+              <span className="muted" style={{ fontSize: 12, minWidth: 30, textAlign: 'center' }}>
+                {fontSize}
+              </span>
+              <button className="btn sm" onClick={() => setFontSize((f) => Math.min(26, f + 1))}>
+                A+
+              </button>
+              <button className="btn sm" onClick={() => setMode('paged')}>
+                翻页模式
+              </button>
+              <Link className="btn sm" to={`/books/${id}/edit`}>
+                整理
+              </Link>
+              <button className="btn sm" onClick={() => nav(detour ? '/vocab' : '/')}>
+                {detour ? '生词本' : '书架'}
+              </button>
             </div>
-            <span style={{ flex: 1 }} />
-            <button className="btn sm" onClick={() => setFontSize((f) => Math.max(13, f - 1))}>
-              A−
-            </button>
-            <span className="muted" style={{ fontSize: 12, minWidth: 30, textAlign: 'center' }}>
-              {fontSize}
-            </span>
-            <button className="btn sm" onClick={() => setFontSize((f) => Math.min(26, f + 1))}>
-              A+
-            </button>
-            <button className="btn sm" onClick={() => setMode('paged')}>
-              翻页模式
-            </button>
-            <Link className="btn sm" to={`/books/${id}/edit`}>
-              整理
-            </Link>
-            <button className="btn sm" onClick={() => nav('/')}>
-              书架
-            </button>
           </div>
 
           <article className="reader-paper">
-            <div className="reader-content" style={{ fontSize }} dangerouslySetInnerHTML={{ __html: safeHtml }} />
+            <div
+              className="reader-content"
+              ref={contentRef}
+              style={{ fontSize }}
+              dangerouslySetInnerHTML={{ __html: safeHtml }}
+            />
           </article>
+
+          {flash && (
+            <div
+              className="jump-flash"
+              style={{ left: flash.left, top: flash.top, width: flash.width, height: flash.height }}
+            />
+          )}
+
+          {overlayLayer}
 
           <div className="reader-nav">
             <button className="btn" disabled={!prev} onClick={() => prev && openChapter(prev.id)}>
@@ -1222,7 +2005,15 @@ export default function Reader() {
           </div>
         </aside>
       )}
-      <div className="reader-stage" ref={stageRef} onClick={onStageClick}>
+      <div
+        className="reader-stage"
+        ref={stageRef}
+        onClick={onStageClick}
+        onMouseDown={onStageMouseDown}
+        onMouseMove={onStageMouseMove}
+        onMouseUp={onStageMouseUp}
+        onMouseLeave={onStageMouseUp}
+      >
         <div
           className={`reader-spread${fxOut ? ' fx-out' : ''}`}
           ref={spreadRef}
@@ -1232,18 +2023,24 @@ export default function Reader() {
           }}
         >
           {/* Covered page edges: the rest of the book peeking out from behind the
-              current sheet(s), so it reads like an open book. Shown only when there
-              are actually pages on that side. */}
+              current sheet(s), so it reads like an open book. Each side only
+              appears when the book actually continues that way — the stack is
+              also the target for a page-edge click, and an edge that leads
+              nowhere would be a promise the click cannot keep. */}
           {geometryReady && (
             <>
-              <div
-                className="book-edge left"
-                style={{ left: -bookEdgeVisible, width: bookEdgeW, height: sheetHeight }}
-              />
-              <div
-                className="book-edge right"
-                style={{ left: viewWidth - bookEdgeTuck, width: bookEdgeW, height: sheetHeight }}
-              />
+              {pageIndex > 0 && (
+                <div
+                  className="book-edge left"
+                  style={{ left: -bookEdgeVisible, width: bookEdgeW, height: sheetHeight }}
+                />
+              )}
+              {pageIndex + pagesPerView < pageCount && (
+                <div
+                  className="book-edge right"
+                  style={{ left: viewWidth - bookEdgeTuck, width: bookEdgeW, height: sheetHeight }}
+                />
+              )}
             </>
           )}
           {geometryReady &&
@@ -1304,12 +2101,14 @@ export default function Reader() {
         </div>
       </div>
 
+      {detourBar}
+
       {(chromeOpen || chromeHover) && (
         <>
           <div className="reader-chrome top">
             <div className="chrome-left">
-              <button className="btn sm" onClick={() => nav('/')}>
-                ← 书架
+              <button className="btn sm" onClick={() => nav(detour ? '/vocab' : '/')}>
+                {detour ? '← 生词本' : '← 书架'}
               </button>
               <div className="crumb">
                 <strong>{book.title}</strong>
@@ -1488,43 +2287,7 @@ export default function Reader() {
         </div>
       )}
 
-      {/* selection toolbar */}
-      {sel && (
-        <div className="sel-toolbar" style={{ left: sel.x, top: sel.y }}>
-          {COLORS.map((c) => (
-            <button key={c} className={`swatch sw-${c}`} title={c} onClick={() => createAnnotation(c)} />
-          ))}
-        </div>
-      )}
-
-      {/* annotation popover */}
-      {popover && (
-        <div className="ann-popover" style={{ left: popover.x, top: popover.y }}>
-          <div className="ann-pop-colors">
-            {COLORS.map((c) => (
-              <button
-                key={c}
-                className={`swatch sw-${c}${popover.ann.color === c ? ' on' : ''}`}
-                onClick={() => changeAnnColor(c)}
-              />
-            ))}
-          </div>
-          <textarea
-            className="ann-note"
-            placeholder="添加批注…"
-            value={noteDraft}
-            onChange={(e) => setNoteDraft(e.target.value)}
-          />
-          <div className="ann-pop-actions">
-            <button className="btn sm" onClick={saveAnnNote}>
-              保存
-            </button>
-            <button className="btn sm danger" onClick={() => removeAnnotation(popover.ann.id)}>
-              删除
-            </button>
-          </div>
-        </div>
-      )}
+      {overlayLayer}
     </div>
   );
 }

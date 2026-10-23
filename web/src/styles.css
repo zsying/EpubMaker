@@ -333,6 +333,13 @@ a {
 .page.library .lib-head {
   flex: none;
 }
+/* A dropped file is accepted anywhere on the shelf, so the highlight belongs to
+   the page and not only to the dashed box the reader is told to aim at. */
+.page.library.dropping {
+  outline: 2px dashed var(--accent);
+  outline-offset: -8px;
+  border-radius: 14px;
+}
 .lib-scroll {
   flex: 1;
   min-height: 0;
@@ -1132,6 +1139,120 @@ a {
   background: rgba(18, 20, 26, 0.96);
   border-radius: 8px;
   box-shadow: 0 6px 18px rgba(0, 0, 0, 0.3);
+}
+
+.sel-lookup {
+  height: 22px;
+  padding: 0 9px;
+  border: 0;
+  border-radius: 4px;
+  background: var(--accent);
+  color: #fff;
+  font-family: var(--font);
+  font-size: 12px;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.sel-lookup:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+/* Dictionary card: a fixed overlay above the page. It must never join the page
+   flow — paginated mode measures content height, so an in-flow card would
+   change the page count and move the reader. */
+.dict-card {
+  position: fixed;
+  z-index: 62;
+  transform: translateX(-50%);
+  width: 330px;
+  max-height: 62vh;
+  overflow-y: auto;
+  padding: 12px 14px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  font-size: 13px;
+  line-height: 1.6;
+}
+.dict-close {
+  position: absolute;
+  top: 6px;
+  right: 8px;
+  width: 20px;
+  height: 20px;
+  border: 0;
+  background: transparent;
+  color: var(--text-3);
+  font-size: 16px;
+  line-height: 1;
+  cursor: pointer;
+}
+.dict-head {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding-right: 18px;
+}
+.dict-word {
+  font-family: var(--font-serif);
+  font-size: 19px;
+  font-weight: 600;
+  color: var(--text);
+}
+.dict-phon {
+  color: var(--text-2);
+  font-size: 12px;
+}
+.dict-speak {
+  margin-left: auto;
+  padding: 2px 8px;
+  border: 1px solid var(--border-strong);
+  border-radius: 6px;
+  background: var(--panel-2);
+  color: var(--text-2);
+  font-size: 12px;
+  cursor: pointer;
+}
+.dict-trans {
+  margin-top: 8px;
+  color: var(--text);
+  white-space: pre-line;
+}
+.dict-base {
+  margin-top: 10px;
+  padding-top: 8px;
+  border-top: 1px dashed var(--border);
+  color: var(--text-2);
+}
+.dict-base-label {
+  margin-right: 6px;
+  color: var(--text-3);
+  font-size: 11px;
+}
+.dict-base-trans {
+  margin-top: 2px;
+  white-space: pre-line;
+}
+.dict-foot {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 10px;
+  padding-top: 8px;
+  border-top: 1px solid var(--border);
+  font-size: 12px;
+}
+.dict-foot .btn {
+  margin-left: auto;
+}
+.dict-saved {
+  color: var(--ok);
+}
+.dict-miss {
+  padding-right: 18px;
+  color: var(--text-2);
 }
 .swatch {
   width: 22px;
@@ -1977,4 +2098,268 @@ a {
   .reader-paper {
     padding: 28px 20px 40px;
   }
+}
+
+/* ------------------------------ vocabulary notebook ------------------------------ */
+
+.vocab-search {
+  width: 220px;
+  height: 32px;
+}
+
+.vocab-filters {
+  display: flex;
+  gap: 6px;
+  margin-bottom: 14px;
+}
+
+.vocab-wordline {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  margin-bottom: 4px;
+}
+
+.vocab-word {
+  font-size: 17px;
+  font-weight: 650;
+  letter-spacing: 0.2px;
+}
+
+/* Status is a quiet label, not a badge to collect: the list is read, not scored. */
+.vocab-status {
+  font-size: 11px;
+  padding: 1px 7px;
+  border-radius: 20px;
+  background: #eef1f6;
+  color: var(--text-3);
+}
+
+.vocab-status.s-learning {
+  background: #fff4e2;
+  color: #9a6300;
+}
+
+.vocab-status.s-known {
+  background: #e8f6ec;
+  color: #256b3b;
+}
+
+.vocab-trans {
+  font-size: 13.5px;
+  color: var(--text-2);
+  margin-bottom: 6px;
+  white-space: pre-line;
+}
+
+.vocab-hit {
+  background: rgba(255, 214, 102, 0.5);
+  color: inherit;
+  border-radius: 2px;
+  padding: 0 1px;
+}
+
+.vocab-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  justify-content: center;
+  padding-right: 8px;
+}
+
+/* Review pass */
+.review-card {
+  max-width: 520px;
+  margin: 24px auto;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  padding: 36px 28px 28px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+}
+
+.review-word {
+  font-size: 30px;
+  font-weight: 650;
+  letter-spacing: 0.3px;
+}
+
+.review-phon {
+  font-size: 13px;
+  color: var(--text-3);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+.review-reveal {
+  margin-top: 14px;
+  width: 100%;
+  padding: 14px;
+  border: 1px dashed var(--border-strong);
+  border-radius: 10px;
+  background: var(--panel-2);
+  color: var(--text-3);
+  font-family: inherit;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.review-reveal:hover {
+  border-color: #b9c0cd;
+  color: var(--text-2);
+}
+
+.review-trans {
+  margin-top: 10px;
+  font-size: 15px;
+  line-height: 1.7;
+  color: var(--text);
+  white-space: pre-line;
+  text-align: center;
+}
+
+.review-context {
+  font-size: 13px;
+  color: var(--text-2);
+  line-height: 1.7;
+  text-align: center;
+  max-width: 440px;
+}
+
+.review-actions {
+  display: flex;
+  gap: 10px;
+  margin-top: 16px;
+}
+
+/* Landing highlight for "jump back to the sentence" in scrolling mode. Fixed so
+   it can never take part in the text layout. */
+.jump-flash {
+  position: fixed;
+  z-index: 55;
+  pointer-events: none;
+  border-radius: 3px;
+  background: rgba(255, 214, 102, 0.55);
+  box-shadow: 0 0 0 2px rgba(255, 214, 102, 0.35);
+  animation: jump-flash 1.4s ease-out forwards;
+}
+
+@keyframes jump-flash {
+  0% {
+    opacity: 0;
+  }
+  15% {
+    opacity: 1;
+  }
+  70% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0;
+  }
+}
+
+/* Delete mode: the destructive action is behind a mode, so the row only gets a
+   checkbox once you have asked for one. */
+.note-card.picked {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.vocab-check {
+  flex: none;
+  width: 16px;
+  height: 16px;
+  align-self: center;
+  margin: 0 2px 0 8px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 4px;
+  border: 1.5px solid var(--border-strong);
+  background: var(--panel);
+  color: #fff;
+  font-size: 11px;
+  line-height: 1;
+}
+
+.vocab-check.on {
+  border-color: var(--accent);
+  background: var(--accent);
+}
+
+.vocab-hint {
+  align-self: center;
+  font-size: 12px;
+  margin-left: 4px;
+}
+
+/* ------------------------------ notebook detour ------------------------------ */
+
+/* In scrolling mode the banner is part of the sticky header so it stays in
+   sight; the toolbar underneath keeps its own styling and loses its stickiness
+   to the wrapper. */
+.reader-head {
+  position: sticky;
+  top: 0;
+  z-index: 6;
+}
+
+.reader-head .reader-toolbar {
+  position: static;
+}
+
+.detour-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 18px;
+  background: var(--accent-soft);
+  border-bottom: 1px solid #ccd9ff;
+  font-size: 13px;
+  color: var(--text-2);
+  white-space: nowrap;
+}
+
+.detour-word {
+  font-weight: 650;
+  color: var(--accent);
+}
+
+.detour-hint {
+  color: var(--text-2);
+}
+
+.detour-gap {
+  flex: 1;
+}
+
+/* In the paged reader the banner floats above the sheet instead of pushing the
+   page down: pagination is measured from content height, so anything that
+   changes the layout would silently move the reader to another page.
+   It outranks the chrome (z 30) so it can never end up behind a bar that
+   appears on edge hover; the reader lifts it clear of the chrome when open. */
+.detour-bar.floating {
+  position: absolute;
+  left: 50%;
+  bottom: 18px;
+  transform: translateX(-50%);
+  z-index: 31;
+  max-width: calc(100% - 40px);
+  border: 1px solid #ccd9ff;
+  border-radius: 999px;
+  padding: 8px 10px 8px 16px;
+  background: rgba(234, 240, 255, 0.97);
+  box-shadow: 0 6px 24px rgba(16, 24, 40, 0.14);
+  backdrop-filter: blur(8px);
+}
+
+/* The word you came back for. Kept visually distinct from a real highlight so
+   it never looks like something you made by hand. */
+.reader-content mark.hl-vocab {
+  background: #ffe9a8;
+  box-shadow: 0 0 0 1px #f0cf6a inset;
 }

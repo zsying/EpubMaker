@@ -5,7 +5,97 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
-Nothing yet.
+## [0.2.0] — 2026-10-23
+
+The reader grew a memory. Look a word up as you read and it settles into a
+cross-book notebook; the notebook is reviewed on an SM-2 schedule instead of
+being re-listed; and the reading itself became direct — one click on a word, one
+click or one pull on the paper's edge to turn. Everything else in this release
+is polish around that: a shelf that stops blanking, an Escape key that closes
+one layer at a time, and a drop zone that finally imports what you drop.
+
+### Added
+
+- **Dictionary lookup** — select a word in the reader to see phonetic, gloss and
+  base form without leaving the page. Backed by a local ECDICT SQLite database
+  (`internal/dict`) with lemma table and suffix fallback; installable from the
+  library page or `go run ./cmd/dictimport <csv>` (770,611 entries, ~98 MB).
+- **Vocabulary notebook** — looked-up words settle into a cross-book notebook
+  with the sentence and location they came from (`internal/vocab`). Words ranked
+  in the top 5000 by frequency are never auto-filed; everything else needs a
+  second lookup. Manual adding always works.
+- **Pronunciation** — uses the WebView's built-in speech synthesis, so no audio
+  files ship with the app.
+- **Notebook page** — every word with its gloss, the sentence it was met in and
+  the book it came from; filter by status, search, mark as known, delete. Clicking
+  a row jumps back to that line in the book (scrolling mode included, with the
+  word kept highlighted). A one-pass review shows the word first and the gloss on
+  click.
+- **Review history** — every grade bumps a review counter and a timestamp, so
+  "学习中" means "you were asked and did not know it" rather than nothing at all.
+- **Spaced repetition** — the review pass is scheduled with SM-2 rather than
+  "everything not yet mastered, in some order": a correct answer walks the
+  interval 1 day → 6 days → interval × ease, a miss drops the word to a
+  ten-minute relearning step and lowers its ease factor (clamped at 1.3), and a
+  word only counts as mastered once its interval reaches three weeks. The
+  notebook header counts what is **due today** — not what is unmastered — each
+  row says when it comes back, and every grade reports the new interval.
+- **Batch delete** — deletion is behind a mode in the notebook header: rows
+  become checkboxes, selection can be inverted, and nothing goes until a
+  confirmation names the count.
+- **One-click lookup** — a single click on a word opens its card; no selection
+  needed. The pointer is resolved with the browser's caret hit test and expanded
+  to the word around it, so clicking the margin, a space or a number does
+  nothing. Double-clicking still selects (and reaches the highlight colours)
+  without flashing a card on the way.
+- **Page turning on the book itself** — clicking the covered page stack or the
+  empty space beside the book turns, and so does holding the mouse in that edge
+  and pulling the paper sideways (one page per gesture). The turn zones follow
+  the book instead of a fixed share of the window, so the text column is never a
+  page-turn surface.
+
+### Fixed
+
+- Dropping an EPUB on the shelf now imports it. The drop zone claimed to accept
+  files but only opened the native picker, because a webview drop carries `File`
+  objects with no filesystem path and the import reads from disk. Drops are now
+  resolved natively (`DragAndDrop.EnableFileDrop` + `web/src/filedrop.ts`) and
+  import straight away, anywhere on the shelf rather than only on the dashed
+  box. The same change stops a dropped file from navigating the webview to it —
+  previously, dropping anywhere else replaced the app with the raw file.
+- Marking a word 已掌握 no longer drops it out of study for good: it is treated
+  as a claim and scheduled for a check three weeks out. 忽略 stays the way to
+  retire a word permanently.
+- The shelf no longer blanks itself on every visit. Returning from a book, the
+  notebook or the trash used to unmount the page and rebuild it from nothing:
+  a "加载中…" line where the grid had been, then every cover decoding again.
+  The page now keeps its last answer across navigations, paints it immediately
+  and refreshes underneath, asks the backend once per visit instead of twice,
+  and puts imported or deleted books on the shelf as they happen rather than
+  after a full reload.
+- Escape now dismisses what is on top of the page before leaving it: the word
+  card, the selection toolbar, an annotation popover, the contents / bookmarks /
+  annotations drawers, and the menu bar each take one press, and only a reader
+  with nothing left to close goes back to the library. A bar raised by hovering
+  the page edge counts as the same layer and stays down until the pointer
+  leaves the edge, and a focused note field swallows the press instead of
+  closing the book.
+- The notebook detour banner no longer gets covered by the bottom chrome bar that
+  slides out when the pointer approaches the bottom edge: the edge probe is off
+  for the whole detour, and the banner outranks the chrome when the bars are
+  opened on purpose.
+- The covered page stacks are only drawn when the book continues that way,
+  instead of always promising a turn in both directions.
+- The lookup card, selection toolbar and annotation popover now stay inside the
+  window: they are clamped sideways and flip to the other side of the text when
+  the preferred direction has no room.
+- A notebook jump no longer overwrites the reading position, and Backspace during
+  one returns to the notebook. The visitor gets a banner with "back to where I
+  was" and "continue reading from here".
+- Scrolling mode stored offset 0 on every save, so "last read" always meant
+  "start of the chapter". It now records the character at the top of the pane.
+- Selecting a word did nothing in scrolling mode, which is the default: the
+  selection listener and the overlay layer only existed in the paginated view.
 
 ## [0.1.0] — 2026-10-09
 
@@ -61,5 +151,6 @@ backend is Go — no Node service, no reverse proxy, no open ports.
 - `build`/`dev` pin `GOTOOLCHAIN` to the version in `app/go.mod`, working around
   wails v2.11 being unable to read Go 1.27 export data.
 
-[Unreleased]: https://github.com/zsying/epubmaker/compare/v0.1.0...HEAD
-[0.1.0]: https://github.com/zsying/epubmaker/releases/tag/v0.1.0
+[Unreleased]: https://github.com/zsying/EpubMaker/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/zsying/EpubMaker/releases/tag/v0.2.0
+[0.1.0]: https://github.com/zsying/EpubMaker/releases/tag/v0.1.0

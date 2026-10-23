@@ -9,6 +9,105 @@
 // window.go.app.App (SelectEpubFiles / SelectCoverFile); the chosen filesystem
 // path is read on the Go side, so no multipart upload is required.
 
+/** One dictionary headword as the reader popover renders it. */
+export interface WordDetail {
+  word: string;
+  phonetic: string;
+  /** Chinese translation, newline separated ("\n" already unescaped server-side). */
+  translation: string;
+  /** English definition, newline separated. */
+  definition: string;
+  pos: string;
+  tag: string;
+  collins: number;
+  frq: number;
+  bnc: number;
+}
+
+/**
+ * Result of looking a word up while reading.
+ *
+ * `entry` is the word as it was met — ECDICT ships inflected forms as their own
+ * headwords, and those often define nothing but "past tense of X". `base` is
+ * the lemma behind it, present only when it differs, so the popover can show
+ * the real meaning instead of a cross-reference.
+ */
+export interface LookupResult {
+  found: boolean;
+  query: string;
+  matched: string;
+  lemmatized: boolean;
+  entry?: WordDetail | null;
+  base?: WordDetail | null;
+  /** Top-5000 basic vocabulary: never auto-added to the notebook. */
+  common: boolean;
+  /** How many times this word has been looked up (0 for basic vocabulary). */
+  seenCount: number;
+  /** Whether this lookup put the word in the notebook. */
+  recorded: boolean;
+  vocabId: string;
+}
+
+/** A notebook entry. Words are global — they outlive the book they came from. */
+export interface VocabEntry {
+  id: string;
+  term: string;
+  surface: string;
+  bookId: string;
+  chapterId: string;
+  /** Character offset inside the chapter, for jumping back to the sentence. */
+  offset: number;
+  context: string;
+  status: 'new' | 'learning' | 'known' | 'ignored';
+  lookups: number;
+  /** How many times the word has been put in front of you in a review pass. */
+  reviews: number;
+  /** Empty until the first review. */
+  lastReviewedAt: string;
+  /**
+   * Spaced-repetition state (SM-2). The interval is the current gap in days —
+   * below 1 means the ten-minute relearning step — and `dueAt` is when the word
+   * is next worth asking about (empty for a word that was never scheduled).
+   */
+  intervalDays: number;
+  ease: number;
+  dueAt: string;
+  /** Consecutive clean passes; resets on a miss. */
+  streak: number;
+  /** Total misses. */
+  lapses: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+/**
+ * A notebook row as the notebook page renders it: the stored entry plus its
+ * dictionary gloss and the titles of the place it was met. `bookTitle` is empty
+ * when that book has since been deleted — the word stays, the trail does not.
+ */
+export interface VocabItem extends VocabEntry {
+  bookTitle: string;
+  chapterTitle: string;
+  phonetic: string;
+  translation: string;
+}
+
+export interface VocabStats {
+  total: number;
+  new: number;
+  learning: number;
+  known: number;
+  ignored: number;
+  /** Words whose schedule has come up — what the review button offers. */
+  due: number;
+}
+
+export interface DictStatus {
+  installed: boolean;
+  path: string;
+  entries: number;
+}
+
 export interface Book {
   id: string;
   title: string;
@@ -171,12 +270,13 @@ export const api = {
 
   listBooks: (keyword?: string) => call<Book[]>('ListBooks', keyword ?? ''),
 
-  /** Opens the native EPUB multi-select dialog, then imports the chosen files. */
-  importBooks: async (): Promise<{ books: Book[]; errors: string[] }> => {
-    const paths = await callApp<string[]>('SelectEpubFiles');
-    if (!paths || paths.length === 0) return { books: [], errors: [] };
-    return call('ImportPaths', paths);
-  },
+  /** Opens the native EPUB multi-select dialog; returns [] when cancelled. */
+  selectEpubFiles: () => callApp<string[]>('SelectEpubFiles'),
+
+  /** Imports EPUB files from local paths. Both the dialog and an OS file drop end
+   * up here — a drop can only be turned into paths by the native side. */
+  importPaths: (paths: string[]) =>
+    call<{ books: Book[]; errors: string[] }>('ImportPaths', paths),
 
   getBook: (id: string) => call<Book>('GetBook', id),
 
@@ -285,5 +385,41 @@ export const api = {
     call<WebDavEntry[]>('WebdavList', conn, dirPath),
 
   webdavImport: (conn: WebDavConn, items: { path: string; name: string }[]) =>
-    call<{ books: Book[]; errors: string[] }>('WebdavImport', conn, items)
+    call<{ books: Book[]; errors: string[] }>('WebdavImport', conn, items),
+
+  /* ---------------- reading: dictionary / vocabulary ---------------- */
+
+  dictStatus: () => call<DictStatus>('DictStatus'),
+
+  /** Opens the native csv picker; returns '' when the user cancels. */
+  selectDictFile: () => callApp<string>('SelectDictFile'),
+
+  /** Builds the local dictionary from an ECDICT csv chosen on disk. Blocking. */
+  dictImport: (csvPath: string) => call<{ entries: number; path: string }>('DictImportCSV', csvPath),
+
+  lookupWord: (bookId: string, chapterId: string, offset: number, word: string, context: string) =>
+    call<LookupResult>('LookupWord', bookId, chapterId, offset, word, context),
+
+  vocabAdd: (
+    term: string,
+    surface: string,
+    bookId: string,
+    chapterId: string,
+    offset: number,
+    context: string
+  ) => call<VocabEntry>('VocabAdd', term, surface, bookId, chapterId, offset, context),
+
+  listVocab: (status: string, keyword: string) => call<VocabItem[]>('ListVocab', status, keyword),
+
+  /** The next review session: only words that have come due. */
+  vocabQueue: (limit: number) => call<VocabItem[]>('VocabQueue', limit),
+
+  vocabStats: () => call<VocabStats>('VocabStats'),
+
+  setVocabStatus: (vid: string, status: string) => call<boolean>('SetVocabStatus', vid, status),
+
+  /** Record one review outcome and reschedule the word; returns the new state. */
+  gradeVocab: (vid: string, known: boolean) => call<VocabEntry>('GradeVocab', vid, known),
+
+  deleteVocab: (vid: string) => call<boolean>('DeleteVocab', vid)
 };

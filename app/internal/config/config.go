@@ -18,6 +18,7 @@ type AppConfig struct {
 	ExportDir        string `json:"exportDir"`
 	LogDir           string `json:"logDir"`
 	TmpDir           string `json:"tmpDir"`
+	DictDir          string `json:"dictDir"`
 	LogLevel         string `json:"logLevel"`
 	MaxUploadSizeMb  int    `json:"maxUploadSizeMb"`
 	KeepOriginalEpub bool   `json:"keepOriginalEpub"`
@@ -31,6 +32,8 @@ type Paths struct {
 	Tmp     string `json:"tmp"`
 	Books   string `json:"books"`
 	DbFile  string `json:"dbFile"`
+	Dict    string `json:"dict"`
+	DictDB  string `json:"dictDb"`
 }
 
 // Resolved is the full config with absolute paths filled in.
@@ -43,7 +46,7 @@ type Resolved struct {
 
 var defaults = AppConfig{
 	Port: 7801, Host: "127.0.0.1",
-	DataDir: "data", ExportDir: "exports", LogDir: "logs", TmpDir: "tmp",
+	DataDir: "data", ExportDir: "exports", LogDir: "logs", TmpDir: "tmp", DictDir: "dict",
 	LogLevel: "info", MaxUploadSizeMb: 300, KeepOriginalEpub: true,
 }
 
@@ -92,6 +95,7 @@ func Load(force bool) (*Resolved, error) {
 	merged.ExportDir = overlayString("exportDir", merged.ExportDir)
 	merged.LogDir = overlayString("logDir", merged.LogDir)
 	merged.TmpDir = overlayString("tmpDir", merged.TmpDir)
+	merged.DictDir = overlayString("dictDir", merged.DictDir)
 	merged.LogLevel = overlayString("logLevel", merged.LogLevel)
 	merged.Port = overlayInt("port", merged.Port)
 	merged.MaxUploadSizeMb = overlayInt("maxUploadSizeMb", merged.MaxUploadSizeMb)
@@ -112,7 +116,7 @@ func Load(force bool) (*Resolved, error) {
 	needWrite := true
 	if _, err := os.Stat(cfgFile); err == nil {
 		needWrite = false
-		for _, k := range []string{"port", "host", "dataDir", "exportDir", "logDir", "tmpDir", "logLevel", "maxUploadSizeMb", "keepOriginalEpub"} {
+		for _, k := range []string{"port", "host", "dataDir", "exportDir", "logDir", "tmpDir", "dictDir", "logLevel", "maxUploadSizeMb", "keepOriginalEpub"} {
 			if _, ok := raw[k]; !ok {
 				needWrite = true
 				break
@@ -132,6 +136,7 @@ func Load(force bool) (*Resolved, error) {
 		return filepath.Join(ah, v)
 	}
 	dataDir := resolve(merged.DataDir)
+	dictDir := resolve(merged.DictDir)
 	r := &Resolved{
 		AppConfig:  merged,
 		AppHome:    ah,
@@ -143,9 +148,11 @@ func Load(force bool) (*Resolved, error) {
 			Tmp:     resolve(merged.TmpDir),
 			Books:   filepath.Join(dataDir, "books"),
 			DbFile:  filepath.Join(dataDir, "epubmaker.db"),
+			Dict:    dictDir,
+			DictDB:  filepath.Join(dictDir, "dict.db"),
 		},
 	}
-	for _, d := range []string{r.Paths.Data, r.Paths.Exports, r.Paths.Logs, r.Paths.Tmp, r.Paths.Books} {
+	for _, d := range []string{r.Paths.Data, r.Paths.Exports, r.Paths.Logs, r.Paths.Tmp, r.Paths.Books, r.Paths.Dict} {
 		if err := os.MkdirAll(d, 0o755); err != nil {
 			return nil, err
 		}
