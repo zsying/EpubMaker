@@ -75,6 +75,24 @@
     + `web/src/filedrop.ts`），**不要**改用 `e.dataTransfer.files` 读文件：webview 给的 `File`
     没有路径，而且缺了原生监听连默认行为都拦不住（拖进来会把 webview 导航到那个文件）。
 
+## 移动端（Android）
+
+宿主是独立入口 `app/cmd/mobile`（Wails **v3**），桌面仍是 `app/main.go`（v2），两份共用一个
+`internal/app.Backend` 和一份 `web/dist`；`web/src/api.ts` 按宿主选传输层。构建 **只走
+`app/cmd/mobile/build-android.ps1`**（`wails3 task` 在 Windows 上跑不通，见 `app/README-mobile.md`）。
+
+11. **只能用 arm64 真机验证，x86_64 模拟器必崩**。`modernc.org/sqlite` 经 `modernc.org/libc`
+    访问文件，libc 在 amd64 上照 musl 的做法，`fstatat` 先试已废弃的 `stat`/`lstat`（系统调用
+    4/6），拿不到 `ENOSYS` 才降级 `newfstatat`。Android x86_64 的 seccomp 对这两条回
+    `SECCOMP_RET_TRAP`，进程直接 `SIGSYS` 死掉——**第一次碰 SQLite 就崩**，tombstone 里是
+    `seccomp prevented call to disallowed x86_64 system call 6`。libc v1.74.4 / v1.79.0 都一样，
+    升级解决不了。arm64 上根本没有 `lstat`/`stat`，同一条 shim 发的是 `fstatat`(79)/`fstat`(80)，
+    都在白名单，所以真机没事。想改前端样式可以在 x86_64 镜像上看（资源能加载、窗口能开），
+    但**任何碰数据库的功能都别在这个镜像上测**。
+    c-shared 进程的 `log` 输出**进不了 logcat**，启动崩溃是静默的：`cmd/mobile/main.go` 的
+    `trace()` 往 `files/trace.log` 写启动标记（含 `db.Open` 失败原因），用
+    `adb shell run-as com.wails.app cat files/trace.log` 读，别指望 logcat。
+
 ## 开发约定
 
 - **首选入口 `.\run.ps1`**（无参数打印帮助）：`dev` / `build` / `nsis` / `test` / `clean` / `web` / `install`。

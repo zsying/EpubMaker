@@ -1,0 +1,37 @@
+# Android build entry point for EpubMaker.
+#
+# The desktop app builds with wails v2 from app/ (run.ps1). This directory is a
+# separate wails v3 host that shares the same internal packages, so both can be
+# built from one module without either becoming the other's build system.
+#
+#   wails3 task android:build        # compile libwails.so (no APK)
+#   wails3 task android:assemble:apk # compile + gradle assembleDebug
+#   wails3 task apk                  # the two steps above, output in bin/
+#
+# Requires ANDROID_HOME and JAVA_HOME (see app/README-mobile.md).
+version: '3'
+
+vars:
+  APP_NAME: "EpubMaker"
+  BIN_DIR: "bin"
+
+includes:
+  common: ./build/Taskfile.yml
+  android: ./build/android/Taskfile.yml
+
+tasks:
+  build:
+    summary: Compiles the Go code for Android (libwails.so)
+    cmds:
+      - task: android:build
+
+  apk:
+    summary: Builds a debug APK into bin/
+    cmds:
+      - task: android:assemble:apk
+
+  clean:
+    summary: Removes build artifacts
+    cmds:
+      - task: android:clean
+      - rm -rf frontend/dist

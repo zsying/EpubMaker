@@ -5,6 +5,20 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Added
+
+- **Android app** — the library, the reader and the dictionary now run on a
+  phone. A second entry point (`app/cmd/mobile`, Wails v3) binds the *same*
+  `internal/app.Backend` the desktop binds with Wails v2, and the same
+  `web/dist` bundle detects its host at runtime, so one frontend serves both.
+  No port is opened on the phone either: assets travel through
+  `WebViewAssetLoader` and calls through the in-process bridge.
+- **Touch-first reading** — on a phone the page fills the screen instead of
+  lying on a desk: no rounded corners, no drop shadow, no spine shading. Tap the
+  top/bottom margin to toggle the chrome, the edges to turn, a word to look it
+  up. Long-press selection drives the lookup toolbar (a touch screen never fires
+  `mouseup`), and a swipe still turns the page while a word card is open.
+
 ## [0.2.0] — 2026-10-23
 
 The reader grew a memory. Look a word up as you read and it settles into a

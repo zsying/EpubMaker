@@ -17,3 +17,16 @@ web/src/wailsjs/
 app/frontend/dist/*
 !app/frontend/dist/
 !app/frontend/dist/.gitkeep
+
+# Android 构建产物（app/cmd/mobile）。build/ 下的 Java 宿主与 Gradle 配置是源码，
+# 必须入库；这里只忽略生成物。
+app/cmd/mobile/bin/
+app/cmd/mobile/frontend/dist/
+app/cmd/mobile/build/android/gen/
+app/cmd/mobile/build/android/overlay.json
+app/cmd/mobile/build/android/build/
+app/cmd/mobile/build/android/app/build/
+app/cmd/mobile/build/android/.gradle/
+app/cmd/mobile/build/android/local.properties
+app/cmd/mobile/build/android/app/src/main/jniLibs/
+app/cmd/mobile/build/android/app/src/main/assets/
