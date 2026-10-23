@@ -17,12 +17,19 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   second lookup. Manual adding always works.
 - **Pronunciation** — uses the WebView's built-in speech synthesis, so no audio
   files ship with the app.
+- **Notebook page** — every word with its gloss, the sentence it was met in and
+  the book it came from; filter by status, search, mark as known, delete. Clicking
+  a row jumps back to that line in the book (scrolling mode included, with the
+  landing text flashed). A one-pass review shows the word first and the gloss on
+  click.
 
 ### Fixed
 
 - The lookup card, selection toolbar and annotation popover now stay inside the
   window: they are clamped sideways and flip to the other side of the text when
   the preferred direction has no room.
+- Selecting a word did nothing in scrolling mode, which is the default: the
+  selection listener and the overlay layer only existed in the paginated view.
 
 ## [0.1.0] — 2026-10-09
 
