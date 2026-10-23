@@ -24,8 +24,13 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   click.
 - **Review history** — every grade bumps a review counter and a timestamp, so
   "学习中" means "you were asked and did not know it" rather than nothing at all.
-  The review session is a capped queue ordered by never-reviewed, then
-  longest-unwatched, and offers 认识 / 不记得 / 跳过.
+- **Spaced repetition** — the review pass is scheduled with SM-2 rather than
+  "everything not yet mastered, in some order": a correct answer walks the
+  interval 1 day → 6 days → interval × ease, a miss drops the word to a
+  ten-minute relearning step and lowers its ease factor (clamped at 1.3), and a
+  word only counts as mastered once its interval reaches three weeks. The
+  notebook header counts what is **due today** — not what is unmastered — each
+  row says when it comes back, and every grade reports the new interval.
 - **Batch delete** — deletion is behind a mode in the notebook header: rows
   become checkboxes, selection can be inverted, and nothing goes until a
   confirmation names the count.
@@ -42,6 +47,9 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Fixed
 
+- Marking a word 已掌握 no longer drops it out of study for good: it is treated
+  as a claim and scheduled for a check three weeks out. 忽略 stays the way to
+  retire a word permanently.
 - The shelf no longer blanks itself on every visit. Returning from a book, the
   notebook or the trash used to unmount the page and rebuild it from nothing:
   a "加载中…" line where the grid had been, then every cover decoding again.

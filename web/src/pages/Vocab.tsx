@@ -18,8 +18,8 @@ const REVIEW_LIMIT = 30;
 
 const STATUS_HINT: Record<VocabItem['status'], string> = {
   new: '查词时自动收录，还没有复习过',
-  learning: '复习时没答上来，还没记住',
-  known: '已掌握，不再出现在复习队列里',
+  learning: '复习间隔还短，会频繁回来',
+  known: '连续答对，间隔已经拉长到三周以上',
   ignored: '不再提示',
 };
 
@@ -29,6 +29,36 @@ const STATUS_LABEL: Record<VocabItem['status'], string> = {
   known: '已掌握',
   ignored: '已忽略',
 };
+
+/** "When is this due again", said the way a person would say it. */
+function dueLabel(iso: string): string {
+  if (!iso) return '待复习';
+  const at = new Date(iso);
+  if (Number.isNaN(at.getTime())) return '';
+  const ms = at.getTime() - Date.now();
+  if (ms <= 0) return '今天到期';
+  const minutes = Math.round(ms / 60000);
+  if (minutes < 60) return `${Math.max(1, minutes)} 分钟后`;
+  const days = Math.round(ms / 86400000);
+  if (days <= 1) return '明天';
+  // Beyond two months a countdown stops meaning anything; the date reads better.
+  if (days < 60) return `${days} 天后`;
+  return `${at.getMonth() + 1}月${at.getDate()}日`;
+}
+
+/** The interval a grade just produced, for the review card's feedback line. */
+function intervalLabel(days: number): string {
+  if (days <= 0) return '稍后';
+  if (days < 1) return '10 分钟';
+  const d = Math.round(days);
+  return d === 1 ? '明天' : `${d} 天后`;
+}
+
+/** When the word is due, said the way a schedule would: a word that was never
+ * scheduled has no date to show, and saying "今天到期" about it would be wrong. */
+function scheduleLine(dueAt: string): string {
+  return dueAt ? `下次 ${dueLabel(dueAt)}` : '还没复习过';
+}
 
 /** Marks the word inside its example sentence, so the row reads as a quote
  * rather than an unexplained string. Falls back to the base form when the
@@ -168,7 +198,7 @@ export default function Vocab() {
     try {
       const q = await api.vocabQueue(REVIEW_LIMIT);
       if (q.length === 0) {
-        toast('没有需要复习的词', 'info');
+        toast('今天没有到期的词，明天再来', 'info');
         return;
       }
       setQueue(q);
@@ -180,7 +210,9 @@ export default function Vocab() {
     }
   }
 
-  const pending = stats ? stats.new + stats.learning : 0;
+  // What is worth reviewing right now — not "everything not yet mastered":
+  // a word scheduled for next week is not a word to be asked about today.
+  const due = stats?.due ?? 0;
   const allPicked = items.length > 0 && picked.size === items.length;
 
   if (reviewing) {
@@ -201,7 +233,7 @@ export default function Vocab() {
         <h1>生词本</h1>
         {stats && (
           <span className="tag">
-            {stats.total} 词 · 待学 {pending} · 已掌握 {stats.known}
+            {stats.total} 词 · 今日到期 {due} · 已掌握 {stats.known}
           </span>
         )}
         <span style={{ flex: 1 }} />
@@ -233,8 +265,13 @@ export default function Vocab() {
             <button className="btn sm" onClick={() => setDeleting(true)} disabled={items.length === 0} title="批量删除单词">
               删除
             </button>
-            <button className="btn primary" disabled={pending === 0 || preparing} onClick={() => void startReview()}>
-              {preparing ? '准备中…' : `复习 ${pending}`}
+            <button
+              className="btn primary"
+              disabled={due === 0 || preparing}
+              title={due === 0 ? '今天没有到期的词' : '复习到期的词'}
+              onClick={() => void startReview()}
+            >
+              {preparing ? '准备中…' : `复习 ${due}`}
             </button>
           </>
         )}
@@ -293,6 +330,8 @@ export default function Vocab() {
                   {it.bookTitle ? `${it.bookTitle} · ${it.chapterTitle || '未知章节'}` : '原书已删除'}
                   {it.lookups > 1 && ` · 查过 ${it.lookups} 次`}
                   {it.reviews > 0 && ` · 复习 ${it.reviews} 次（${shortDate(it.lastReviewedAt)}）`}
+                  {it.lapses > 0 && ` · 忘过 ${it.lapses} 次`}
+                  {it.status !== 'ignored' && ` · ${scheduleLine(it.dueAt)}`}
                 </div>
               </button>
               {!deleting && (
@@ -317,9 +356,11 @@ export default function Vocab() {
 type ReviewStats = { hit: number; miss: number; skipped: number };
 
 /**
- * One pass over the words that are not yet mastered. It is not an SRS: there is
- * no interval schedule yet, only an order (unseen first, then whatever has
- * waited longest), so calling it spaced repetition would be a lie.
+ * One pass over the words that are due. Each grade reschedules the word with
+ * SM-2: a hit walks 1 day → 6 days → interval × ease, a miss drops back to a
+ * ten-minute step. The header keeps a one-line receipt of what the last grade
+ * just did, because a schedule nobody can see is indistinguishable from no
+ * schedule at all.
  *
  * The card shows the word first and the meaning only after a click, because
  * reading the gloss straight away is what makes a card feel productive while
@@ -330,6 +371,7 @@ function Review({ items, onExit }: { items: VocabItem[]; onExit: () => void }) {
   const [index, setIndex] = useState(0);
   const [revealed, setRevealed] = useState(false);
   const [tally, setTally] = useState<ReviewStats>({ hit: 0, miss: 0, skipped: 0 });
+  const [lastGrade, setLastGrade] = useState('');
   const busy = useRef(false);
 
   const cur = list[index];
@@ -350,9 +392,14 @@ function Review({ items, onExit }: { items: VocabItem[]; onExit: () => void }) {
     if (!cur || busy.current) return;
     busy.current = true;
     try {
-      // A miss is what puts the word into `learning` — and the Go side records
-      // the review either way, so "seen 3 times" is a fact, not a guess.
-      await api.gradeVocab(cur.id, didKnow);
+      // The Go side reschedules the word and hands the new state back, so the
+      // card can say what happens next instead of just disappearing.
+      const next = await api.gradeVocab(cur.id, didKnow);
+      setLastGrade(
+        didKnow
+          ? `${cur.term}：认识，下次 ${intervalLabel(next.intervalDays)}`
+          : `${cur.term}：不记得，10 分钟后再看`,
+      );
       setTally((t) => (didKnow ? { ...t, hit: t.hit + 1 } : { ...t, miss: t.miss + 1 }));
     } catch (e) {
       toastError(e);
@@ -376,9 +423,16 @@ function Review({ items, onExit }: { items: VocabItem[]; onExit: () => void }) {
           <h1>本轮复习完成</h1>
         </div>
         <div className="empty">
-          认识 {tally.hit} 个，还不认识 {tally.miss} 个
-          {tally.skipped > 0 && `，跳过 ${tally.skipped} 个`}。
-          {tally.miss > 0 && '答错的词已进入「学习中」，下一轮会排在前面。'}
+          <p style={{ marginBottom: 6 }}>
+            认识 {tally.hit} 个，还不认识 {tally.miss} 个
+            {tally.skipped > 0 && `，跳过 ${tally.skipped} 个`}。
+          </p>
+          <p className="muted">
+            {tally.miss > 0
+              ? '答错的词十分钟后会回到队列里；答对的按 1 天、6 天、再按熟练度翻倍往后排。'
+              : '这些词的间隔都往后推了，短期内不会再打扰你。'}
+          </p>
+          {lastGrade && <p className="muted">最后一个：{lastGrade}</p>}
         </div>
         <div style={{ display: 'flex', gap: 8, justifyContent: 'center' }}>
           <button className="btn primary" onClick={onExit}>
@@ -396,6 +450,7 @@ function Review({ items, onExit }: { items: VocabItem[]; onExit: () => void }) {
         <span className="tag">
           {index + 1} / {list.length}
         </span>
+        {lastGrade && <span className="muted vocab-hint">{lastGrade}</span>}
         <span style={{ flex: 1 }} />
         <button className="btn sm" onClick={skip}>
           跳过

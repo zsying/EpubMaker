@@ -64,6 +64,18 @@ export interface VocabEntry {
   reviews: number;
   /** Empty until the first review. */
   lastReviewedAt: string;
+  /**
+   * Spaced-repetition state (SM-2). The interval is the current gap in days —
+   * below 1 means the ten-minute relearning step — and `dueAt` is when the word
+   * is next worth asking about (empty for a word that was never scheduled).
+   */
+  intervalDays: number;
+  ease: number;
+  dueAt: string;
+  /** Consecutive clean passes; resets on a miss. */
+  streak: number;
+  /** Total misses. */
+  lapses: number;
   createdAt: string;
   updatedAt: string;
 }
@@ -86,6 +98,8 @@ export interface VocabStats {
   learning: number;
   known: number;
   ignored: number;
+  /** Words whose schedule has come up — what the review button offers. */
+  due: number;
 }
 
 export interface DictStatus {
@@ -396,14 +410,14 @@ export const api = {
 
   listVocab: (status: string, keyword: string) => call<VocabItem[]>('ListVocab', status, keyword),
 
-  /** The next review session: unseen words first, then the longest unwatched. */
+  /** The next review session: only words that have come due. */
   vocabQueue: (limit: number) => call<VocabItem[]>('VocabQueue', limit),
 
   vocabStats: () => call<VocabStats>('VocabStats'),
 
   setVocabStatus: (vid: string, status: string) => call<boolean>('SetVocabStatus', vid, status),
 
-  /** Record one review outcome; a miss sends the word back to `learning`. */
+  /** Record one review outcome and reschedule the word; returns the new state. */
   gradeVocab: (vid: string, known: boolean) => call<VocabEntry>('GradeVocab', vid, known),
 
   deleteVocab: (vid: string) => call<boolean>('DeleteVocab', vid)
