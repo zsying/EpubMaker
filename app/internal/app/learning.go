@@ -271,6 +271,22 @@ func (b *Backend) ListVocab(status, keyword string) ([]VocabItem, error) {
 	if err != nil {
 		return nil, err
 	}
+	return enrich(rows), nil
+}
+
+// VocabQueue returns the next review session: not-yet-mastered words, still
+// unseen ones first. `limit` keeps a pass finishable.
+func (b *Backend) VocabQueue(limit int) ([]VocabItem, error) {
+	rows, err := vocab.Queue(limit)
+	if err != nil {
+		return nil, err
+	}
+	return enrich(rows), nil
+}
+
+// enrich attaches the dictionary gloss to each row. One lookup per row is cheap
+// (indexed) and keeps the notebook page from opening a card per word.
+func enrich(rows []vocab.ListItem) []VocabItem {
 	d, dictErr := openDict()
 	out := make([]VocabItem, 0, len(rows))
 	for _, row := range rows {
@@ -286,7 +302,7 @@ func (b *Backend) ListVocab(status, keyword string) ([]VocabItem, error) {
 		}
 		out = append(out, item)
 	}
-	return out, nil
+	return out
 }
 
 // VocabStats counts the notebook by status for the page header.
@@ -297,6 +313,12 @@ func (b *Backend) VocabStats() (*vocab.Stats, error) {
 // SetVocabStatus moves a word between new / learning / known / ignored.
 func (b *Backend) SetVocabStatus(id, status string) error {
 	return vocab.UpdateStatus(id, status)
+}
+
+// GradeVocab records one review outcome and returns the updated row, so the
+// review card can move on without refetching the whole notebook.
+func (b *Backend) GradeVocab(id string, known bool) (*vocab.Entry, error) {
+	return vocab.Grade(id, known)
 }
 
 // DeleteVocab removes a word from the notebook.

@@ -128,6 +128,8 @@ CREATE TABLE IF NOT EXISTS vocab (
   context TEXT NOT NULL DEFAULT '',
   status TEXT NOT NULL DEFAULT 'new',
   lookups INTEGER NOT NULL DEFAULT 1,
+  reviews INTEGER NOT NULL DEFAULT 0,
+  last_reviewed_at TEXT NOT NULL DEFAULT '',
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL
 );
@@ -159,6 +161,10 @@ func migrate(d *sql.DB) error {
 	// Backfill existing rows so the column is never NULL (Scan into sql.NullString
 	// also tolerates NULL, but an empty string keeps queries/JSON predictable).
 	_, _ = d.Exec(`UPDATE books SET toc = '' WHERE toc IS NULL`)
+	// Migration: older DBs recorded no review history, so "learning" had no
+	// evidence behind it and the review queue could not be ordered.
+	_, _ = d.Exec(`ALTER TABLE vocab ADD COLUMN reviews INTEGER NOT NULL DEFAULT 0`)
+	_, _ = d.Exec(`ALTER TABLE vocab ADD COLUMN last_reviewed_at TEXT NOT NULL DEFAULT ''`)
 	return nil
 }
 

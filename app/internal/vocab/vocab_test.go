@@ -249,3 +249,96 @@ func TestDropSeen(t *testing.T) {
 		t.Fatalf("SeenCount = %d, %v; want 0 after DropSeen", n, err)
 	}
 }
+
+/* ----------------------------- review ----------------------------- */
+
+// "learning" must mean something earned: a word the reader has never been
+// asked about is still new, and only a failed review puts it in progress.
+func TestGradeMovesThroughLearningToKnown(t *testing.T) {
+	reset(t)
+	v, err := Record("blorp", "blorp", "b1", "c1", 10, "a blorp appeared")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if v.Status != StatusNew || v.Reviews != 0 || v.LastReviewedAt != "" {
+		t.Fatalf("fresh entry already looks reviewed: %+v", v)
+	}
+
+	missed, err := Grade(v.ID, false)
+	if err != nil {
+		t.Fatalf("Grade(false): %v", err)
+	}
+	if missed.Status != StatusLearning {
+		t.Errorf("status after a miss = %q, want %q", missed.Status, StatusLearning)
+	}
+	if missed.Reviews != 1 || missed.LastReviewedAt == "" {
+		t.Errorf("a miss must be recorded: reviews=%d last=%q", missed.Reviews, missed.LastReviewedAt)
+	}
+
+	hit, err := Grade(v.ID, true)
+	if err != nil {
+		t.Fatalf("Grade(true): %v", err)
+	}
+	if hit.Status != StatusKnown {
+		t.Errorf("status after a hit = %q, want %q", hit.Status, StatusKnown)
+	}
+	if hit.Reviews != 2 {
+		t.Errorf("reviews = %d, want 2", hit.Reviews)
+	}
+	if hit.LastReviewedAt == missed.LastReviewedAt {
+		t.Error("last_reviewed_at did not move forward")
+	}
+}
+
+func TestGradeUnknownID(t *testing.T) {
+	reset(t)
+	if _, err := Grade("nope", true); err == nil {
+		t.Error("grading a missing word should fail")
+	}
+}
+
+// The queue is a session plan, not the whole notebook: never-reviewed words
+// come first, then the ones seen longest ago, and mastered words stay out.
+func TestQueueOrdersNeverReviewedFirstThenOldest(t *testing.T) {
+	reset(t)
+	ids := map[string]string{}
+	for _, term := range []string{"alpha", "beta", "gamma"} {
+		v, err := Record(term, term, "b1", "c1", 0, "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		ids[term] = v.ID
+	}
+	// beta is reviewed first, then gamma: gamma is the more recent miss.
+	if _, err := Grade(ids["beta"], false); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Grade(ids["gamma"], false); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Grade(ids["alpha"], true); err != nil {
+		t.Fatal(err)
+	}
+
+	q, err := Queue(0)
+	if err != nil {
+		t.Fatalf("Queue: %v", err)
+	}
+	got := make([]string, 0, len(q))
+	for _, it := range q {
+		got = append(got, it.Term)
+	}
+	// alpha is known and must not appear; beta was reviewed before gamma, so it
+	// has waited longer and comes first.
+	if len(got) != 2 || got[0] != "beta" || got[1] != "gamma" {
+		t.Fatalf("queue = %v, want [beta gamma]", got)
+	}
+
+	capped, err := Queue(1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(capped) != 1 || capped[0].Term != "beta" {
+		t.Errorf("Queue(1) = %+v, want just beta", capped)
+	}
+}

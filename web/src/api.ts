@@ -60,6 +60,10 @@ export interface VocabEntry {
   context: string;
   status: 'new' | 'learning' | 'known' | 'ignored';
   lookups: number;
+  /** How many times the word has been put in front of you in a review pass. */
+  reviews: number;
+  /** Empty until the first review. */
+  lastReviewedAt: string;
   createdAt: string;
   updatedAt: string;
 }
@@ -392,9 +396,15 @@ export const api = {
 
   listVocab: (status: string, keyword: string) => call<VocabItem[]>('ListVocab', status, keyword),
 
+  /** The next review session: unseen words first, then the longest unwatched. */
+  vocabQueue: (limit: number) => call<VocabItem[]>('VocabQueue', limit),
+
   vocabStats: () => call<VocabStats>('VocabStats'),
 
   setVocabStatus: (vid: string, status: string) => call<boolean>('SetVocabStatus', vid, status),
+
+  /** Record one review outcome; a miss sends the word back to `learning`. */
+  gradeVocab: (vid: string, known: boolean) => call<VocabEntry>('GradeVocab', vid, known),
 
   deleteVocab: (vid: string) => call<boolean>('DeleteVocab', vid)
 };

@@ -42,8 +42,13 @@ type Entry struct {
 	Context   string `json:"context"`
 	Status    string `json:"status"`
 	Lookups   int    `json:"lookups"`
-	CreatedAt string `json:"createdAt"`
-	UpdatedAt string `json:"updatedAt"`
+	// Reviews counts the times the word was put in front of the reader during
+	// a review pass; LastReviewedAt is empty until the first one. Without these
+	// two, `learning` would be a label with no memory behind it.
+	Reviews        int    `json:"reviews"`
+	LastReviewedAt string `json:"lastReviewedAt"`
+	CreatedAt      string `json:"createdAt"`
+	UpdatedAt      string `json:"updatedAt"`
 }
 
 // ListOpts filters List. Zero values mean "no filter".
@@ -53,12 +58,14 @@ type ListOpts struct {
 	Limit   int
 }
 
-const columns = `id, term, surface, book_id, chapter_id, start_offset, context, status, lookups, created_at, updated_at`
+const columns = `id, term, surface, book_id, chapter_id, start_offset, context, status,
+                 lookups, reviews, last_reviewed_at, created_at, updated_at`
 
 func scan(row interface{ Scan(...any) error }) (*Entry, error) {
 	e := &Entry{}
 	err := row.Scan(&e.ID, &e.Term, &e.Surface, &e.BookID, &e.ChapterID,
-		&e.Offset, &e.Context, &e.Status, &e.Lookups, &e.CreatedAt, &e.UpdatedAt)
+		&e.Offset, &e.Context, &e.Status, &e.Lookups, &e.Reviews, &e.LastReviewedAt,
+		&e.CreatedAt, &e.UpdatedAt)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, nil
@@ -134,20 +141,51 @@ type ListItem struct {
 	ChapterTitle string `json:"chapterTitle"`
 }
 
-// List returns notebook entries, newest first.
-func List(o ListOpts) ([]ListItem, error) {
-	d, err := db.Open()
-	if err != nil {
-		return nil, err
-	}
-	// LEFT JOIN, and the book join carries the deleted filter instead of a WHERE
-	// clause — a WHERE would drop the word along with the book.
-	q := `SELECT v.id, v.term, v.surface, v.book_id, v.chapter_id, v.start_offset, v.context,
-	             v.status, v.lookups, v.created_at, v.updated_at,
+// listSelect is shared by every "give me rows with their provenance" query.
+// The LEFT JOIN carries the deleted filter instead of a WHERE clause — a WHERE
+// would drop the word along with the book it came from.
+const listSelect = `SELECT v.id, v.term, v.surface, v.book_id, v.chapter_id, v.start_offset,
+	             v.context, v.status, v.lookups, v.reviews, v.last_reviewed_at,
+	             v.created_at, v.updated_at,
 	             COALESCE(b.title, ''), COALESCE(c.title, '')
 	      FROM vocab v
 	      LEFT JOIN books b ON b.id = v.book_id AND b.deleted_at IS NULL
 	      LEFT JOIN chapters c ON c.id = v.chapter_id`
+
+func queryList(where []string, args []any, order string, limit int) ([]ListItem, error) {
+	d, err := db.Open()
+	if err != nil {
+		return nil, err
+	}
+	q := listSelect
+	if len(where) > 0 {
+		q += ` WHERE ` + strings.Join(where, ` AND `)
+	}
+	q += ` ORDER BY ` + order
+	if limit > 0 {
+		q += ` LIMIT ?`
+		args = append(args, limit)
+	}
+	rows, err := d.Query(q, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []ListItem{}
+	for rows.Next() {
+		var it ListItem
+		if err := rows.Scan(&it.ID, &it.Term, &it.Surface, &it.BookID, &it.ChapterID,
+			&it.Offset, &it.Context, &it.Status, &it.Lookups, &it.Reviews, &it.LastReviewedAt,
+			&it.CreatedAt, &it.UpdatedAt, &it.BookTitle, &it.ChapterTitle); err != nil {
+			return nil, err
+		}
+		out = append(out, it)
+	}
+	return out, rows.Err()
+}
+
+// List returns notebook entries, newest first.
+func List(o ListOpts) ([]ListItem, error) {
 	var where []string
 	var args []any
 	if o.Status != "" {
@@ -159,31 +197,21 @@ func List(o ListOpts) ([]ListItem, error) {
 		like := "%" + kw + "%"
 		args = append(args, like, like)
 	}
-	if len(where) > 0 {
-		q += ` WHERE ` + strings.Join(where, ` AND `)
-	}
-	q += ` ORDER BY v.updated_at DESC`
-	if o.Limit > 0 {
-		q += ` LIMIT ?`
-		args = append(args, o.Limit)
-	}
+	return queryList(where, args, `v.updated_at DESC`, o.Limit)
+}
 
-	rows, err := d.Query(q, args...)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	out := []ListItem{}
-	for rows.Next() {
-		var it ListItem
-		if err := rows.Scan(&it.ID, &it.Term, &it.Surface, &it.BookID, &it.ChapterID,
-			&it.Offset, &it.Context, &it.Status, &it.Lookups, &it.CreatedAt, &it.UpdatedAt,
-			&it.BookTitle, &it.ChapterTitle); err != nil {
-			return nil, err
-		}
-		out = append(out, it)
-	}
-	return out, rows.Err()
+// Queue is the next review session: everything not yet mastered, words nobody
+// has asked about yet first, then the ones seen longest ago. `limit` keeps a
+// session finite — a pass that can never be finished is one the reader stops
+// starting.
+func Queue(limit int) ([]ListItem, error) {
+	return queryList(
+		[]string{`v.status IN (?, ?)`},
+		[]any{StatusNew, StatusLearning},
+		// Empty last_reviewed_at sorts first: never reviewed beats overdue.
+		`(v.last_reviewed_at = '') DESC, v.last_reviewed_at ASC, v.updated_at ASC`,
+		limit,
+	)
 }
 
 // Stats counts notebook entries by status, for the header of the notebook page.
@@ -249,6 +277,46 @@ func UpdateStatus(id, status string) error {
 		return sql.ErrNoRows
 	}
 	return nil
+}
+
+// Grade records one review outcome. A hit masters the word; a miss puts it in
+// `learning`, which is the only thing that does — a word the reader has not
+// been asked about yet is still `new`. Every grade is counted, so the notebook
+// can show "reviewed 3 times, last on ..." instead of pretending.
+func Grade(id string, known bool) (*Entry, error) {
+	status := StatusLearning
+	if known {
+		status = StatusKnown
+	}
+	now := nowIso()
+	d, err := db.Open()
+	if err != nil {
+		return nil, err
+	}
+	res, err := d.Exec(`
+		UPDATE vocab
+		   SET status = ?, reviews = reviews + 1, last_reviewed_at = ?, updated_at = ?
+		 WHERE id = ?`, status, now, now, id)
+	if err != nil {
+		return nil, err
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return nil, err
+	}
+	if n == 0 {
+		return nil, sql.ErrNoRows
+	}
+	return GetByID(id)
+}
+
+// GetByID returns the entry with this id, or nil when it does not exist.
+func GetByID(id string) (*Entry, error) {
+	d, err := db.Open()
+	if err != nil {
+		return nil, err
+	}
+	return scan(d.QueryRow(`SELECT `+columns+` FROM vocab WHERE id = ?`, id))
 }
 
 // Delete removes an entry from the notebook.

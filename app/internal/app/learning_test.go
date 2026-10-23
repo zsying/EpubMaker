@@ -350,3 +350,38 @@ func TestVocabStatsCountsByStatus(t *testing.T) {
 		t.Fatalf("stats = %+v, want total 2 / new 1 / known 1", st)
 	}
 }
+
+// The review session is built from the queue, not from whatever the notebook
+// page happened to have loaded, and graded words keep their meaning attached.
+func TestVocabQueueIsTheReviewSession(t *testing.T) {
+	resetPolicy(t)
+	b := &Backend{}
+	missed, err := b.VocabAdd("blorp", "blorp", "", "", 0, "a blorp appeared")
+	if err != nil {
+		t.Fatal(err)
+	}
+	mastered, err := b.VocabAdd("blimp", "blimp", "", "", 0, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := b.GradeVocab(missed.ID, false); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := b.GradeVocab(mastered.ID, true); err != nil {
+		t.Fatal(err)
+	}
+
+	q, err := b.VocabQueue(0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(q) != 1 || q[0].Term != "blorp" {
+		t.Fatalf("queue = %+v, want just blorp", q)
+	}
+	if q[0].Status != "learning" || q[0].Reviews != 1 {
+		t.Errorf("graded row = %+v", q[0])
+	}
+	if q[0].Translation != "n. 虚构词" {
+		t.Errorf("translation = %q, want the gloss attached", q[0].Translation)
+	}
+}
