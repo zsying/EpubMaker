@@ -1,6 +1,6 @@
 import { DragEvent as ReactDragEvent, useCallback, useEffect, useRef, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import { api, AppPaths, Book, DictStatus, downloadDataUrl } from '../api';
+import { api, AppPaths, Book, DictStatus, downloadDataUrl, hasNativeDialogs } from '../api';
 import { canResolveDropPaths, onDroppedFiles } from '../filedrop';
 import { toast, toastError } from '../toast';
 
@@ -37,6 +37,9 @@ export default function Library() {
   const [dict, setDict] = useState<DictStatus | null>(() => shelfCache?.dict ?? null);
   const [dictBusy, setDictBusy] = useState(false);
   const nav = useNavigate();
+  // A phone has no native file dialog and cannot receive an OS file drop, so
+  // the import controls have to point at something that works there.
+  const desktop = hasNativeDialogs();
 
   const load = useCallback(async (kw?: string) => {
     try {
@@ -230,14 +233,22 @@ export default function Library() {
         <Link className="btn ghost" to="/trash">
           回收站
         </Link>
-        <button
-          className="btn ghost"
-          disabled={dictBusy}
-          title={dict?.installed ? `词库路径：${dict.path}` : '尚未安装词库，查词功能不可用'}
-          onClick={() => void doImportDict()}
-        >
-          {dictBusy ? '导入词库…' : dict?.installed ? `词库 ${dict.entries} 条` : '导入词库'}
-        </button>
+        {desktop ? (
+          <button
+            className="btn ghost"
+            disabled={dictBusy}
+            title={dict?.installed ? `词库路径：${dict.path}` : '尚未安装词库，查词功能不可用'}
+            onClick={() => void doImportDict()}
+          >
+            {dictBusy ? '导入词库…' : dict?.installed ? `词库 ${dict.entries} 条` : '导入词库'}
+          </button>
+        ) : (
+          /* The phone cannot open the csv picker, so the same information is
+             shown without an action that would only fail. */
+          <span className="tag" title={dict?.installed ? '词库已安装' : '尚未安装词库，查词功能不可用'}>
+            {dict?.installed ? `词库 ${dict.entries} 条` : '无词库'}
+          </span>
+        )}
         <input
           className="input"
           style={{ width: 220 }}
@@ -245,15 +256,27 @@ export default function Library() {
           value={keyword}
           onChange={(e) => setKeyword(e.target.value)}
         />
-        <button className="btn primary" disabled={importing} onClick={() => void pickAndImport()}>
-          {importing ? '导入中…' : '导入 EPUB'}
-        </button>
+        {desktop ? (
+          <button className="btn primary" disabled={importing} onClick={() => void pickAndImport()}>
+            {importing ? '导入中…' : '导入 EPUB'}
+          </button>
+        ) : (
+          <Link className="btn primary" to="/webdav">
+            从 WebDAV 导入
+          </Link>
+        )}
       </div>
 
       <div className="lib-scroll">
-        <div className={`dropzone${over ? ' over' : ''}`} onClick={() => void pickAndImport()}>
-          {importing ? '正在解析 EPUB…' : '把 .epub 文件拖到这里，或点击选择文件（支持多选）'}
-        </div>
+        {desktop ? (
+          <div className={`dropzone${over ? ' over' : ''}`} onClick={() => void pickAndImport()}>
+            {importing ? '正在解析 EPUB…' : '把 .epub 文件拖到这里，或点击选择文件（支持多选）'}
+          </div>
+        ) : (
+          <div className="dropzone hint">
+            手机版从 WebDAV 导入书籍：点右上角「WebDAV」，填入服务器地址后选书下载。
+          </div>
+        )}
 
         {loading ? (
           <div className="loading">加载中…</div>

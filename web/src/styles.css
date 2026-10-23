@@ -371,6 +371,12 @@ a {
   color: var(--accent);
 }
 
+/* The phone variant only explains where import lives; nothing here is
+   clickable, so it must not pretend to be. */
+.dropzone.hint {
+  cursor: default;
+}
+
 .grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(210px, 1fr));
@@ -1146,6 +1152,23 @@ a {
      control is hidden rather than offering a layout that cannot be read. */
   .reader-chrome .dock-toggle {
     display: none;
+  }
+
+  /* Top bar: the shelf, the notebook and the WebDAV importer all live here, and
+     the bar does not scroll — an item that overflows is unreachable, not just
+     cramped. On a 390px screen the wordmark is what has to go: the five labels
+     plus tight gaps add up to ~340px, which fits once the brand's 115px is
+     reclaimed. The shelf link is the home affordance, so nothing is lost. */
+  .topbar {
+    gap: 8px;
+    padding: 0 12px;
+  }
+  .topbar .brand {
+    display: none;
+  }
+  .topbar .btn {
+    flex: 0 0 auto;
+    white-space: nowrap;
   }
 }
 

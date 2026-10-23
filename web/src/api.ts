@@ -271,8 +271,20 @@ async function call<T>(method: string, ...args: unknown[]): Promise<T> {
   throw new Error('后端尚未就绪，请稍候重试');
 }
 
-/** Calls a bound App (native integration) method: window.go.app.App.<method>. */
-async function callApp<T>(method: string, ...args: unknown[]): Promise<T> {
+/**
+ * Whether this host can open a native file dialog, and therefore whether the
+ * UI may offer file-based import at all.
+ *
+ * The desktop host drives the v2 runtime (window.go bindings plus the native
+ * side's dialogs); the phone host drives v3, where only Backend is bound. A
+ * plain browser (vite dev, the acceptance harness) has neither, so it keeps the
+ * desktop shape and merely gets a clearer error.
+ */
+export function hasNativeDialogs(): boolean {
+  return !hasV3Runtime();
+}
+
+/** Calls a bound App (native integration) method: window.go.app.App.<method>. */async function callApp<T>(method: string, ...args: unknown[]): Promise<T> {
   const fn = (window as any).go?.app?.App?.[method];
   if (typeof fn === 'function') {
     return (await fn(...args)) as T;
