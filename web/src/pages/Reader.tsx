@@ -4,6 +4,7 @@ import DOMPurify from 'dompurify';
 import { api, Annotation, Book, Bookmark, Chapter, LookupResult, TocEntry } from '../api';
 import { Caret } from '../Caret';
 import { toast, toastError } from '../toast';
+import { Anchor, EDGE_GAP, placeOverlay } from '../overlay';
 
 const FONT_KEY = 'epubmaker.fontSize';
 const MODE_KEY = 'epubmaker.readMode';
@@ -185,17 +186,66 @@ type ReadMode = 'scroll' | 'paged';
 // number), so the target page is re-derived from the current layout.
 type PageIntent = { type: 'first' | 'last' | 'restore'; offset?: number } | null;
 
-type SelState = { x: number; y: number; start: number; end: number; text: string } | null;
+// `y`/`bottom` are the selection's viewport edges: overlays flip from one side
+// of the text to the other when there is no room in their preferred direction.
+type SelState = { x: number; y: number; bottom: number; start: number; end: number; text: string } | null;
 type PopoverState = { x: number; y: number; ann: Annotation } | null;
 // `offset`/`context` are captured at lookup time so a manual "add to notebook"
 // can still record where the word came from.
 type LookupCardState = {
   x: number;
-  y: number;
+  top: number;
+  bottom: number;
   res: LookupResult;
   offset: number;
   context: string;
 } | null;
+
+// Keeps a fixed-position overlay anchored to a point on screen *and* fully
+// inside the viewport. Two problems this solves, both visible at the margins of
+// the reader: a card centred on a word near the right edge loses half its width
+// off-screen, and a card opened near the bottom is cut off vertically.
+//
+// The size is only known after layout, so the overlay starts hidden and is
+// revealed once measured — otherwise it would paint once at its clipped
+// position. `revision` re-measures when the content changes height, e.g. when
+// the dictionary card grows its "already saved" footer.
+function useAnchoredOverlay(anchor: Anchor | null, prefer: 'above' | 'below', gap: number, revision: unknown) {
+  const ref = useRef<HTMLDivElement>(null);
+  const [pos, setPos] = useState<{ left: number; top: number } | null>(null);
+
+  useLayoutEffect(() => {
+    const el = ref.current;
+    if (!anchor || !el) {
+      setPos(null);
+      return;
+    }
+    const measure = () => {
+      setPos(
+        placeOverlay(
+          anchor,
+          { width: el.offsetWidth, height: el.offsetHeight },
+          { width: window.innerWidth, height: window.innerHeight },
+          prefer,
+          gap,
+        ),
+      );
+    };
+    measure();
+    window.addEventListener('resize', measure);
+    return () => window.removeEventListener('resize', measure);
+  }, [anchor?.x, anchor?.top, anchor?.bottom, prefer, gap, revision]);
+
+  return { ref, pos };
+}
+
+// Overlays are invisible for the single frame before their measured size is
+// known, so they never paint once at a clipped position.
+function overlayStyle(pos: { left: number; top: number } | null) {
+  return pos
+    ? { left: pos.left, top: pos.top, visibility: 'visible' as const }
+    : { left: 0, top: 0, visibility: 'hidden' as const };
+}
 
 const COLORS = ['yellow', 'green', 'red'] as const;
 
@@ -344,6 +394,20 @@ export default function Reader() {
   // would change the page count and throw the reader off their page.
   const [lookupCard, setLookupCard] = useState<LookupCardState>(null);
   const [lookupBusy, setLookupBusy] = useState(false);
+
+  // Overlay placement: the selection toolbar prefers the space above the text,
+  // the dictionary card and annotation popover the space below. Each flips to
+  // the other side when its preferred direction has no room, and all three are
+  // clamped sideways, so a word picked at the margin of the window no longer
+  // pushes its card partly off screen.
+  const selPos = useAnchoredOverlay(sel && { x: sel.x, top: sel.y, bottom: sel.bottom }, 'above', EDGE_GAP, sel?.start);
+  const dictPos = useAnchoredOverlay(
+    lookupCard && { x: lookupCard.x, top: lookupCard.top, bottom: lookupCard.bottom },
+    'below',
+    14,
+    `${lookupCard?.res.found}-${lookupCard?.res.recorded}`,
+  );
+  const popPos = useAnchoredOverlay(popover && { x: popover.x, top: popover.y, bottom: popover.y }, 'below', 0, popover?.ann.id);
 
   const mainRef = useRef<HTMLDivElement>(null);
   const stageRef = useRef<HTMLDivElement>(null);
@@ -1027,7 +1091,14 @@ export default function Reader() {
         return;
       }
       const rect = range.getBoundingClientRect();
-      setSel({ x: rect.left + rect.width / 2, y: rect.top - 8, start: offs.start, end: offs.end, text: selection.toString() });
+      setSel({
+        x: rect.left + rect.width / 2,
+        y: rect.top,
+        bottom: rect.bottom,
+        start: offs.start,
+        end: offs.end,
+        text: selection.toString(),
+      });
     }
     function onClick(e: MouseEvent) {
       const target = e.target as HTMLElement;
@@ -1058,7 +1129,7 @@ export default function Reader() {
     if (!word) return;
     const root = contentRef.current;
     const context = root ? sentenceAt(root, sel.start, sel.end) : '';
-    const at = { x: sel.x, y: sel.y };
+    const at = { x: sel.x, top: sel.y, bottom: sel.bottom };
     const offset = sel.start;
     setSel(null);
     setLookupBusy(true);
@@ -1575,7 +1646,7 @@ export default function Reader() {
 
       {/* selection toolbar */}
       {sel && (
-        <div className="sel-toolbar" style={{ left: sel.x, top: sel.y }}>
+        <div className="sel-toolbar" ref={selPos.ref} style={overlayStyle(selPos.pos)}>
           <button className="sel-lookup" title="查词" onClick={lookupSelection} disabled={lookupBusy}>
             {lookupBusy ? '查询中' : '查词'}
           </button>
@@ -1587,7 +1658,7 @@ export default function Reader() {
 
       {/* dictionary card — fixed layer, never part of the page layout */}
       {lookupCard && (
-        <div className="dict-card" style={{ left: lookupCard.x, top: lookupCard.y + 14 }}>
+        <div className="dict-card" ref={dictPos.ref} style={overlayStyle(dictPos.pos)}>
           <button className="dict-close" title="关闭" onClick={() => setLookupCard(null)}>
             ×
           </button>
@@ -1648,7 +1719,7 @@ export default function Reader() {
 
       {/* annotation popover */}
       {popover && (
-        <div className="ann-popover" style={{ left: popover.x, top: popover.y }}>
+        <div className="ann-popover" ref={popPos.ref} style={overlayStyle(popPos.pos)}>
           <div className="ann-pop-colors">
             {COLORS.map((c) => (
               <button
