@@ -48,6 +48,13 @@ func main() {
 			Assets:  assets,
 			Handler: spaHandler(assets),
 		},
+		// File drops are resolved natively: a webview drop only carries File
+		// objects with no path, and books are imported from disk, never uploaded.
+		// EnableFileDrop is what turns a drop into absolute paths (and what stops
+		// the webview from navigating to the dropped file instead).
+		DragAndDrop: &options.DragAndDrop{
+			EnableFileDrop: true,
+		},
 		// App: native OS integrations (file dialogs, startup, file association).
 		// Backend: every data operation, called in-process with no HTTP layer.
 		Bind: []any{appObj, &app.Backend{}},

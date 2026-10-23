@@ -1,3 +1,4 @@
+import { useEffect } from 'react';
 import { Link, Route, Routes, useLocation } from 'react-router-dom';
 import Library from './pages/Library';
 import Reader from './pages/Reader';
@@ -8,11 +9,19 @@ import WebDav from './pages/WebDav';
 import Bookmarks from './pages/Bookmarks';
 import Annotations from './pages/Annotations';
 import Vocab from './pages/Vocab';
+import { initFileDrop } from './filedrop';
 import { Toaster } from './toast';
 
 export default function App() {
   const loc = useLocation();
   const isReader = /\/books\/[^/]+\/read/.test(loc.pathname);
+
+  // The drop bridge is registered here rather than on the shelf: it is what
+  // stops the webview from navigating to a dropped file, and a delayed
+  // registration would leave one drop with the old, destructive behaviour.
+  useEffect(() => {
+    initFileDrop();
+  }, []);
 
   return (
     <div className="app">

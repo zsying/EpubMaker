@@ -270,12 +270,13 @@ export const api = {
 
   listBooks: (keyword?: string) => call<Book[]>('ListBooks', keyword ?? ''),
 
-  /** Opens the native EPUB multi-select dialog, then imports the chosen files. */
-  importBooks: async (): Promise<{ books: Book[]; errors: string[] }> => {
-    const paths = await callApp<string[]>('SelectEpubFiles');
-    if (!paths || paths.length === 0) return { books: [], errors: [] };
-    return call('ImportPaths', paths);
-  },
+  /** Opens the native EPUB multi-select dialog; returns [] when cancelled. */
+  selectEpubFiles: () => callApp<string[]>('SelectEpubFiles'),
+
+  /** Imports EPUB files from local paths. Both the dialog and an OS file drop end
+   * up here — a drop can only be turned into paths by the native side. */
+  importPaths: (paths: string[]) =>
+    call<{ books: Book[]; errors: string[] }>('ImportPaths', paths),
 
   getBook: (id: string) => call<Book>('GetBook', id),
 

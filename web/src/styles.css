@@ -333,6 +333,13 @@ a {
 .page.library .lib-head {
   flex: none;
 }
+/* A dropped file is accepted anywhere on the shelf, so the highlight belongs to
+   the page and not only to the dashed box the reader is told to aim at. */
+.page.library.dropping {
+  outline: 2px dashed var(--accent);
+  outline-offset: -8px;
+  border-radius: 14px;
+}
 .lib-scroll {
   flex: 1;
   min-height: 0;

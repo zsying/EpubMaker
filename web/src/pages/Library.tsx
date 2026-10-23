@@ -1,6 +1,7 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { DragEvent as ReactDragEvent, useCallback, useEffect, useRef, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { api, AppPaths, Book, DictStatus, downloadDataUrl } from '../api';
+import { canResolveDropPaths, onDroppedFiles } from '../filedrop';
 import { toast, toastError } from '../toast';
 
 // The shelf survives its own unmount. Opening a book, checking the notebook or
@@ -83,12 +84,38 @@ export default function Library() {
   }, [keyword, load]);
 
   // Opens the native EPUB picker and imports the chosen files via bindings.
-  async function doImport() {
+  async function pickAndImport() {
+    try {
+      const paths = await api.selectEpubFiles();
+      if (!paths?.length) return; // cancelled
+      await importPaths(paths);
+    } catch (e) {
+      toastError(e);
+    }
+  }
+
+  // Both entry points end here: the button, and a file dragged from Explorer.
+  // A drop only ever reaches this point as filesystem paths — the webview drop
+  // event carries File objects without one — so this is the only way an import
+  // can read the book.
+  async function importPaths(paths: string[]) {
+    // A second drop while a book is still being parsed would interleave two
+    // imports on the same list; the first one is already shown as busy.
+    if (importing) {
+      toast('正在导入，请稍候', 'info');
+      return;
+    }
+    const epub = paths.filter((p) => /\.epub$/i.test(p));
+    const ignored = paths.length - epub.length;
+    if (!epub.length) {
+      toast(paths.length === 1 ? '只能导入 .epub 文件' : '拖入的文件里没有 .epub', 'error');
+      return;
+    }
     setImporting(true);
     try {
-      const res = await api.importBooks();
-      if (!res.books.length && !res.errors.length) return; // user cancelled
+      const res = await api.importPaths(epub);
       toast(`成功导入 ${res.books.length} 本书籍`, 'success');
+      if (ignored > 0) toast(`已跳过 ${ignored} 个非 EPUB 文件`, 'info');
       if (res.errors?.length) toast(res.errors.join('\n'), 'error', 6000);
       // Put the new books on the shelf straight away and let the refresh
       // confirm them: reloading first would empty the grid, which is the flash
@@ -103,6 +130,20 @@ export default function Library() {
       setImporting(false);
     }
   }
+
+  // Dropped files arrive through the native bridge, asynchronously, from
+  // outside React — so the handler is kept in a ref to always see the current
+  // keyword instead of the one captured when the subscription was made.
+  const importRef = useRef<(paths: string[]) => void>(() => undefined);
+  importRef.current = (paths) => void importPaths(paths);
+  useEffect(() => onDroppedFiles((paths) => importRef.current(paths)), []);
+
+  // Dragging is counted, not flagged: moving over a child fires `dragleave` on
+  // the parent, and a boolean makes the highlight flicker on every card.
+  const dragDepth = useRef(0);
+  // A drag with files in it is an OS file, not an element being dragged inside
+  // the page; only the former can be imported.
+  const isFileDrag = (e: ReactDragEvent) => Array.from(e.dataTransfer?.types ?? []).includes('Files');
 
   async function exportBook(book: Book) {
     try {
@@ -150,7 +191,38 @@ export default function Library() {
   }
 
   return (
-    <div className="page library">
+    <div
+      className={`page library${over ? ' dropping' : ''}`}
+      // The whole shelf is the drop target, not just the dashed box: a file
+      // dragged over a book cover is aimed at the same place in the reader's
+      // head, and refusing it there would look broken.
+      onDragEnter={(e) => {
+        if (!isFileDrag(e)) return;
+        dragDepth.current += 1;
+        setOver(true);
+      }}
+      onDragOver={(e) => {
+        if (!isFileDrag(e)) return;
+        // Without this the webview opens the file instead of dropping it.
+        e.preventDefault();
+        e.dataTransfer.dropEffect = 'copy';
+      }}
+      onDragLeave={(e) => {
+        if (!isFileDrag(e)) return;
+        dragDepth.current = Math.max(0, dragDepth.current - 1);
+        if (dragDepth.current === 0) setOver(false);
+      }}
+      onDrop={(e) => {
+        if (!isFileDrag(e)) return;
+        e.preventDefault();
+        dragDepth.current = 0;
+        setOver(false);
+        // Native bridge present: the same drop arrives with real paths, and
+        // importing here as well would import twice. Without it (a plain
+        // browser) there is no path to read, so fall back to the picker.
+        if (!canResolveDropPaths()) void pickAndImport();
+      }}
+    >
       <div className="lib-head">
         <h1>书架</h1>
         <span className="tag">{books.length} 本</span>
@@ -173,26 +245,13 @@ export default function Library() {
           value={keyword}
           onChange={(e) => setKeyword(e.target.value)}
         />
-        <button className="btn primary" disabled={importing} onClick={() => void doImport()}>
+        <button className="btn primary" disabled={importing} onClick={() => void pickAndImport()}>
           {importing ? '导入中…' : '导入 EPUB'}
         </button>
       </div>
 
       <div className="lib-scroll">
-        <div
-          className={`dropzone${over ? ' over' : ''}`}
-          onDragOver={(e) => {
-            e.preventDefault();
-            setOver(true);
-          }}
-          onDragLeave={() => setOver(false)}
-          onDrop={(e) => {
-            e.preventDefault();
-            setOver(false);
-            void doImport();
-          }}
-          onClick={() => void doImport()}
-        >
+        <div className={`dropzone${over ? ' over' : ''}`} onClick={() => void pickAndImport()}>
           {importing ? '正在解析 EPUB…' : '把 .epub 文件拖到这里，或点击选择文件（支持多选）'}
         </div>
 
