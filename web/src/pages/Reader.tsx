@@ -1279,6 +1279,14 @@ export default function Reader() {
   /* ---- hover the top/bottom edge to reveal the reader chrome (paged) ---- */
   useEffect(() => {
     if (mode !== 'paged') return;
+    // During a notebook detour the banner floats along the bottom edge, and a
+    // chrome bar sliding out under the pointer would cover the very buttons the
+    // reader is reaching for. The bars stay reachable: Enter, or a click in the
+    // middle of the page.
+    if (detour) {
+      setChromeHover(false);
+      return;
+    }
     const EDGE = 64; // px from the top/bottom edge that activates the chrome
     let raf = 0;
     const onMove = (e: MouseEvent) => {
@@ -1298,7 +1306,7 @@ export default function Reader() {
       if (raf) cancelAnimationFrame(raf);
       setChromeHover(false);
     };
-  }, [mode]);
+  }, [mode, detour]);
 
   /* ---- selection -> toolbar (both modes) ---- */
   useEffect(() => {
@@ -1608,8 +1616,14 @@ export default function Reader() {
 
   // The banner that explains a detour and offers the two ways out of it. It is
   // the only place in the reader that admits it is not a normal visit.
+  //
+  // Floating above the page it sits clear of the bottom chrome instead of under
+  // it, so the buttons never end up behind a bar that appears on approach.
   const detourBar = detour ? (
-    <div className={`detour-bar${mode === 'paged' ? ' floating' : ''}`}>
+    <div
+      className={`detour-bar${mode === 'paged' ? ' floating' : ''}`}
+      style={mode === 'paged' && chromeOpen ? { bottom: 58 } : undefined}
+    >
       <span className="detour-word">{detour.word}</span>
       <span className="detour-hint">生词本跳转 · 临时查看，不记录阅读进度</span>
       <span className="detour-gap" />

@@ -2332,13 +2332,15 @@ a {
 
 /* In the paged reader the banner floats above the sheet instead of pushing the
    page down: pagination is measured from content height, so anything that
-   changes the layout would silently move the reader to another page. */
+   changes the layout would silently move the reader to another page.
+   It outranks the chrome (z 30) so it can never end up behind a bar that
+   appears on edge hover; the reader lifts it clear of the chrome when open. */
 .detour-bar.floating {
   position: absolute;
   left: 50%;
   bottom: 18px;
   transform: translateX(-50%);
-  z-index: 25;
+  z-index: 31;
   max-width: calc(100% - 40px);
   border: 1px solid #ccd9ff;
   border-radius: 999px;
