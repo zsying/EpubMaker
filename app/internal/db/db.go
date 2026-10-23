@@ -114,6 +114,34 @@ CREATE TABLE IF NOT EXISTS annotations (
   updated_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_annotations_book ON annotations(book_id, chapter_id);
+
+-- Vocabulary notebook: one row per word, independent of any single book.
+-- book_id/chapter_id are a plain pointer back to where the word was first met
+-- (no foreign key: the notebook must outlive the book).
+CREATE TABLE IF NOT EXISTS vocab (
+  id TEXT PRIMARY KEY,
+  term TEXT NOT NULL,
+  surface TEXT NOT NULL DEFAULT '',
+  book_id TEXT NOT NULL DEFAULT '',
+  chapter_id TEXT NOT NULL DEFAULT '',
+  start_offset INTEGER NOT NULL DEFAULT 0,
+  context TEXT NOT NULL DEFAULT '',
+  status TEXT NOT NULL DEFAULT 'new',
+  lookups INTEGER NOT NULL DEFAULT 1,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_vocab_term ON vocab(term);
+
+-- Lookup signals: every word the reader looked up, with a counter, whether or
+-- not it entered the notebook. A term is promoted into the vocab table only
+-- after it has been looked up twice, so one-off curiosities don't pollute it.
+CREATE TABLE IF NOT EXISTS vocab_seen (
+  term TEXT PRIMARY KEY,
+  lookups INTEGER NOT NULL DEFAULT 1,
+  first_at TEXT NOT NULL,
+  last_at TEXT NOT NULL
+);
 `
 
 func migrate(d *sql.DB) error {
