@@ -74,6 +74,13 @@ The first Gradle run downloads the 9.2.1 distribution. If
 
 ## Verifying on a device
 
+```powershell
+cd app\cmd\mobile
+.\install-and-check.ps1          # install + launch + trace.log + screenshot + crash scan
+```
+
+or by hand:
+
 ```bash
 adb install -r bin/EpubMaker-arm64-v8a.apk
 adb shell monkey -p com.wails.app -c android.intent.category.LAUNCHER 1
@@ -83,6 +90,36 @@ adb shell run-as com.wails.app cat files/trace.log    # startup breadcrumbs
 `main.go` appends a line per startup step (and the DB error, if `db.Open`
 fails) to `files/trace.log`. This exists because **`log` output does not reach
 logcat from a c-shared Go process** — without it, a startup crash is silent.
+
+Debug builds expose the WebView over CDP, which is how the two bugs below were
+found (neither leaves a trace in logcat):
+
+```bash
+adb forward tcp:9222 localabstract:webview_devtools_remote_$(adb shell pidof com.wails.app)
+curl http://127.0.0.1:9222/json/list    # grab the page id, then drive
+                                        # Runtime.evaluate over the ws endpoint
+```
+
+### Bugs that only a real device reveals
+
+- **The Java side owned `/wails/` and served everything as json.**
+  `MainActivity.shouldInterceptRequest` routes `/wails/...` to a branch that
+  hardcodes `Content-Type: application/json` — right for the runtime's JSON
+  call envelopes, fatal for `/wails/runtime.js`, which the WebView refuses to
+  import as a module when served as json. It now derives the type from the
+  path via `bridge.getAssetMimeType`.
+- **v3 binding names are fully qualified.** `Call.ByName("Backend.ListBooks")`
+  fails with `unknown bound method name`; the registered name is
+  `epubmaker-desktop/internal/app.Backend.ListBooks` —
+  `<module path>.<package>.<type>.<method>`, per the FQN rule in
+  `bindings.go`. The frontend keeps the prefix in `api.ts`'s
+  `V3_BACKEND_FQN`; update it if the Go module path ever changes. The
+  long-term fix would be `wails3 generate bindings` to pin names at build time.
+- **The page must import the runtime itself.** v3 never injects a script tag;
+  the module lives at `/wails/runtime.js` and loading it installs
+  `window._wails`. api.ts imports it lazily on the first v3 call, and
+  `hasV3Runtime()` recognizes the host by origin (`wails.localhost`) because
+  the flag does not exist until that import finishes.
 
 ### x86_64 emulator: known dead end
 
@@ -119,8 +156,9 @@ SQLite.
   package name from `/proc/self/cmdline`. This keeps `internal/config`
   untouched.
 - **Transport.** `web/src/api.ts` picks v2 (`window.go.app.Backend.*`) or v3
-  (`Call.ByName('Backend.*')`) per call. The desktop bundle never loads the
-  `@wailsio/runtime` chunk.
+  (`Call.ByName` on the host's `/wails/runtime.js` module) per call. The
+  desktop bundle never loads the runtime module; there is no npm runtime
+  dependency — the host serves its own, transport and all.
 - **Desktop-only bindings.** `App` (native dialogs, file association) is built
   on the v2 runtime and is not bound in the v3 host. Mobile callers get a clear
   error instead of a silent `undefined`.

@@ -158,14 +158,32 @@ public class MainActivity extends AppCompatActivity {
                             java.util.Map<String, String> headers = new java.util.HashMap<>();
                             headers.put("Access-Control-Allow-Origin", "*");
                             headers.put("Cache-Control", "no-cache");
-                            headers.put("Content-Type", "application/json");
+
+                            // This branch used to hardcode application/json
+                            // because only runtime API calls (JSON envelopes)
+                            // came through here. /wails/runtime.js does too --
+                            // and a module script served as json is refused by
+                            // the WebView, which left the frontend with no
+                            // runtime at all. Derive the type from the path
+                            // and keep the header and the response parameter
+                            // identical (mismatches surface as duplicated
+                            // Content-Type headers).
+                            String mimeType = bridge.getAssetMimeType(fullPath);
+                            int q = mimeType.indexOf('?');
+                            if (q >= 0) mimeType = mimeType.substring(0, q);
+                            if (mimeType == null || mimeType.isEmpty()
+                                    || "application/octet-stream".equals(mimeType)) {
+                                mimeType = "application/json";
+                            }
+                            headers.put("Content-Type", mimeType);
 
                             // Detect error envelopes: if the body starts with
                             // {"ok":false, return HTTP 500 so the fallback
                             // transport's fetch() rejects the promise.
                             int status = 200;
                             String reason = "OK";
-                            if (data.length > 12) {
+                            if (data.length > 12
+                                    && "application/json".equals(mimeType)) {
                                 String prefix = new String(data, 0, Math.min(data.length, 20),
                                         java.nio.charset.StandardCharsets.UTF_8);
                                 if (prefix.contains("\"ok\":false")) {
@@ -175,7 +193,7 @@ public class MainActivity extends AppCompatActivity {
                             }
 
                             return new WebResourceResponse(
-                                "application/json",
+                                mimeType,
                                 "UTF-8",
                                 status,
                                 reason,
