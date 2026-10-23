@@ -5,6 +5,16 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+- **Android: the backend answers.** On a real device the shelf now loads
+  through Wails v3's runtime. Two fixes were needed: the Java host no longer
+  forces `application/json` onto `/wails/runtime.js` (the WebView refused to
+  import it as a module, so the runtime never mounted), and the frontend calls
+  bindings by their fully qualified name (`<module>.<pkg>.Backend.<Method>`).
+  The runtime is imported from the host itself; the npm `@wailsio/runtime`
+  dependency is gone.
+- **`install-and-check.ps1`** — one command to install on a USB device,
+  launch, pull the startup trace, scan for crashes and grab a screenshot.
+
 ### Added
 
 - **Android app** — the library, the reader and the dictionary now run on a
