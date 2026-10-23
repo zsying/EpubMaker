@@ -14,6 +14,49 @@ const TOC_DOCK_KEY = 'epubmaker.tocDocked';
 // and the .toc sidebar width in scroll mode for visual consistency).
 const TOC_DOCK_W = 268;
 
+// Height of the top/bottom band that reveals (or, on touch, toggles) the reader
+// chrome. Same band for hover and tap so the affordance is in one place.
+const CHROME_EDGE = 64;
+
+// True on devices whose primary pointer cannot hover — phones and tablets.
+//
+// `(pointer: coarse)`/`(hover: none)` describe the *primary* pointer, so a
+// touchscreen laptop with a trackpad stays "desktop" and keeps the old hover
+// behaviour. `any-pointer: fine` is the guard for that case: a device with a
+// mouse attached is never treated as touch-primary, even though it also has a
+// touchscreen and therefore maxTouchPoints > 0.
+function isTouchPrimary(): boolean {
+  if (typeof window === 'undefined' || !window.matchMedia) return false;
+  if (window.matchMedia('(any-pointer: fine)').matches) return false;
+  return window.matchMedia('(pointer: coarse)').matches || window.matchMedia('(hover: none)').matches;
+}
+
+/** True while a field is focused — the case where a soft keyboard is (or is
+ * about to be) covering part of the screen. */
+function isEditableFocused(): boolean {
+  const a = typeof document !== 'undefined' ? document.activeElement : null;
+  if (!a) return false;
+  const tag = a.tagName;
+  return tag === 'INPUT' || tag === 'TEXTAREA' || (a as HTMLElement).isContentEditable === true;
+}
+
+/** The area the user can actually see, as opposed to the layout viewport.
+ *
+ * With a soft keyboard up these two disagree: `window.innerHeight` keeps
+ * reporting the full window while the keyboard covers the bottom third. Every
+ * placement decision here — page geometry, word card, selection toolbar — has
+ * to be made against the visible area, or the overlay lands under the keyboard
+ * and the last lines of the page are hidden behind it. `scale !== 1` means the
+ * user has pinch-zoomed, where visualViewport reports the zoomed-in slice; the
+ * layout width is still the right basis for laying out text, so it is ignored.
+ */
+function readViewport(): { w: number; h: number; keyboard: boolean } {
+  const w = window.innerWidth;
+  const vv = window.visualViewport;
+  const h = vv && vv.scale === 1 ? Math.round(vv.height) : window.innerHeight;
+  return { w, h, keyboard: isEditableFocused() };
+}
+
 // Strip any #fragment from a TOC href so a child-section entry
 // (doc.xhtml#section) resolves to its parent chapter document (doc.xhtml).
 function docKey(href: string): string {
@@ -236,19 +279,32 @@ function useAnchoredOverlay(anchor: Anchor | null, prefer: 'above' | 'below', ga
       return;
     }
     const measure = () => {
-      setPos(
-        placeOverlay(
-          anchor,
-          { width: el.offsetWidth, height: el.offsetHeight },
-          { width: window.innerWidth, height: window.innerHeight },
-          prefer,
-          gap,
-        ),
+      const vp = readViewport();
+      const next = placeOverlay(
+        anchor,
+        { width: el.offsetWidth, height: el.offsetHeight },
+        { width: vp.w, height: vp.h },
+        prefer,
+        gap,
       );
+      // visualViewport fires `scroll` continuously while the page moves under a
+      // raised keyboard; re-rendering for an unchanged position would fight the
+      // browser for no reason.
+      setPos((prev) => (prev && prev.left === next.left && prev.top === next.top ? prev : next));
     };
     measure();
     window.addEventListener('resize', measure);
-    return () => window.removeEventListener('resize', measure);
+    // The keyboard opening changes visualViewport without necessarily firing a
+    // window resize, and it moves the card's anchor with it (scroll). Both are
+    // reasons to re-place, not to land the card half under the keyboard.
+    const vv = window.visualViewport;
+    vv?.addEventListener('resize', measure);
+    vv?.addEventListener('scroll', measure);
+    return () => {
+      window.removeEventListener('resize', measure);
+      vv?.removeEventListener('resize', measure);
+      vv?.removeEventListener('scroll', measure);
+    };
   }, [anchor?.x, anchor?.top, anchor?.bottom, prefer, gap, revision]);
 
   return { ref, pos };
@@ -415,6 +471,9 @@ export default function Reader() {
   const [pagesPerView, setPagesPerView] = useState(1);
   const [chromeOpen, setChromeOpen] = useState(false);
   const [chromeHover, setChromeHover] = useState(false);
+  // Resolved once: the pointer class of a device does not change mid-session,
+  // and every tap handler below branches on it.
+  const touchPrimary = useMemo(isTouchPrimary, []);
   // Set when Escape dismisses a chrome bar that the pointer is hovering open.
   // Without it the very next mousemove would raise the bar again, so Escape
   // would never get a second press to leave the reader with. Cleared as soon
@@ -485,6 +544,11 @@ export default function Reader() {
   const stageRef = useRef<HTMLDivElement>(null);
   const spreadRef = useRef<HTMLDivElement>(null);
   const columnsRef = useRef<HTMLDivElement>(null);
+  // The whole reader, including the overlays that float over the stage. The
+  // swipe listener hangs off this rather than the stage: the word card and the
+  // chrome bars are siblings of the stage, so a touch that starts on one of
+  // them never reaches a stage listener.
+  const readerRef = useRef<HTMLDivElement>(null);
   const contentRef = useRef<HTMLDivElement>(null);
 
   // A bare click on a word is deferred by a few milliseconds before it looks
@@ -616,6 +680,14 @@ export default function Reader() {
   useEffect(() => localStorage.setItem(MODE_KEY, mode), [mode]);
   useEffect(() => localStorage.setItem(TOC_DOCK_KEY, tocDocked ? '1' : '0'), [tocDocked]);
 
+  // The docked TOC is 268px of a 390px phone — 122px left for the text. It is a
+  // desktop affordance (and its toggle is hidden on touch); if the desktop
+  // session left it pinned, a phone opening the same book would start in an
+  // unreadable layout. Unpin it instead of inheriting it.
+  useEffect(() => {
+    if (touchPrimary) setTocDocked(false);
+  }, [touchPrimary]);
+
   // When the docked sidebar is toggled, the available reading width changes, so
   // re-measure the page geometry (the page size / 1-vs-2 spread must adapt).
   useEffect(() => {
@@ -696,11 +768,22 @@ export default function Reader() {
   useEffect(() => {
     if (mode !== 'paged') return;
     const stage = stageRef.current;
+    // The paged DOM only exists once a chapter has rendered, so the first run of
+    // this effect (on mount, before `html` arrives) finds no stage. Depending on
+    // `html` is what re-runs it at that point — with only [mode] the listeners
+    // were registered once against a null ref and never again, so a window
+    // resize, a rotation or a viewport change never re-paginated the book.
     if (!stage) return;
     const update = () => {
+      const next = readViewport();
+      // A soft keyboard shrinking the view must not re-paginate the chapter: the
+      // page count would change while the reader is typing an annotation and
+      // change back when the keyboard closes, so the text would jump twice per
+      // comment. The overlays follow the keyboard themselves; the page does not.
+      if (next.keyboard && next.h < winSizeRef.current.h) return;
       // Snapshot the window size synchronously so measureAndLayout reads a
       // fresh value even if the inner element's clientWidth lags the resize.
-      winSizeRef.current = { w: window.innerWidth, h: window.innerHeight };
+      winSizeRef.current = { w: next.w, h: next.h };
       setStageWidth(winSizeRef.current.w);
       setStageHeight(winSizeRef.current.h);
       // Re-measure on every size change so the page count (1 vs 2) and sheet
@@ -711,16 +794,24 @@ export default function Reader() {
     // Wails WebView2 shell a window resize does NOT reliably re-fire a
     // ResizeObserver callback for the inner element, but Wails always dispatches
     // a `window` resize event on window resize — so listen to both.
+    //
+    // visualViewport is the third source and the only one that fires when a
+    // soft keyboard opens without resizing the window (iOS behaves this way;
+    // Android reports it as a layout resize but only sometimes, depending on
+    // the keyboard's mode).
     const ro = new ResizeObserver(update);
     ro.observe(stage);
     window.addEventListener('resize', update);
+    const vv = window.visualViewport;
+    vv?.addEventListener('resize', update);
     update();
     return () => {
       ro.disconnect();
       window.removeEventListener('resize', update);
+      vv?.removeEventListener('resize', update);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [mode]);
+  }, [mode, html]);
 
   useLayoutEffect(() => {
     if (mode !== 'paged') return;
@@ -833,14 +924,24 @@ export default function Reader() {
     const col = columnsRef.current;
     if (!col) return;
 
-    const MARGIN = 34;
+    // A phone is a screen, not a sheet of paper. On a 390x844 viewport the paper
+    // ratio (0.72) yielded a 320x444 sheet — half the screen spent on desk
+    // surface above and below, and every ~10 lines the reader had to turn the
+    // page. On touch the sheet therefore takes the whole stage: no paper ratio,
+    // no outer padding, no fake book edges, just a thumb-sized margin around the
+    // text. Desktop keeps the paper look it was designed around.
+    const fill = touchPrimary;
+    const MARGIN = fill ? 22 : 34;
     const GAP = 14;
-    const OUTER_PAD_X = 44;
-    const OUTER_PAD_Y = 22;
+    const OUTER_PAD_X = fill ? 0 : 44;
+    const OUTER_PAD_Y = fill ? 0 : 22;
     const MIN_PAGE_W = 260;
     const PAGE_RATIO = 0.72; // typical Chinese paperback width/height
     const BASE_H = 1000;
     const BASE_W = BASE_H * PAGE_RATIO;
+    // Past this, a single line is a mouthful: a landscape phone (844px) is the
+    // case that needs two columns, not one very wide one.
+    const MAX_COL_W = 620;
 
     // Drive geometry off the (always-current) window size, NOT an element's
     // clientWidth — see winSizeRef for why this matters under Wails.
@@ -850,26 +951,40 @@ export default function Reader() {
     // The docked TOC sidebar eats horizontal space on the left, so the usable
     // reading width is the window minus the dock. This keeps the book fully
     // visible inside the shrunken stage instead of being clipped by it.
+    // (The dock is a desktop affordance; see the effect that turns it off on
+    // touch — without that, a dock inherited from the desktop session would
+    // leave 122px of text on a 390px phone.)
     const dockW = tocDockedRef.current ? TOC_DOCK_W : 0;
     const effW = Math.max(0, W - dockW);
     const availW = Math.max(320, effW - OUTER_PAD_X * 2);
     const availH = Math.max(260, H - OUTER_PAD_Y * 2);
 
-    // Largest single page that fits the available rectangle.
-    const singleScale = Math.min(availW / BASE_W, availH / BASE_H);
-    const singleW = Math.max(MIN_PAGE_W, Math.round(BASE_W * singleScale));
-    const singleH = Math.round(singleW / PAGE_RATIO);
+    let ppv: number;
+    let sw: number;
+    let sh: number;
+    if (fill) {
+      // Edge to edge. Two columns only if one would be wider than a comfortable
+      // line; portrait phones never qualify, landscape phones do.
+      ppv = availW - MARGIN * 2 > MAX_COL_W && availW >= 700 ? 2 : 1;
+      sw = Math.floor((availW - (ppv - 1) * GAP) / ppv);
+      sh = Math.round(availH);
+    } else {
+      // Largest single page that fits the available rectangle.
+      const singleScale = Math.min(availW / BASE_W, availH / BASE_H);
+      const singleW = Math.max(MIN_PAGE_W, Math.round(BASE_W * singleScale));
+      const singleH = Math.round(singleW / PAGE_RATIO);
 
-    // Largest page when two are placed side-by-side with a gutter.
-    const doubleScale = Math.min(availW / (BASE_W * 2 + GAP), availH / BASE_H);
-    const doubleW = Math.round(BASE_W * doubleScale);
-    const doubleH = Math.round(doubleW / PAGE_RATIO);
+      // Largest page when two are placed side-by-side with a gutter.
+      const doubleScale = Math.min(availW / (BASE_W * 2 + GAP), availH / BASE_H);
+      const doubleW = Math.round(BASE_W * doubleScale);
+      const doubleH = Math.round(doubleW / PAGE_RATIO);
 
-    // Use a two-page spread only if the window is wide enough AND each page
-    // would still be comfortably readable. Otherwise scale a single page up.
-    const ppv = effW >= 900 && doubleW >= MIN_PAGE_W ? 2 : 1;
-    const sw = ppv === 2 ? doubleW : singleW;
-    const sh = ppv === 2 ? doubleH : singleH;
+      // Use a two-page spread only if the window is wide enough AND each page
+      // would still be comfortably readable. Otherwise scale a single page up.
+      ppv = effW >= 900 && doubleW >= MIN_PAGE_W ? 2 : 1;
+      sw = ppv === 2 ? doubleW : singleW;
+      sh = ppv === 2 ? doubleH : singleH;
+    }
     const cw = Math.max(160, sw - MARGIN * 2);
     const ch = sh - MARGIN * 2;
 
@@ -1178,7 +1293,10 @@ export default function Reader() {
     if (!spread) return 0;
     const r = spread.getBoundingClientRect();
     if (r.width <= 0) return 0;
-    const band = Math.min(marginPx, 26);
+    // On touch the margin is only ~22px, so the band must stay well inside it —
+    // otherwise tapping the first character of a line turns the page instead of
+    // opening the dictionary card, which is the more common intent by far.
+    const band = touchPrimary ? 14 : Math.min(marginPx, 26);
     if (clientX < r.left + band) return -1;
     if (clientX > r.right - band) return 1;
     return 0;
@@ -1203,6 +1321,17 @@ export default function Reader() {
     // turn again.
     if (Date.now() - turnedAtRef.current < 300) return;
 
+    // Touch cannot hover, so the edge bands that slide the chrome in on desktop
+    // are unreachable. A tap in the same band does the same job — but the band
+    // is now exactly the top/bottom margin, not the desktop's 64px hover strip.
+    // With a full-screen page the text starts 22px from the top, so a 64px band
+    // covered the first line and every tap on it opened the toolbar instead of
+    // the dictionary card. The margin is the only strip guaranteed to be blank.
+    if (touchPrimary && (e.clientY < marginPx || e.clientY > window.innerHeight - marginPx)) {
+      setChromeOpen((o) => !o);
+      return;
+    }
+
     const zone = turnZoneAt(e.clientX);
     if (zone < 0) {
       turn(-1);
@@ -1213,17 +1342,25 @@ export default function Reader() {
       return;
     }
 
-    // One click on a word is enough to look it up — no selection needed.
+    // A tap on a word looks it up, wherever the word is — no selection needed.
+    // This stays after the page-turn zones: a click on the outer edge has to
+    // turn the page even when the word hit-test would return a nearby word.
     if (scheduleWordLookup(e.clientX, e.clientY)) return;
 
     const stage = stageRef.current;
     if (!stage) return;
+
     const rect = stage.getBoundingClientRect();
     const ratio = (e.clientX - rect.left) / rect.width;
 
     // The narrow middle band toggles the chrome. Everything else in the page is
     // left to text selection and links.
-    if (ratio > 0.42 && ratio < 0.58) setChromeOpen((o) => !o);
+    //
+    // On touch that band is useless: at 390px wide it is ~4 characters of text,
+    // so every tap inside it lands on a word and opens a card instead. Any tap
+    // that found no word toggles the chrome instead — the page-turn zones above
+    // have already claimed the edges.
+    if (touchPrimary || (ratio > 0.42 && ratio < 0.58)) setChromeOpen((o) => !o);
   }
 
   /* ---- drag along the page edge to turn ---- */
@@ -1275,6 +1412,102 @@ export default function Reader() {
     };
     stage.addEventListener('wheel', onWheel, { passive: false });
     return () => stage.removeEventListener('wheel', onWheel);
+  }, [mode, pageIndex, pageCount, pagesPerView, prev, next]);
+
+  /* ---- touch: a horizontal swipe turns the page ---- */
+  // Registered as native listeners so touchmove can be non-passive and own the
+  // gesture: without that the WebView treats a fast horizontal drag as its own
+  // overscroll/back gesture and the page never sees the move events. CSS
+  // (`touch-action: pan-y` on the paged stage) keeps the browser out of the way.
+  useEffect(() => {
+    if (mode !== 'paged') return;
+    // Listen on the whole reader, not just the stage: the word card and the
+    // chrome bars are siblings of the stage, so a touch that starts on one of
+    // them never bubbles to a stage listener and the swipe is silently dropped.
+    // Looking a word up and then turning the page is the most common sequence
+    // in this reader, and the card sits exactly where the thumb already is.
+    const host = readerRef.current;
+    if (!host) return;
+    const MIN_TRAVEL = 40; // px before a drag counts as a page turn
+    const MIN_RATIO = 1.2; // horizontal travel must beat vertical by this much
+    let startX = 0;
+    let startY = 0;
+    let active = false;
+    let horizontal = false;
+
+    const onStart = (e: TouchEvent) => {
+      // Multi-touch is never a page turn (pinch, or a stray second finger).
+      if (e.touches.length !== 1) {
+        active = false;
+        return;
+      }
+      // A drawer is modal: the page behind it is not interactive, and dragging
+      // inside the drawer (its chapter list scrolls) must not turn pages
+      // underneath it.
+      const target = e.target as HTMLElement | null;
+      if (target && target.closest('.drawer-mask')) {
+        active = false;
+        return;
+      }
+      const t = e.touches[0];
+      startX = t.clientX;
+      startY = t.clientY;
+      active = true;
+      horizontal = false;
+      // The card points at a word on the page being left behind.
+      cancelWordLookup();
+    };
+
+    const onMove = (e: TouchEvent) => {
+      if (!active || e.touches.length !== 1) return;
+      const t = e.touches[0];
+      const dx = t.clientX - startX;
+      const dy = t.clientY - startY;
+      if (Math.abs(dx) > 12 && Math.abs(dx) > Math.abs(dy)) {
+        horizontal = true;
+        if (e.cancelable) e.preventDefault();
+      }
+    };
+
+    const onEnd = (e: TouchEvent) => {
+      if (!active) return;
+      active = false;
+      const t = e.changedTouches[0];
+      if (!t) return;
+      const dx = t.clientX - startX;
+      const dy = t.clientY - startY;
+      if (!horizontal) return;
+      if (Math.abs(dx) < MIN_TRAVEL) return;
+      if (Math.abs(dx) < Math.abs(dy) * MIN_RATIO) return;
+      // The WebView still fires a click after the gesture; swallow it so the
+      // swipe cannot also be read as a tap-to-look-up or a chrome toggle.
+      turnedAtRef.current = Date.now();
+      // Dismiss whatever floats over the page only once the gesture is over.
+      // Unmounting the element under the finger mid-drag makes the browser
+      // cancel the touch sequence, and the page turn never happens — which is
+      // how "swipe while the word card is open" stayed broken even after the
+      // listener moved to the reader root.
+      setSel(null);
+      setPopover(null);
+      setChromeOpen(false);
+      turn(dx < 0 ? 1 : -1);
+    };
+
+    const onCancel = () => {
+      active = false;
+      horizontal = false;
+    };
+
+    host.addEventListener('touchstart', onStart, { passive: true });
+    host.addEventListener('touchmove', onMove, { passive: false });
+    host.addEventListener('touchend', onEnd, { passive: true });
+    host.addEventListener('touchcancel', onCancel, { passive: true });
+    return () => {
+      host.removeEventListener('touchstart', onStart);
+      host.removeEventListener('touchmove', onMove);
+      host.removeEventListener('touchend', onEnd);
+      host.removeEventListener('touchcancel', onCancel);
+    };
   }, [mode, pageIndex, pageCount, pagesPerView, prev, next]);
 
   /* ---- detour (opened from the notebook) ---- */
@@ -1413,7 +1646,7 @@ export default function Reader() {
       setChromeHover(false);
       return;
     }
-    const EDGE = 64; // px from the top/bottom edge that activates the chrome
+    const EDGE = CHROME_EDGE; // band that activates (hover) or toggles (tap) the chrome
     let raf = 0;
     const onMove = (e: MouseEvent) => {
       if (raf) return; // coalesce bursts of mousemove into one frame
@@ -1442,6 +1675,42 @@ export default function Reader() {
   }, [mode, detour]);
 
   /* ---- selection -> toolbar (both modes) ---- */
+
+  // Reads whatever the browser currently has selected into the popover state.
+  //
+  // It has two triggers on purpose. A mouse delivers `mouseup`, but a long press
+  // on a phone produces a selection and never a mouseup at all — which is why
+  // the toolbar used to be unreachable on touch. The selection itself is the
+  // signal, not the gesture that made it.
+  function syncSelectionFromDom() {
+    const root = contentRef.current;
+    if (!root) return;
+    const selection = window.getSelection();
+    if (!selection || selection.isCollapsed || !selection.toString().trim()) {
+      setSel(null);
+      return;
+    }
+    const range = selection.getRangeAt(0);
+    if (!root.contains(range.commonAncestorContainer)) {
+      setSel(null);
+      return;
+    }
+    const offs = getSelectionOffsets(root, range);
+    if (!offs) {
+      setSel(null);
+      return;
+    }
+    const rect = range.getBoundingClientRect();
+    setSel({
+      x: rect.left + rect.width / 2,
+      y: rect.top,
+      bottom: rect.bottom,
+      start: offs.start,
+      end: offs.end,
+      text: selection.toString(),
+    });
+  }
+
   useEffect(() => {
     const el = contentRef.current;
     if (!el) return;
@@ -1449,30 +1718,15 @@ export default function Reader() {
     function onMouseUp() {
       // Any new interaction in the text dismisses the previous dictionary card.
       setLookupCard(null);
-      const selection = window.getSelection();
-      if (!selection || selection.isCollapsed || !selection.toString().trim()) {
-        setSel(null);
-        return;
-      }
-      const range = selection.getRangeAt(0);
-      if (!root.contains(range.commonAncestorContainer)) {
-        setSel(null);
-        return;
-      }
-      const offs = getSelectionOffsets(root, range);
-      if (!offs) {
-        setSel(null);
-        return;
-      }
-      const rect = range.getBoundingClientRect();
-      setSel({
-        x: rect.left + rect.width / 2,
-        y: rect.top,
-        bottom: rect.bottom,
-        start: offs.start,
-        end: offs.end,
-        text: selection.toString(),
-      });
+      syncSelectionFromDom();
+    }
+    // Debounced: the browser emits selectionchange continuously while a drag is
+    // in progress, and the toolbar must land once the range settles rather than
+    // being repositioned on every intermediate step.
+    let selTimer = 0;
+    function onSelectionChange() {
+      window.clearTimeout(selTimer);
+      selTimer = window.setTimeout(syncSelectionFromDom, 140);
     }
     function onClick(e: MouseEvent) {
       const target = e.target as HTMLElement;
@@ -1507,9 +1761,12 @@ export default function Reader() {
     }
     root.addEventListener('mouseup', onMouseUp);
     root.addEventListener('click', onClick);
+    document.addEventListener('selectionchange', onSelectionChange);
     return () => {
       root.removeEventListener('mouseup', onMouseUp);
       root.removeEventListener('click', onClick);
+      document.removeEventListener('selectionchange', onSelectionChange);
+      window.clearTimeout(selTimer);
     };
     // `html` is a dependency because on a cold open the content node does not
     // exist yet when this effect first runs — without it the listeners would
@@ -1959,6 +2216,10 @@ export default function Reader() {
   }
 
   /* ---- paged immersive mode ---- */
+  // Touch layout: the sheet is the screen (see measureAndLayout). Everything
+  // that sells "a book lying on a desk" — corner radius, drop shadow, the stack
+  // of pages peeking out — is dropped, because there is no desk in frame.
+  const fillLayout = touchPrimary;
   const viewWidth = pagesPerView * sheetWidth + (pagesPerView - 1) * pageGap;
   const columnGap = sheetWidth + pageGap - contentWidth;
   const geometryReady = sheetWidth > 0 && contentWidth > 0;
@@ -1971,7 +2232,7 @@ export default function Reader() {
   const visibleSheets = geometryReady ? Math.min(pagesPerView, Math.max(0, pageCount - pageIndex)) : 0;
 
   return (
-    <div className={"reader reader-paged" + (tocDocked ? " toc-docked" : "")}>
+    <div className={"reader reader-paged" + (tocDocked ? " toc-docked" : "") + (fillLayout ? " reader-fill" : "")} ref={readerRef}>
       {tocDocked && (
         <aside className="toc-dock">
           <div className="toc-head">
@@ -2026,8 +2287,10 @@ export default function Reader() {
               current sheet(s), so it reads like an open book. Each side only
               appears when the book actually continues that way — the stack is
               also the target for a page-edge click, and an edge that leads
-              nowhere would be a promise the click cannot keep. */}
-          {geometryReady && (
+              nowhere would be a promise the click cannot keep.
+              Not on touch: the sheet is flush with the screen, so the stack
+              would sit off-screen (and the page-turn bands cover the gesture). */}
+          {geometryReady && !fillLayout && (
             <>
               {pageIndex > 0 && (
                 <div
@@ -2136,7 +2399,7 @@ export default function Reader() {
               目录
             </button>
             <button
-              className={`btn sm${tocDocked ? ' primary' : ''}`}
+              className={`btn sm dock-toggle${tocDocked ? ' primary' : ''}`}
               onClick={() => setTocDocked((v) => !v)}
               title={tocDocked ? '取消固定目录（恢复为抽屉）' : '将目录固定在侧边'}
             >

@@ -797,6 +797,13 @@ a {
   justify-content: center;
 }
 
+/* Paged reading: horizontal drags belong to the page-turn gesture, so the
+   WebView must not claim them for overscroll / back-navigation. Vertical panning
+   is left alone, which keeps long-press text selection working. */
+.reader-paged .reader-stage {
+  touch-action: pan-y;
+}
+
 /* Page number printed inside the sheet, like a real book: bottom outer corner.
    Single page -> bottom right; spread -> left sheet bottom-left, right sheet
    bottom-right. Rendered behind the transparent clip, in the page margin. */
@@ -869,6 +876,34 @@ a {
     0 1px 3px rgba(0, 0, 0, 0.1),
     0 10px 28px rgba(0, 0, 0, 0.16),
     4px 0 8px rgba(0, 0, 0, 0.05) inset;
+}
+
+/* Touch layout (see measureAndLayout): the sheet is the screen. Rounded corners
+   and a drop shadow only communicate "a book on a desk" while there is visible
+   desk around the sheet; edge to edge they read as a rendering bug, and the
+   shadow's blur eats contrasting pixels at the very edge of the text column.
+   The side shading goes too: it imitates a page curving towards a spine that is
+   no longer in frame, so all it does is put two grey stripes around the text. */
+.reader-fill .page-sheet,
+.reader-fill .page-sheet.left,
+.reader-fill .page-sheet.right {
+  border-radius: 0;
+  box-shadow: none;
+  background: linear-gradient(180deg, #fdfbf6 0%, #faf8f3 100%);
+}
+
+/* The page number has only the bottom margin to live in now (22px), so it sits
+   closer to the edge and smaller. */
+.reader-fill .page-sheet .page-num {
+  bottom: 9px;
+  font-size: 10px;
+}
+
+/* The gutter shadow (::after) marks the inner edge where two facing pages meet.
+   A full-screen sheet has no facing page, so it is just an 18px grey smear down
+   the left or right side — which is what it looked like on the phone. */
+.reader-fill .page-sheet::after {
+  display: none;
 }
 
 /* subtle gutter shadow on the inner edge of each sheet */
@@ -974,6 +1009,12 @@ a {
   margin: 1.6em 0 0.7em;
   break-inside: avoid;
 }
+/* Touch layout: the chapter heading is the first thing on the page, and a book
+   margin above it is a paper convention — 47px of blank before the text the
+   reader opened the chapter for. The paper layout keeps it. */
+.reader-paged.reader-fill .reader-content > :first-child {
+  margin-top: 0;
+}
 .reader-paged .reader-content p {
   margin: 0 0 1.05em;
   text-align: justify;
@@ -1056,6 +1097,57 @@ a {
 .reader-chrome .crumb { display: flex; align-items: center; gap: 6px; font-size: 13px; color: #e8eaed; }
 .reader-chrome .crumb strong { color: #fff; font-weight: 550; }
 .reader-chrome .muted { color: #aab1bd; }
+
+/* Narrow screens (phones). The top bar carries eight controls and ran straight
+   off the right edge at 390px, where the last ones became untappable. Wrapping
+   is safe here because the bar is an absolutely positioned overlay: it never
+   enters the document flow, so it cannot change contentHeight and cannot
+   change the page count (see the "浮层必须 fixed/absolute" rule). */
+@media (max-width: 560px) {
+  .reader-chrome {
+    flex-wrap: wrap;
+    row-gap: 6px;
+    padding: 8px 10px;
+  }
+  /* Buttons keep their natural width. Without this the crumb steals the space
+     and a two-character label wraps one character per line ("书" over "架"),
+     which is how the bar looked on the first phone screenshot. */
+  .reader-chrome .btn {
+    flex: 0 0 auto;
+    white-space: nowrap;
+  }
+  .reader-chrome .chrome-left {
+    flex: 0 0 auto;
+    flex-wrap: wrap;
+    gap: 6px;
+  }
+  .reader-chrome .chrome-right {
+    flex: 1 1 100%;
+    flex-wrap: wrap;
+    gap: 6px;
+  }
+  /* The chapter name answers "where am I"; the book title and author are
+     already on the shelf behind the bar, and on a 390px screen the crumb pushed
+     the controls onto a third row. Keep the useful half. */
+  .reader-chrome .crumb {
+    display: none;
+  }
+  .reader-chrome .chrome-center {
+    flex: 1 1 0;
+    min-width: 0;
+    order: 0;
+    margin: 0;
+    text-align: left;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  /* A 268px docked sidebar would leave ~120px of text on a 390px phone, so the
+     control is hidden rather than offering a layout that cannot be read. */
+  .reader-chrome .dock-toggle {
+    display: none;
+  }
+}
 
 /* drawers */
 .drawer-mask {
