@@ -3,12 +3,32 @@ import { useNavigate } from 'react-router-dom';
 import { api, VocabItem, VocabStats } from '../api';
 import { toast, toastError } from '../toast';
 
-const FILTERS: { key: '' | 'new' | 'learning' | 'known'; label: string }[] = [
+type Filter = '' | 'new' | 'learning' | 'known';
+
+const FILTERS: { key: Filter; label: string }[] = [
   { key: '', label: '全部' },
   { key: 'new', label: '待学' },
   { key: 'learning', label: '学习中' },
   { key: 'known', label: '已掌握' },
 ];
+
+/** A pass has to be finishable; a queue you cannot reach the end of is one you
+ * stop starting. The rest waits for the next pass. */
+const REVIEW_LIMIT = 30;
+
+const STATUS_HINT: Record<VocabItem['status'], string> = {
+  new: '查词时自动收录，还没有复习过',
+  learning: '复习时没答上来，还没记住',
+  known: '已掌握，不再出现在复习队列里',
+  ignored: '不再提示',
+};
+
+const STATUS_LABEL: Record<VocabItem['status'], string> = {
+  new: '待学',
+  learning: '学习中',
+  known: '已掌握',
+  ignored: '已忽略',
+};
 
 /** Marks the word inside its example sentence, so the row reads as a quote
  * rather than an unexplained string. Falls back to the base form when the
@@ -31,14 +51,29 @@ function emphasise(text: string, candidates: string[]): ReactNode {
   return text;
 }
 
+function shortDate(iso: string): string {
+  if (!iso) return '';
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return '';
+  return `${d.getMonth() + 1}月${d.getDate()}日`;
+}
+
 export default function Vocab() {
   const nav = useNavigate();
   const [items, setItems] = useState<VocabItem[]>([]);
   const [stats, setStats] = useState<VocabStats | null>(null);
-  const [filter, setFilter] = useState<'' | 'new' | 'learning' | 'known'>('');
+  const [filter, setFilter] = useState<Filter>('');
   const [keyword, setKeyword] = useState('');
   const [loading, setLoading] = useState(true);
+
+  // Deleting a word is rare and irreversible, so it is behind a mode: the
+  // per-row button would otherwise sit one slip away from every row.
+  const [deleting, setDeleting] = useState(false);
+  const [picked, setPicked] = useState<Set<string>>(new Set());
+
   const [reviewing, setReviewing] = useState(false);
+  const [queue, setQueue] = useState<VocabItem[]>([]);
+  const [preparing, setPreparing] = useState(false);
 
   // The notebook is searched on every keystroke; each row costs one dictionary
   // lookup on the Go side, so a short debounce keeps typing responsive.
@@ -62,6 +97,12 @@ export default function Vocab() {
     };
   }, [filter, keyword]);
 
+  // Selection is scoped to what is on screen: a hidden word must not be
+  // deleted by a confirmation that never showed it.
+  useEffect(() => {
+    setPicked(new Set());
+  }, [filter, keyword]);
+
   async function reload() {
     try {
       const [list, st] = await Promise.all([api.listVocab(filter, keyword), api.vocabStats()]);
@@ -82,9 +123,28 @@ export default function Vocab() {
     }
   }
 
-  async function remove(it: VocabItem) {
+  function togglePick(id: string) {
+    setPicked((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }
+
+  function leaveDeleteMode() {
+    setDeleting(false);
+    setPicked(new Set());
+  }
+
+  async function confirmDelete() {
+    const ids = [...picked];
+    if (ids.length === 0) return;
+    if (!confirm(`从生词本删除这 ${ids.length} 个词？此操作不可撤销。`)) return;
     try {
-      await api.deleteVocab(it.id);
+      await Promise.all(ids.map((id) => api.deleteVocab(id)));
+      toast(`已删除 ${ids.length} 个词`, 'success');
+      leaveDeleteMode();
       await reload();
     } catch (e) {
       toastError(e);
@@ -93,15 +153,46 @@ export default function Vocab() {
 
   function jump(it: VocabItem) {
     if (!it.bookId || !it.chapterId) return;
-    nav(`/books/${it.bookId}/read/${it.chapterId}`, { state: { offset: it.offset } });
+    nav(`/books/${it.bookId}/read/${it.chapterId}`, {
+      state: {
+        offset: it.offset,
+        // Marking the visit as a detour is what keeps it from overwriting the
+        // reading position: the reader came here to see one word, not to read.
+        detour: { word: it.term, surface: it.surface || it.term, offset: it.offset },
+      },
+    });
   }
 
-  // Words worth reviewing: everything not already mastered or explicitly
-  // ignored. The review pass walks this queue once.
-  const queue = useMemo(() => items.filter((it) => it.status === 'new' || it.status === 'learning'), [items]);
+  async function startReview() {
+    setPreparing(true);
+    try {
+      const q = await api.vocabQueue(REVIEW_LIMIT);
+      if (q.length === 0) {
+        toast('没有需要复习的词', 'info');
+        return;
+      }
+      setQueue(q);
+      setReviewing(true);
+    } catch (e) {
+      toastError(e);
+    } finally {
+      setPreparing(false);
+    }
+  }
+
+  const pending = stats ? stats.new + stats.learning : 0;
+  const allPicked = items.length > 0 && picked.size === items.length;
 
   if (reviewing) {
-    return <Review items={queue} onExit={() => { setReviewing(false); void reload(); }} />;
+    return (
+      <Review
+        items={queue}
+        onExit={() => {
+          setReviewing(false);
+          void reload();
+        }}
+      />
+    );
   }
 
   return (
@@ -110,19 +201,43 @@ export default function Vocab() {
         <h1>生词本</h1>
         {stats && (
           <span className="tag">
-            {stats.total} 词 · 待学 {stats.new + stats.learning} · 已掌握 {stats.known}
+            {stats.total} 词 · 待学 {pending} · 已掌握 {stats.known}
           </span>
         )}
         <span style={{ flex: 1 }} />
-        <input
-          className="input vocab-search"
-          placeholder="搜索单词或例句…"
-          value={keyword}
-          onChange={(e) => setKeyword(e.target.value)}
-        />
-        <button className="btn primary" disabled={queue.length === 0} onClick={() => setReviewing(true)}>
-          复习 {queue.length}
-        </button>
+
+        {deleting ? (
+          <>
+            <span className="muted">已选 {picked.size} 个</span>
+            <button
+              className="btn sm"
+              onClick={() => setPicked(allPicked ? new Set() : new Set(items.map((it) => it.id)))}
+            >
+              {allPicked ? '取消全选' : '全选'}
+            </button>
+            <button className="btn sm" onClick={leaveDeleteMode}>
+              取消
+            </button>
+            <button className="btn sm danger" disabled={picked.size === 0} onClick={() => void confirmDelete()}>
+              删除 {picked.size}
+            </button>
+          </>
+        ) : (
+          <>
+            <input
+              className="input vocab-search"
+              placeholder="搜索单词或例句…"
+              value={keyword}
+              onChange={(e) => setKeyword(e.target.value)}
+            />
+            <button className="btn sm" onClick={() => setDeleting(true)} disabled={items.length === 0} title="批量删除单词">
+              删除
+            </button>
+            <button className="btn primary" disabled={pending === 0 || preparing} onClick={() => void startReview()}>
+              {preparing ? '准备中…' : `复习 ${pending}`}
+            </button>
+          </>
+        )}
       </div>
 
       <div className="vocab-filters">
@@ -135,6 +250,7 @@ export default function Vocab() {
             {f.label}
           </button>
         ))}
+        {deleting && <span className="muted vocab-hint">正在删除：点击单词选中，可多选</span>}
       </div>
 
       {loading ? (
@@ -142,24 +258,31 @@ export default function Vocab() {
       ) : items.length === 0 ? (
         <div className="empty">
           {keyword || filter
-            ? '没有匹配的词。'
+            ? filter === 'learning'
+              ? '还没有「学习中」的词。复习时点「不记得」的词会落到这里。'
+              : '没有匹配的词。'
             : '生词本还是空的。阅读时划选单词查一次，同一个词查第二次就会自动收录。'}
         </div>
       ) : (
         <div className="note-list">
           {items.map((it) => (
-            <div className="note-card" key={it.id}>
+            <div className={`note-card${picked.has(it.id) ? ' picked' : ''}`} key={it.id}>
+              {deleting && (
+                <span className={`vocab-check${picked.has(it.id) ? ' on' : ''}`} aria-hidden>
+                  {picked.has(it.id) ? '✓' : ''}
+                </span>
+              )}
               <button
                 className="note-card-main"
-                onClick={() => jump(it)}
-                disabled={!it.bookId || !it.chapterId}
-                title={it.bookTitle ? '回到原文' : '原书已删除'}
+                onClick={() => (deleting ? togglePick(it.id) : jump(it))}
+                disabled={!deleting && (!it.bookId || !it.chapterId)}
+                title={deleting ? '选中' : it.bookTitle ? '回到原文' : '原书已删除'}
               >
                 <div className="vocab-wordline">
                   <span className="vocab-word">{it.term}</span>
                   {it.phonetic && <span className="dict-phon">/{it.phonetic}/</span>}
-                  <span className={`vocab-status s-${it.status}`}>
-                    {{ new: '待学', learning: '学习中', known: '已掌握', ignored: '已忽略' }[it.status]}
+                  <span className={`vocab-status s-${it.status}`} title={STATUS_HINT[it.status]}>
+                    {STATUS_LABEL[it.status]}
                   </span>
                 </div>
                 <div className="vocab-trans">{it.translation || '（词库无释义）'}</div>
@@ -169,18 +292,18 @@ export default function Vocab() {
                 <div className="note-card-meta">
                   {it.bookTitle ? `${it.bookTitle} · ${it.chapterTitle || '未知章节'}` : '原书已删除'}
                   {it.lookups > 1 && ` · 查过 ${it.lookups} 次`}
+                  {it.reviews > 0 && ` · 复习 ${it.reviews} 次（${shortDate(it.lastReviewedAt)}）`}
                 </div>
               </button>
-              <div className="vocab-actions">
-                {it.status !== 'known' && (
-                  <button className="btn sm" onClick={() => void markKnown(it)}>
-                    已掌握
-                  </button>
-                )}
-                <button className="btn sm danger" onClick={() => void remove(it)}>
-                  删
-                </button>
-              </div>
+              {!deleting && (
+                <div className="vocab-actions">
+                  {it.status !== 'known' && (
+                    <button className="btn sm" onClick={() => void markKnown(it)}>
+                      已掌握
+                    </button>
+                  )}
+                </div>
+              )}
             </div>
           ))}
         </div>
@@ -191,9 +314,13 @@ export default function Vocab() {
 
 /* ------------------------------ review pass ------------------------------ */
 
+type ReviewStats = { hit: number; miss: number; skipped: number };
+
 /**
- * One pass over the words that are not yet mastered. Deliberately not an SRS:
- * there is no schedule yet, so promising "spaced repetition" would be a lie.
+ * One pass over the words that are not yet mastered. It is not an SRS: there is
+ * no interval schedule yet, only an order (unseen first, then whatever has
+ * waited longest), so calling it spaced repetition would be a lie.
+ *
  * The card shows the word first and the meaning only after a click, because
  * reading the gloss straight away is what makes a card feel productive while
  * teaching nothing.
@@ -202,8 +329,7 @@ function Review({ items, onExit }: { items: VocabItem[]; onExit: () => void }) {
   const [list] = useState(items);
   const [index, setIndex] = useState(0);
   const [revealed, setRevealed] = useState(false);
-  const [known, setKnown] = useState(0);
-  const [again, setAgain] = useState(0);
+  const [tally, setTally] = useState<ReviewStats>({ hit: 0, miss: 0, skipped: 0 });
   const busy = useRef(false);
 
   const cur = list[index];
@@ -224,14 +350,10 @@ function Review({ items, onExit }: { items: VocabItem[]; onExit: () => void }) {
     if (!cur || busy.current) return;
     busy.current = true;
     try {
-      if (didKnow) {
-        await api.setVocabStatus(cur.id, 'known');
-        setKnown((n) => n + 1);
-      } else {
-        // Marking it "learning" keeps it in the queue for the next pass.
-        await api.setVocabStatus(cur.id, 'learning');
-        setAgain((n) => n + 1);
-      }
+      // A miss is what puts the word into `learning` — and the Go side records
+      // the review either way, so "seen 3 times" is a fact, not a guess.
+      await api.gradeVocab(cur.id, didKnow);
+      setTally((t) => (didKnow ? { ...t, hit: t.hit + 1 } : { ...t, miss: t.miss + 1 }));
     } catch (e) {
       toastError(e);
     } finally {
@@ -241,6 +363,12 @@ function Review({ items, onExit }: { items: VocabItem[]; onExit: () => void }) {
     }
   }
 
+  function skip() {
+    setTally((t) => ({ ...t, skipped: t.skipped + 1 }));
+    setRevealed(false);
+    setIndex((i) => i + 1);
+  }
+
   if (!cur) {
     return (
       <div className="page">
@@ -248,7 +376,9 @@ function Review({ items, onExit }: { items: VocabItem[]; onExit: () => void }) {
           <h1>本轮复习完成</h1>
         </div>
         <div className="empty">
-          认识 {known} 个，还需再看 {again} 个。
+          认识 {tally.hit} 个，还不认识 {tally.miss} 个
+          {tally.skipped > 0 && `，跳过 ${tally.skipped} 个`}。
+          {tally.miss > 0 && '答错的词已进入「学习中」，下一轮会排在前面。'}
         </div>
         <div style={{ display: 'flex', gap: 8, justifyContent: 'center' }}>
           <button className="btn primary" onClick={onExit}>
@@ -267,6 +397,9 @@ function Review({ items, onExit }: { items: VocabItem[]; onExit: () => void }) {
           {index + 1} / {list.length}
         </span>
         <span style={{ flex: 1 }} />
+        <button className="btn sm" onClick={skip}>
+          跳过
+        </button>
         <button className="btn" onClick={onExit}>
           结束本轮
         </button>
@@ -294,7 +427,7 @@ function Review({ items, onExit }: { items: VocabItem[]; onExit: () => void }) {
 
         <div className="review-actions">
           <button className="btn" disabled={!revealed} onClick={() => void grade(false)}>
-            还不认识
+            不记得
           </button>
           <button className="btn primary" disabled={!revealed} onClick={() => void grade(true)}>
             认识

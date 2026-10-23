@@ -2254,3 +2254,38 @@ a {
     opacity: 0;
   }
 }
+
+/* Delete mode: the destructive action is behind a mode, so the row only gets a
+   checkbox once you have asked for one. */
+.note-card.picked {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.vocab-check {
+  flex: none;
+  width: 16px;
+  height: 16px;
+  align-self: center;
+  margin: 0 2px 0 8px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 4px;
+  border: 1.5px solid var(--border-strong);
+  background: var(--panel);
+  color: #fff;
+  font-size: 11px;
+  line-height: 1;
+}
+
+.vocab-check.on {
+  border-color: var(--accent);
+  background: var(--accent);
+}
+
+.vocab-hint {
+  align-self: center;
+  font-size: 12px;
+  margin-left: 4px;
+}
