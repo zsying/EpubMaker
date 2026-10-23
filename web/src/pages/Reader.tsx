@@ -1115,10 +1115,10 @@ export default function Reader() {
     };
   }, [mode]);
 
-  /* ---- selection -> toolbar (paged) ---- */
+  /* ---- selection -> toolbar (both modes) ---- */
   useEffect(() => {
     const el = contentRef.current;
-    if (!el || mode !== 'paged') return;
+    if (!el) return;
     const root = el;
     function onMouseUp() {
       // Any new interaction in the text dismisses the previous dictionary card.
@@ -1167,7 +1167,10 @@ export default function Reader() {
       root.removeEventListener('mouseup', onMouseUp);
       root.removeEventListener('click', onClick);
     };
-  }, [mode, annotations]);
+    // `html` is a dependency because on a cold open the content node does not
+    // exist yet when this effect first runs — without it the listeners would
+    // never attach and selecting text would do nothing.
+  }, [mode, annotations, html]);
 
   /* ---- dictionary / vocabulary ---- */
 
@@ -1304,6 +1307,118 @@ export default function Reader() {
   if (loading) return <div className="loading">加载中…</div>;
   if (!book) return <div className="page empty">书籍不存在</div>;
 
+  // Overlays live outside both reading layouts: they are viewport-anchored, and
+  // keeping one copy is what makes "select a word, look it up" work while
+  // scrolling as well as while paging.
+  const overlayLayer = (
+    <>
+      {/* selection toolbar */}
+      {sel && (
+        <div className="sel-toolbar" ref={selPos.ref} style={overlayStyle(selPos.pos)}>
+          <button className="sel-lookup" title="查词" onClick={lookupSelection} disabled={lookupBusy}>
+            {lookupBusy ? '查询中' : '查词'}
+          </button>
+          {/* Highlights are painted by the paginated view only, so offering
+              colours while scrolling would promise something invisible. */}
+          {mode === 'paged' &&
+            COLORS.map((c) => (
+              <button key={c} className={`swatch sw-${c}`} title={c} onClick={() => createAnnotation(c)} />
+            ))}
+        </div>
+      )}
+
+      {/* dictionary card — fixed layer, never part of the page layout */}
+      {lookupCard && (
+        <div className="dict-card" ref={dictPos.ref} style={overlayStyle(dictPos.pos)}>
+          <button className="dict-close" title="关闭" onClick={() => setLookupCard(null)}>
+            ×
+          </button>
+          {!lookupCard.res.found || !lookupCard.res.entry ? (
+            <div className="dict-miss">
+              词库未收录 <b>{lookupCard.res.query}</b>
+            </div>
+          ) : (
+            <>
+              <div className="dict-head">
+                <span className="dict-word">{lookupCard.res.entry.word}</span>
+                {lookupCard.res.entry.phonetic && (
+                  <span className="dict-phon">/{lookupCard.res.entry.phonetic}/</span>
+                )}
+                <button
+                  className="dict-speak"
+                  title="朗读"
+                  onClick={() => speak(lookupCard.res.entry?.word || '')}
+                >
+                  发音
+                </button>
+              </div>
+              {lookupCard.res.entry.translation ? (
+                <div className="dict-trans">{lookupCard.res.entry.translation}</div>
+              ) : (
+                <div className="dict-trans muted">{lookupCard.res.entry.definition || '暂无释义'}</div>
+              )}
+              {lookupCard.res.base && (
+                <div className="dict-base">
+                  <span className="dict-base-label">原型</span>
+                  <b>{lookupCard.res.base.word}</b>
+                  {lookupCard.res.base.phonetic && (
+                    <span className="dict-phon">/{lookupCard.res.base.phonetic}/</span>
+                  )}
+                  {lookupCard.res.base.translation && (
+                    <div className="dict-base-trans">{lookupCard.res.base.translation}</div>
+                  )}
+                </div>
+              )}
+              <div className="dict-foot">
+                {lookupCard.res.recorded ? (
+                  <span className="dict-saved">已在生词本</span>
+                ) : (
+                  <>
+                    <span className="muted">
+                      {lookupCard.res.common ? '常用词，不自动收录' : '再查一次自动收录'}
+                    </span>
+                    <button className="btn sm" onClick={addCardToNotebook}>
+                      加入生词本
+                    </button>
+                  </>
+                )}
+              </div>
+            </>
+          )}
+        </div>
+      )}
+
+      {/* annotation popover */}
+      {popover && (
+        <div className="ann-popover" ref={popPos.ref} style={overlayStyle(popPos.pos)}>
+          <div className="ann-pop-colors">
+            {COLORS.map((c) => (
+              <button
+                key={c}
+                className={`swatch sw-${c}${popover.ann.color === c ? ' on' : ''}`}
+                onClick={() => changeAnnColor(c)}
+              />
+            ))}
+          </div>
+          <textarea
+            className="ann-note"
+            placeholder="添加批注…"
+            value={noteDraft}
+            onChange={(e) => setNoteDraft(e.target.value)}
+          />
+          <div className="ann-pop-actions">
+            <button className="btn sm" onClick={saveAnnNote}>
+              保存
+            </button>
+            <button className="btn sm danger" onClick={() => removeAnnotation(popover.ann.id)}>
+              删除
+            </button>
+          </div>
+        </div>
+      )}
+    </>
+  );
+
   if (mode === 'scroll') {
     return (
       <div className="reader">
@@ -1377,6 +1492,8 @@ export default function Reader() {
               style={{ left: flash.left, top: flash.top, width: flash.width, height: flash.height }}
             />
           )}
+
+          {overlayLayer}
 
           <div className="reader-nav">
             <button className="btn" disabled={!prev} onClick={() => prev && openChapter(prev.id)}>
@@ -1704,107 +1821,7 @@ export default function Reader() {
         </div>
       )}
 
-      {/* selection toolbar */}
-      {sel && (
-        <div className="sel-toolbar" ref={selPos.ref} style={overlayStyle(selPos.pos)}>
-          <button className="sel-lookup" title="查词" onClick={lookupSelection} disabled={lookupBusy}>
-            {lookupBusy ? '查询中' : '查词'}
-          </button>
-          {COLORS.map((c) => (
-            <button key={c} className={`swatch sw-${c}`} title={c} onClick={() => createAnnotation(c)} />
-          ))}
-        </div>
-      )}
-
-      {/* dictionary card — fixed layer, never part of the page layout */}
-      {lookupCard && (
-        <div className="dict-card" ref={dictPos.ref} style={overlayStyle(dictPos.pos)}>
-          <button className="dict-close" title="关闭" onClick={() => setLookupCard(null)}>
-            ×
-          </button>
-          {!lookupCard.res.found || !lookupCard.res.entry ? (
-            <div className="dict-miss">
-              词库未收录 <b>{lookupCard.res.query}</b>
-            </div>
-          ) : (
-            <>
-              <div className="dict-head">
-                <span className="dict-word">{lookupCard.res.entry.word}</span>
-                {lookupCard.res.entry.phonetic && (
-                  <span className="dict-phon">/{lookupCard.res.entry.phonetic}/</span>
-                )}
-                <button
-                  className="dict-speak"
-                  title="朗读"
-                  onClick={() => speak(lookupCard.res.entry?.word || '')}
-                >
-                  发音
-                </button>
-              </div>
-              {lookupCard.res.entry.translation ? (
-                <div className="dict-trans">{lookupCard.res.entry.translation}</div>
-              ) : (
-                <div className="dict-trans muted">{lookupCard.res.entry.definition || '暂无释义'}</div>
-              )}
-              {lookupCard.res.base && (
-                <div className="dict-base">
-                  <span className="dict-base-label">原型</span>
-                  <b>{lookupCard.res.base.word}</b>
-                  {lookupCard.res.base.phonetic && (
-                    <span className="dict-phon">/{lookupCard.res.base.phonetic}/</span>
-                  )}
-                  {lookupCard.res.base.translation && (
-                    <div className="dict-base-trans">{lookupCard.res.base.translation}</div>
-                  )}
-                </div>
-              )}
-              <div className="dict-foot">
-                {lookupCard.res.recorded ? (
-                  <span className="dict-saved">已在生词本</span>
-                ) : (
-                  <>
-                    <span className="muted">
-                      {lookupCard.res.common ? '常用词，不自动收录' : '再查一次自动收录'}
-                    </span>
-                    <button className="btn sm" onClick={addCardToNotebook}>
-                      加入生词本
-                    </button>
-                  </>
-                )}
-              </div>
-            </>
-          )}
-        </div>
-      )}
-
-      {/* annotation popover */}
-      {popover && (
-        <div className="ann-popover" ref={popPos.ref} style={overlayStyle(popPos.pos)}>
-          <div className="ann-pop-colors">
-            {COLORS.map((c) => (
-              <button
-                key={c}
-                className={`swatch sw-${c}${popover.ann.color === c ? ' on' : ''}`}
-                onClick={() => changeAnnColor(c)}
-              />
-            ))}
-          </div>
-          <textarea
-            className="ann-note"
-            placeholder="添加批注…"
-            value={noteDraft}
-            onChange={(e) => setNoteDraft(e.target.value)}
-          />
-          <div className="ann-pop-actions">
-            <button className="btn sm" onClick={saveAnnNote}>
-              保存
-            </button>
-            <button className="btn sm danger" onClick={() => removeAnnotation(popover.ann.id)}>
-              删除
-            </button>
-          </div>
-        </div>
-      )}
+      {overlayLayer}
     </div>
   );
 }
