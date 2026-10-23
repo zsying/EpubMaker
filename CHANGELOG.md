@@ -47,6 +47,13 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Fixed
 
+- Dropping an EPUB on the shelf now imports it. The drop zone claimed to accept
+  files but only opened the native picker, because a webview drop carries `File`
+  objects with no filesystem path and the import reads from disk. Drops are now
+  resolved natively (`DragAndDrop.EnableFileDrop` + `web/src/filedrop.ts`) and
+  import straight away, anywhere on the shelf rather than only on the dashed
+  box. The same change stops a dropped file from navigating the webview to it —
+  previously, dropping anywhere else replaced the app with the raw file.
 - Marking a word 已掌握 no longer drops it out of study for good: it is treated
   as a claim and scheduled for a check three weeks out. 忽略 stays the way to
   retire a word permanently.

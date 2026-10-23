@@ -109,3 +109,33 @@
 
 已验证：1 → 6 → 16 → 45 天的阶梯、答错回到 10 分钟步、ease 触底 1.3、
 到期的 `known` 词会重回队列、老库迁移后旧词一律"立即到期"（各有测试）。
+
+## ADR-9 拖放导入走 Wails 原生桥，而不是 HTML5 拖放
+
+书架一直写着"拖入 epub"，但实现是 `onDrop` 里 `preventDefault()` 之后调用
+`SelectEpubFiles` —— 也就是拖完弹一个文件选择框，等于没导入。原因不是懒：webview 的
+drop 事件里只有 `File` 对象，**没有文件系统路径**，而这个应用的导入是"从磁盘读"，
+从来没有上传通道（见红线 2）。所以在纯前端里那份拖进来的数据是读不出来的。
+
+现在的路径：`main.go` 打开 `DragAndDrop.EnableFileDrop`，Wails 把 drop 坐标与
+WebView2 的 additional objects 交给 Go 侧解析成绝对路径，再以 `wails:file-drop`
+事件回传前端；`web/src/filedrop.ts` 订阅一次，把路径交给书架页已有的
+`ImportPaths`。前后两个入口（按钮、拖放）在 `Library.importPaths()` 汇合。
+
+三个必须同时成立的点，缺一个就退化：
+
+1. `EnableFileDrop` 为真 —— 否则 Go 侧直接丢弃 `file:drop` 消息；
+2. 前端订阅了 `OnFileDrop` —— Wails 的 window 级 `dragover/drop` 监听是**随订阅安装**的，
+   没订阅时连 `preventDefault` 都没有，拖进来的文件会把 webview 导航过去（页面变成一本
+   epub 的二进制），这是本 bug 之外更严重的默认行为；
+3. `useDropTarget: false` —— 默认值要求落点元素带 `--wails-drop-target` CSS 属性，
+   而书架希望"拖到哪都能放"，所以关掉它，由页面自己判断该不该导入。
+
+订阅放在 `App` 而不是书架页：它同时是"拦住默认导航"的那一层，晚一步注册就有一个
+drop 仍然会毁掉页面。
+
+拖到书架以外的页面不导入，只提示回书架 —— 导入要落到书架的列表状态上，别的页面没有
+可更新的东西，静默失败比一句提示更糟。
+
+降级：浏览器里没有 `window.runtime`（`run.ps1 web` / 纯前端调试），`canResolveDropPaths()`
+为假，drop 退回打开文件选择框 —— 那条路仍然有路径，仍然能导入。

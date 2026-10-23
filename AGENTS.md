@@ -37,6 +37,9 @@
 7. **生词是跨书资产**：`vocab.book_id/chapter_id` 只是指针，**不加外键**。书删了词还在。
 8. 所有 content 目录内的文件访问走 `storage.ContentPath()`（含路径穿越防护），别自己拼路径。
 9. 删除章节只从目录移除，正文文件保留（可能被别处引用）。
+10. **导入只认文件路径，不接受上传**。拖放走 Wails 原生桥（`main.go` 的 `DragAndDrop.EnableFileDrop`
+    + `web/src/filedrop.ts`），**不要**改用 `e.dataTransfer.files` 读文件：webview 给的 `File`
+    没有路径，而且缺了原生监听连默认行为都拦不住（拖进来会把 webview 导航到那个文件）。
 
 ## 开发约定
 
