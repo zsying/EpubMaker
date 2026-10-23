@@ -1,6 +1,6 @@
 {
   "name": "epubmaker",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "description": "EPUB 电子书维护与生成工具（本地桌面应用，Go + Wails）",
   "workspaces": [

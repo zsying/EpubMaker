@@ -5,6 +5,15 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+## [0.2.0] — 2026-10-23
+
+The reader grew a memory. Look a word up as you read and it settles into a
+cross-book notebook; the notebook is reviewed on an SM-2 schedule instead of
+being re-listed; and the reading itself became direct — one click on a word, one
+click or one pull on the paper's edge to turn. Everything else in this release
+is polish around that: a shelf that stops blanking, an Escape key that closes
+one layer at a time, and a drop zone that finally imports what you drop.
+
 ### Added
 
 - **Dictionary lookup** — select a word in the reader to see phonetic, gloss and
@@ -142,5 +151,6 @@ backend is Go — no Node service, no reverse proxy, no open ports.
 - `build`/`dev` pin `GOTOOLCHAIN` to the version in `app/go.mod`, working around
   wails v2.11 being unable to read Go 1.27 export data.
 
-[Unreleased]: https://github.com/zsying/EpubMaker/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/zsying/EpubMaker/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/zsying/EpubMaker/releases/tag/v0.2.0
 [0.1.0]: https://github.com/zsying/EpubMaker/releases/tag/v0.1.0
