@@ -48,6 +48,55 @@ type Annotation struct {
 
 /* ----------------------------- progress ----------------------------- */
 
+// BookProgress is the shelf-level reading progress of one book: the saved
+// chapter position folded into a 0..1 fraction of the whole book. Books that
+// were never opened (or whose saved chapter no longer exists) are simply
+// absent from the list.
+type BookProgress struct {
+	BookID    string  `json:"bookId"`
+	Percent   float64 `json:"percent"`
+	UpdatedAt string  `json:"updatedAt"`
+}
+
+// ListProgress joins every saved reading position with its chapter index and
+// the book's chapter count. The fraction is idx/count: a reader parked on the
+// second chapter of ten shows exactly the 10% the shelf displays.
+func ListProgress() ([]BookProgress, error) {
+	d, err := db.Open()
+	if err != nil {
+		return nil, err
+	}
+	rows, err := d.Query(`
+		SELECT rp.book_id, c.idx,
+		       (SELECT COUNT(*) FROM chapters c2 WHERE c2.book_id = rp.book_id),
+		       rp.updated_at
+		FROM reading_progress rp
+		JOIN chapters c ON c.id = rp.chapter_id`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []BookProgress{}
+	for rows.Next() {
+		var bookID, updatedAt string
+		var idx, total int
+		if err := rows.Scan(&bookID, &idx, &total, &updatedAt); err != nil {
+			return nil, err
+		}
+		if total <= 0 {
+			continue
+		}
+		pct := float64(idx) / float64(total)
+		if pct < 0 {
+			pct = 0
+		} else if pct > 1 {
+			pct = 1
+		}
+		out = append(out, BookProgress{BookID: bookID, Percent: pct, UpdatedAt: updatedAt})
+	}
+	return out, rows.Err()
+}
+
 func GetProgress(bookID string) (*ReadingProgress, error) {
 	d, err := db.Open()
 	if err != nil {

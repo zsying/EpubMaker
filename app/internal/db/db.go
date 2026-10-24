@@ -54,7 +54,9 @@ CREATE TABLE IF NOT EXISTS books (
   source_name TEXT,
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL,
-  deleted_at TEXT
+  deleted_at TEXT,
+  toc TEXT,
+  tags TEXT
 );
 
 CREATE TABLE IF NOT EXISTS chapters (
@@ -167,6 +169,11 @@ func migrate(d *sql.DB) error {
 	_, _ = d.Exec(`ALTER TABLE reading_progress ADD COLUMN position_offset INTEGER NOT NULL DEFAULT 0`)
 	// Migration: older DBs may lack the hierarchical TOC column.
 	_, _ = d.Exec(`ALTER TABLE books ADD COLUMN toc TEXT`)
+	// Migration: user-managed tags live on the book row as a JSON array
+	// ("" for none). Appended after toc, so "SELECT *" column order stays
+	// stable across fresh and migrated databases alike.
+	_, _ = d.Exec(`ALTER TABLE books ADD COLUMN tags TEXT`)
+	_, _ = d.Exec(`UPDATE books SET tags = '' WHERE tags IS NULL`)
 	// Backfill existing rows so the column is never NULL (Scan into sql.NullString
 	// also tolerates NULL, but an empty string keeps queries/JSON predictable).
 	_, _ = d.Exec(`UPDATE books SET toc = '' WHERE toc IS NULL`)

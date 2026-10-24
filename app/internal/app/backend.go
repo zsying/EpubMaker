@@ -190,6 +190,13 @@ func (b *Backend) GetProgress(bookID string) (*library.ReadingProgress, error) {
 	return library.GetProgress(bookID)
 }
 
+// ListProgress folds each book's saved position into a shelf-level fraction
+// (0..1) so the library can show "10%" beside the author without one round
+// trip per book.
+func (b *Backend) ListProgress() ([]library.BookProgress, error) {
+	return library.ListProgress()
+}
+
 func (b *Backend) SaveProgress(bookID, chapterID string, positionOffset, pageCount int) (*library.ReadingProgress, error) {
 	return library.SaveProgress(bookID, chapterID, positionOffset, pageCount)
 }
