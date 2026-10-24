@@ -22,16 +22,53 @@ const CUSTOM_FONT_FAMILY = 'EpubBookFont';
 /** Downloadable open-source fonts (OFL licensed, single-file, jsDelivr-served
  * from the vendors' own release branches). Files land in the app data dir via
  * Backend.DownloadFont and are served back at /fonts/<file>. */
-const FONT_CATALOG: Array<{ file: string; label: string; url: string }> = [
+const FONT_CATALOG: Array<{ file: string; label: string; note: string; url: string }> = [
   {
     file: 'SourceHanSerifCN-Regular.otf',
     label: '思源宋体',
+    note: '正文推荐',
     url: 'https://cdn.jsdelivr.net/gh/adobe-fonts/source-han-serif@release/SubsetOTF/CN/SourceHanSerifCN-Regular.otf',
   },
   {
     file: 'SourceHanSansCN-Regular.otf',
     label: '思源黑体',
+    note: '正文推荐',
     url: 'https://cdn.jsdelivr.net/gh/adobe-fonts/source-han-sans@release/SubsetOTF/CN/SourceHanSansCN-Regular.otf',
+  },
+  {
+    // Kai style brush handwriting (Google Fonts, OFL).
+    file: 'MaShanZheng-Regular.ttf',
+    label: '马善政楷书',
+    note: '毛笔楷体',
+    url: 'https://cdn.jsdelivr.net/gh/google/fonts@main/ofl/mashanzheng/MaShanZheng-Regular.ttf',
+  },
+  {
+    // Semi-cursive running hand (Google Fonts, OFL).
+    file: 'ZhiMangXing-Regular.ttf',
+    label: '志莽行书',
+    note: '行书',
+    url: 'https://cdn.jsdelivr.net/gh/google/fonts@main/ofl/zhimangxing/ZhiMangXing-Regular.ttf',
+  },
+  {
+    // Loose cursive brush hand (Google Fonts, OFL).
+    file: 'LiuJianMaoCao-Regular.ttf',
+    label: '柳建毛草',
+    note: '草书手写',
+    url: 'https://cdn.jsdelivr.net/gh/google/fonts@main/ofl/liujianmaocao/LiuJianMaoCao-Regular.ttf',
+  },
+  {
+    // Running-hand casual script (Google Fonts, OFL).
+    file: 'LongCang-Regular.ttf',
+    label: '龙藏行书',
+    note: '行楷手写',
+    url: 'https://cdn.jsdelivr.net/gh/google/fonts@main/ofl/longcang/LongCang-Regular.ttf',
+  },
+  {
+    // Rounded playful handwriting (Google Fonts, OFL).
+    file: 'ZCOOLKuaiLe-Regular.ttf',
+    label: '站酷快乐体',
+    note: '圆润手写',
+    url: 'https://cdn.jsdelivr.net/gh/google/fonts@main/ofl/zcoolkuaile/ZCOOLKuaiLe-Regular.ttf',
   },
 ];
 
@@ -2439,7 +2476,14 @@ export default function Reader() {
                       disabled={fontBusy === f.file}
                       onClick={() => void pickFont(f)}
                     >
-                      {fontBusy === f.file ? '下载中…' : f.label + (installed ? '' : ' ↓')}
+                      {fontBusy === f.file ? (
+                        '下载中…'
+                      ) : (
+                        <>
+                          {f.label + (installed ? '' : ' ↓')}
+                          <small className="rd-font-note">{f.note}</small>
+                        </>
+                      )}
                     </button>
                   );
                 })}
