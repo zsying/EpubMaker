@@ -1,11 +1,16 @@
 package library
 
 import (
+	"bytes"
+	"errors"
 	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
 	"epubmaker-desktop/internal/db"
+	"epubmaker-desktop/internal/epub"
 )
 
 // TestMain pins EPUBMAKER_HOME at a temp dir so db.Open() builds a throwaway
@@ -190,5 +195,100 @@ func TestListProgressPercent(t *testing.T) {
 	}
 	if _, ok := byBook["bk-fresh"]; ok {
 		t.Fatalf("unopened book should be absent, got %v", byBook["bk-fresh"])
+	}
+}
+
+// buildEpubFile writes a real one-chapter EPUB to a temp file and returns its
+// path (and the parsed bytes' identity is irrelevant — the hash is what counts).
+func buildEpubFile(t *testing.T, title, identifier string) string {
+	t.Helper()
+	var buf bytes.Buffer
+	err := epub.BuildEpub(epub.BuildInput{
+		Title:      title,
+		Author:     "作者A",
+		Language:   "zh",
+		Identifier: identifier,
+		Chapters: []epub.BuildChapter{
+			{Title: "第一章", Href: "OEBPS/ch1.xhtml", Content: []byte(`<html xmlns="http://www.w3.org/1999/xhtml"><body><p>正文</p></body></html>`)},
+		},
+	}, &buf)
+	if err != nil {
+		t.Fatalf("build epub: %v", err)
+	}
+	path := filepath.Join(t.TempDir(), strings.ReplaceAll(title, " ", "_")+".epub")
+	if err := os.WriteFile(path, buf.Bytes(), 0o644); err != nil {
+		t.Fatalf("write epub: %v", err)
+	}
+	return path
+}
+
+// Importing the same file twice must not create a second shelf entry: the
+// second import is a skip (ErrDuplicate), and the shelf still has one book.
+// A book sitting in the trash does not block a fresh import.
+func TestImportEpubDuplicate(t *testing.T) {
+	resetLibraryTables(t)
+
+	path := buildEpubFile(t, "Duplicate Target", "urn:uuid:test-dup-1")
+
+	first, err := ImportEpub(path, filepath.Base(path))
+	if err != nil {
+		t.Fatalf("first import: %v", err)
+	}
+	if first == nil {
+		t.Fatal("first import returned nil")
+	}
+
+	_, err = ImportEpub(path, filepath.Base(path))
+	if !errors.Is(err, ErrDuplicate) {
+		t.Fatalf("second import should be ErrDuplicate, got %v", err)
+	}
+
+	books, err := ListBooks("")
+	if err != nil {
+		t.Fatalf("ListBooks: %v", err)
+	}
+	if len(books) != 1 {
+		t.Fatalf("shelf should hold exactly 1 book, got %d", len(books))
+	}
+
+	// Trash the copy: the identifier/hash must no longer block a re-import.
+	d, err := db.Open()
+	if err != nil {
+		t.Fatalf("db.Open: %v", err)
+	}
+	if _, err := d.Exec(`UPDATE books SET deleted_at = ? WHERE id = ?`,
+		time.Now().UTC().Format(time.RFC3339), first.ID); err != nil {
+		t.Fatalf("trash book: %v", err)
+	}
+	re, err := ImportEpub(path, filepath.Base(path))
+	if err != nil {
+		t.Fatalf("re-import after trash should succeed, got %v", err)
+	}
+	if re == nil || re.ID == first.ID {
+		t.Fatalf("re-import should create a new book, got %#v", re)
+	}
+}
+
+// Books imported before hashing existed carry no file_hash; their epub
+// identifier is the fallback dedupe key.
+func TestFindDuplicateByIdentifier(t *testing.T) {
+	resetLibraryTables(t)
+	insertBookRow(t, "bk-legacy", "Legacy Book")
+	d, err := db.Open()
+	if err != nil {
+		t.Fatalf("db.Open: %v", err)
+	}
+	if _, err := d.Exec(`UPDATE books SET identifier = ? WHERE id = ?`, "urn:uuid:legacy-1", "bk-legacy"); err != nil {
+		t.Fatalf("set identifier: %v", err)
+	}
+
+	title, found, err := findDuplicate("deadbeef", "urn:uuid:legacy-1")
+	if err != nil || !found || title != "Legacy Book" {
+		t.Fatalf("identifier match failed: title=%q found=%v err=%v", title, found, err)
+	}
+
+	// An empty identifier must never match (every legacy row has one).
+	if _, found, err := findDuplicate("deadbeef", ""); err != nil || found {
+		t.Fatalf("empty identifier must not match, found=%v err=%v", found, err)
 	}
 }

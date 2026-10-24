@@ -31,6 +31,7 @@ import android.webkit.WebResourceResponse;
 import android.webkit.WebSettings;
 import android.webkit.WebView;
 import android.webkit.WebViewClient;
+import android.widget.Toast;
 
 import androidx.annotation.Nullable;
 import androidx.appcompat.app.AppCompatActivity;
@@ -969,12 +970,22 @@ public class MainActivity extends AppCompatActivity {
         }
     }
 
+    // Double-press-to-exit at the top of the history stack: the first press
+    // tells the reader what happened, the second (within 2s) really leaves.
+    private long lastBackAt = 0;
+
     @Override
     public void onBackPressed() {
         if (webView != null && webView.canGoBack()) {
             webView.goBack();
-        } else {
+            return;
+        }
+        long now = System.currentTimeMillis();
+        if (now - lastBackAt < 2000) {
             super.onBackPressed();
+        } else {
+            lastBackAt = now;
+            Toast.makeText(this, "再按一次退出 EpubMaker", Toast.LENGTH_SHORT).show();
         }
     }
 }

@@ -406,9 +406,10 @@ export const api = {
   selectEpubFiles: () => callApp<string[]>('SelectEpubFiles'),
 
   /** Imports EPUB files from local paths. Both the dialog and an OS file drop end
-   * up here — a drop can only be turned into paths by the native side. */
+   * up here — a drop can only be turned into paths by the native side. Books
+   * already on the shelf come back as `duplicates`, never as failures. */
   importPaths: (paths: string[]) =>
-    call<{ books: Book[]; errors: string[] }>('ImportPaths', paths),
+    call<{ books: Book[]; errors: string[]; duplicates?: string[] }>('ImportPaths', paths),
 
   getBook: (id: string) => call<Book>('GetBook', id),
 

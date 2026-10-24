@@ -72,6 +72,9 @@ type BookRow struct {
 	TOC sql.NullString
 	// Tags is the user-managed tag list serialized as JSON ("" for none).
 	Tags sql.NullString
+	// FileHash is the sha256 of the imported EPUB ("" for legacy rows);
+	// the dedupe key that stops the same file landing on the shelf twice.
+	FileHash sql.NullString
 }
 
 type ChapterRow struct {
@@ -184,7 +187,7 @@ func scanBook(s scanner) (BookRow, error) {
 	var b BookRow
 	err := s.Scan(&b.ID, &b.Title, &b.Author, &b.Language, &b.Publisher,
 		&b.Description, &b.Identifier, &b.CoverHref, &b.SourceName,
-		&b.CreatedAt, &b.UpdatedAt, &b.DeletedAt, &b.TOC, &b.Tags)
+		&b.CreatedAt, &b.UpdatedAt, &b.DeletedAt, &b.TOC, &b.Tags, &b.FileHash)
 	return b, err
 }
 

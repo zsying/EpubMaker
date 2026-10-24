@@ -1,5 +1,6 @@
 import { DragEvent as ReactDragEvent, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
+import { useBackClose } from '../backNav';
 import {
   api,
   AppPaths,
@@ -86,6 +87,12 @@ export default function Library() {
   const [editBook, setEditBook] = useState<Book | null>(null);
   const [editForm, setEditForm] = useState({ title: '', author: '', tags: '' });
   const [editBusy, setEditBusy] = useState(false);
+
+  // Hardware back closes one sheet per press instead of leaving the shelf.
+  useBackClose(importOpen, () => setImportOpen(false));
+  useBackClose(sortOpen, () => setSortOpen(false));
+  useBackClose(!!menuBook, () => setMenuBook(null));
+  useBackClose(!!editBook, () => setEditBook(null));
   // Shelf progress badges (bookId -> 0..1), refreshed with the shelf.
   const [progress, setProgress] = useState<Record<string, number>>({});
   const [sort, setSort] = useState<ShelfSort>(
@@ -283,8 +290,9 @@ export default function Library() {
     setImporting(true);
     try {
       const res = await api.importPaths(epub);
-      toast(`成功导入 ${res.books.length} 本书籍`, 'success');
+      if (res.books.length > 0) toast(`成功导入 ${res.books.length} 本书籍`, 'success');
       if (ignored > 0) toast(`已跳过 ${ignored} 个非 EPUB 文件`, 'info');
+      if (res.duplicates?.length) toast(`跳过重复：\n${res.duplicates.join('\n')}`, 'info', 6000);
       if (res.errors?.length) toast(res.errors.join('\n'), 'error', 6000);
       // Put the new books on the shelf straight away and let the refresh
       // confirm them: reloading first would empty the grid, which is the flash

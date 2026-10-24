@@ -19,6 +19,7 @@ import {
   type ReadMode,
 } from '../readingPrefs';
 import { isTouchPrimary } from '../device';
+import { useBackClose } from '../backNav';
 import FontPicker, { CUSTOM_FONT_FAMILY } from '../components/FontPicker';
 
 const FONT_KEY = 'epubmaker.fontSize';
@@ -596,6 +597,17 @@ export default function Reader() {
   // the lookup card — without a dictionary it says so and points at the
   // download in 我的 → 查词词库, which is far better than a dead tap.
   const [dictReady, setDictReady] = useState(false);
+
+  // Hardware back closes one overlay per press (newest first), never the page
+  // underneath. The keyboard Escape path below peels the same layers on
+  // desktop; this is the phone counterpart.
+  useBackClose(!!lookupCard, () => setLookupCard(null));
+  useBackClose(!!popover, () => setPopover(null));
+  useBackClose(!!sel, () => clearSelectionUI());
+  useBackClose(settingsOpen, () => setSettingsOpen(false));
+  useBackClose(tocOpen, () => setTocOpen(false));
+  useBackClose(bmOpen, () => setBmOpen(false));
+  useBackClose(annOpen, () => setAnnOpen(false));
   // A jump from the notebook or an annotation list has to be visible, not just
   // correct: this is a transient highlight over the landed-on text.
   const [flash, setFlash] = useState<{ left: number; top: number; width: number; height: number } | null>(null);
@@ -1809,6 +1821,9 @@ export default function Reader() {
     if (!current) return;
     const off = mode === 'paged' ? offsetForPage(pageIndex) : offsetAtViewportTop();
     api.saveProgress(id, current, off, mode === 'paged' ? pageCount : 1).catch(() => {});
+    // This is ordinary reading now: rewrite the history entry without the
+    // preview payload so back/refresh cannot resurrect the visit.
+    nav(`/books/${id}/read/${current}`, { replace: true });
     toast('已从当前位置开始阅读', 'success');
   }
 
@@ -1818,6 +1833,8 @@ export default function Reader() {
   function jumpToLastReading() {
     if (!origin || !origin.chapterId) return;
     endPreview();
+    // Same rewrite: the visit ended, the entry is plain reading again.
+    nav(`/books/${id}/read/${origin.chapterId}`, { replace: true });
     if (origin.chapterId !== current) {
       openChapter(origin.chapterId, { type: 'restore', offset: origin.positionOffset });
       return;
@@ -1832,11 +1849,20 @@ export default function Reader() {
   }
 
   /* ---- keyboard ---- */
+  // One level up the operation hierarchy: the page the reader came from.
+  // replace only when there is nothing to pop (direct load / refresh) — a
+  // deliberate exit must never be resurrectable by the back button.
+  function goUp(fallback: string) {
+    const st = window.history.state as { idx?: number } | null;
+    if (st && typeof st.idx === 'number' && st.idx > 0) nav(-1);
+    else nav(fallback, { replace: true });
+  }
+
   function exitReading() {
     // Leaving a preview returns to the page that opened it and leaves the
     // reading position alone — that is the whole point of the visit.
     if (previewRef.current) {
-      nav(PREVIEW_SOURCE[previewRef.current.source].back);
+      goUp(PREVIEW_SOURCE[previewRef.current.source].back);
       return;
     }
     // Persist current position before leaving so progress isn't lost.
@@ -1848,7 +1874,7 @@ export default function Reader() {
       const total = mode === 'paged' ? pageCount : 1;
       api.saveProgress(id, current, off, total).catch(() => {});
     }
-    nav('/');
+    goUp('/');
   }
 
   useEffect(() => {
@@ -2918,7 +2944,7 @@ export default function Reader() {
       className={`detour-bar${mode === 'paged' ? ' floating' : ''}`}
       style={mode === 'paged' && chromeOpen ? { bottom: touchPrimary ? 132 : 58 } : undefined}
     >
-      <button className="btn sm" onClick={() => nav(previewSrc.back)} title="返回来源列表">
+      <button className="btn sm" onClick={() => goUp(previewSrc.back)} title="返回来源列表">
         返回
       </button>
       <button
@@ -2996,7 +3022,7 @@ export default function Reader() {
               </Link>
               <button
                 className="btn sm"
-                onClick={() => nav(preview ? PREVIEW_SOURCE[preview.source].back : '/')}
+                onClick={() => (preview ? goUp(PREVIEW_SOURCE[preview.source].back) : goUp('/'))}
               >
                 {preview ? '返回' : '书架'}
               </button>
@@ -3213,7 +3239,7 @@ export default function Reader() {
             <div className="chrome-left">
               <button
                 className="btn sm"
-                onClick={() => nav(preview ? PREVIEW_SOURCE[preview.source].back : '/')}
+                onClick={() => (preview ? goUp(PREVIEW_SOURCE[preview.source].back) : goUp('/'))}
               >
                 {preview ? '← 返回' : '← 书架'}
               </button>

@@ -56,7 +56,8 @@ CREATE TABLE IF NOT EXISTS books (
   updated_at TEXT NOT NULL,
   deleted_at TEXT,
   toc TEXT,
-  tags TEXT
+  tags TEXT,
+  file_hash TEXT
 );
 
 CREATE TABLE IF NOT EXISTS chapters (
@@ -174,6 +175,11 @@ func migrate(d *sql.DB) error {
 	// stable across fresh and migrated databases alike.
 	_, _ = d.Exec(`ALTER TABLE books ADD COLUMN tags TEXT`)
 	_, _ = d.Exec(`UPDATE books SET tags = '' WHERE tags IS NULL`)
+	// Migration: sha256 of the imported EPUB file — the dedupe key that keeps
+	// the same file from landing on the shelf twice. Appended after tags.
+	// Older rows keep '' and fall back to the epub identifier on matching.
+	_, _ = d.Exec(`ALTER TABLE books ADD COLUMN file_hash TEXT`)
+	_, _ = d.Exec(`UPDATE books SET file_hash = '' WHERE file_hash IS NULL`)
 	// Backfill existing rows so the column is never NULL (Scan into sql.NullString
 	// also tolerates NULL, but an empty string keeps queries/JSON predictable).
 	_, _ = d.Exec(`UPDATE books SET toc = '' WHERE toc IS NULL`)

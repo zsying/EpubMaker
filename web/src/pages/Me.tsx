@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { api, DictStatus, pickDictFile } from '../api';
+import { useBackClose } from '../backNav';
 import { toast, toastError } from '../toast';
 
 /**
@@ -34,6 +35,9 @@ export default function Me() {
   // Downloading and importing both block their binding call; the sheet stays
   // up with a busy label until the backend answers.
   const [busy, setBusy] = useState<null | { kind: 'download' | 'import'; label: string }>(null);
+
+  // Hardware back closes the dictionary sheet instead of leaving the page.
+  useBackClose(sheetOpen, () => setSheetOpen(false));
 
   useEffect(() => {
     let alive = true;

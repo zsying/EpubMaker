@@ -11,6 +11,7 @@ package app
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -80,26 +81,36 @@ func (b *Backend) DeleteBook(id string) (map[string]any, error) {
 }
 
 // ImportPaths imports EPUB files directly from local filesystem paths (chosen
-// through the native file dialog) — no multipart upload over HTTP.
+// through the native file dialog) — no multipart upload over HTTP. Files whose
+// book is already on the shelf (same file bytes, or same epub identifier for
+// books imported before hashing) are skipped and reported as duplicates, not
+// failures.
 func (b *Backend) ImportPaths(paths []string) (map[string]any, error) {
 	created := []library.BookDTO{}
 	errorsOut := []string{}
+	duplicates := []string{}
 	for _, p := range paths {
 		if !strings.HasSuffix(strings.ToLower(p), ".epub") {
 			errorsOut = append(errorsOut, fmt.Sprintf("%s: 不是 EPUB 文件", p))
 			continue
 		}
 		book, err := library.ImportEpub(p, filepath.Base(p))
+		if errors.Is(err, library.ErrDuplicate) {
+			// "duplicate:已有书名" — surface the shelf copy, skip quietly.
+			duplicates = append(duplicates, fmt.Sprintf("%s（已有《%s》）",
+				filepath.Base(p), strings.TrimPrefix(err.Error(), "duplicate:")))
+			continue
+		}
 		if err != nil {
 			errorsOut = append(errorsOut, fmt.Sprintf("%s: %s", filepath.Base(p), err.Error()))
 			continue
 		}
 		created = append(created, *book)
 	}
-	if len(created) == 0 {
+	if len(created) == 0 && len(duplicates) == 0 {
 		return nil, fmt.Errorf("%s", strings.Join(errorsOut, "\n"))
 	}
-	return map[string]any{"books": created, "errors": errorsOut}, nil
+	return map[string]any{"books": created, "errors": errorsOut, "duplicates": duplicates}, nil
 }
 
 /* ----------------------------- chapters ----------------------------- */

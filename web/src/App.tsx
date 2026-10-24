@@ -12,6 +12,7 @@ import Vocab from './pages/Vocab';
 import Me from './pages/Me';
 import Settings from './pages/Settings';
 import { initFileDrop } from './filedrop';
+import { clearBackClosers } from './backNav';
 import { Toaster } from './toast';
 import MobileTabs from './components/MobileTabs';
 
@@ -22,6 +23,12 @@ export default function App() {
   // second-level pages (设置/书签/回收站/…) are stacked on top of them and
   // carry their own back header instead.
   const showTabs = ['/', '/vocab', '/me'].includes(loc.pathname);
+
+  // Overlay closers are page-scoped: once the route changes, a closer left by
+  // the previous page must never eat a back press on the new one.
+  useEffect(() => {
+    clearBackClosers();
+  }, [loc.pathname]);
 
   // The drop bridge is registered here rather than on the shelf: it is what
   // stops the webview from navigating to a dropped file, and a delayed

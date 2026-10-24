@@ -1,7 +1,9 @@
 package library
 
 import (
+	"crypto/sha256"
 	"database/sql"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -17,6 +19,11 @@ import (
 	"epubmaker-desktop/internal/mime"
 	"epubmaker-desktop/internal/storage"
 )
+
+// ErrDuplicate marks an import that found the same book already on the shelf —
+// by file hash, or (for books imported before hashing) by the epub identifier.
+// Callers treat it as a skip, not a failure.
+var ErrDuplicate = errors.New("duplicate")
 
 /* ----------------------------- render ----------------------------- */
 
@@ -66,6 +73,17 @@ func ImportEpub(filePath, originalName string) (*BookDTO, error) {
 	parsed, err := epub.ParseEpub(data)
 	if err != nil {
 		return nil, err
+	}
+
+	// Dedupe before any resource is written: the same file (or, for books from
+	// before hashing existed, the same epub identifier) must not land on the
+	// shelf twice.
+	sum := sha256.Sum256(data)
+	fileHash := hex.EncodeToString(sum[:])
+	if dupTitle, found, err := findDuplicate(fileHash, parsed.Metadata.Identifier); err != nil {
+		return nil, err
+	} else if found {
+		return nil, fmt.Errorf("%w:%s", ErrDuplicate, dupTitle)
 	}
 
 	bookID := uid()
@@ -130,7 +148,7 @@ func ImportEpub(filePath, originalName string) (*BookDTO, error) {
 			}
 		}
 		if e := insertBookStmt(d, bookID, title, parsed.Metadata.Author, parsed.Metadata.Language,
-			parsed.Metadata.Publisher, parsed.Metadata.Description, parsed.Metadata.Identifier, cover, originalName, ts, tocJSON); e != nil {
+			parsed.Metadata.Publisher, parsed.Metadata.Description, parsed.Metadata.Identifier, cover, originalName, ts, tocJSON, fileHash); e != nil {
 			return e
 		}
 		chStmt, e := d.Prepare(`INSERT INTO chapters (id,book_id,idx,title,href,created_at,updated_at) VALUES (?,?,?,?,?,?,?)`)
@@ -169,12 +187,36 @@ func ImportEpub(filePath, originalName string) (*BookDTO, error) {
 	return GetBook(bookID)
 }
 
-func insertBookStmt(d *sql.DB, id, title, author, language, publisher, description, identifier string, cover sql.NullString, sourceName, ts, tocJSON string) error {
+func insertBookStmt(d *sql.DB, id, title, author, language, publisher, description, identifier string, cover sql.NullString, sourceName, ts, tocJSON, fileHash string) error {
 	_, err := d.Exec(
-		`INSERT INTO books (id,title,author,language,publisher,description,identifier,cover_href,source_name,created_at,updated_at,toc)
-		 VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`,
-		id, title, author, language, publisher, description, identifier, cover, sourceName, ts, ts, tocJSON)
+		`INSERT INTO books (id,title,author,language,publisher,description,identifier,cover_href,source_name,created_at,updated_at,toc,tags,file_hash)
+		 VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		id, title, author, language, publisher, description, identifier, cover, sourceName, ts, ts, tocJSON, "", fileHash)
 	return err
+}
+
+// findDuplicate reports whether an identical book is already on the shelf.
+// Two keys match: the exact file (sha256), or — for books imported before
+// hashing existed — the epub's dc:identifier. Trashed copies don't count:
+// re-importing while a book sits in the trash gives a fresh copy.
+func findDuplicate(fileHash, identifier string) (string, bool, error) {
+	d, err := db.Open()
+	if err != nil {
+		return "", false, err
+	}
+	var title string
+	err = d.QueryRow(
+		`SELECT title FROM books
+		 WHERE deleted_at IS NULL AND (file_hash = ? OR (length(?) > 0 AND identifier = ?))
+		 LIMIT 1`,
+		fileHash, identifier, identifier).Scan(&title)
+	if err == sql.ErrNoRows {
+		return "", false, nil
+	}
+	if err != nil {
+		return "", false, err
+	}
+	return title, true, nil
 }
 
 func copyFile(src, dst string) error {
@@ -452,7 +494,7 @@ func SplitBook(bookID string, parts []SplitPart, deleteSource bool) ([]*BookDTO,
 				return e
 			}
 			if e := insertBookStmt(d, newID, title, author, row.Language, row.Publisher,
-				row.Description, "", cov, row.SourceName.String, ts, partTOCJSON); e != nil {
+				row.Description, "", cov, row.SourceName.String, ts, partTOCJSON, ""); e != nil {
 				return e
 			}
 			chStmt, e := d.Prepare(`INSERT INTO chapters (id,book_id,idx,title,href,created_at,updated_at) VALUES (?,?,?,?,?,?,?)`)
