@@ -5,6 +5,9 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+- **About page** — a new「关于」entry on the「我的」tab shows the app version
+  (new `Backend.AppVersion` binding) and the system paths block that used to
+  trail the shelf (config file, data/export/log dirs). The shelf footer is gone.
 - **A phone information architecture** — the desktop top bar's six links
   become a bottom tab bar (书架 · 生词本 · 我的) below 640px, with the
   low-frequency destinations (bookmarks, annotations, trash, WebDAV, dictionary

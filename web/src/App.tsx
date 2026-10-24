@@ -10,6 +10,7 @@ import Bookmarks from './pages/Bookmarks';
 import Annotations from './pages/Annotations';
 import Vocab from './pages/Vocab';
 import Me from './pages/Me';
+import About from './pages/About';
 import Settings from './pages/Settings';
 import { initFileDrop } from './filedrop';
 import { clearBackClosers } from './backNav';
@@ -84,6 +85,7 @@ export default function App() {
             <Route path="/trash" element={<Trash />} />
             <Route path="/webdav" element={<WebDav />} />
             <Route path="/me" element={<Me />} />
+            <Route path="/about" element={<About />} />
             <Route path="/settings" element={<Settings />} />
             <Route path="/books/:id/edit" element={<Editor />} />
             <Route path="/books/:id/split" element={<Split />} />

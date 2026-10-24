@@ -400,6 +400,9 @@ export function downloadDataUrl(filename: string, dataUrl: string): void {
 export const api = {
   paths: () => call<AppPaths>('Paths'),
 
+  /** Version string for the about page (Backend.AppVersion). */
+  appVersion: () => call<string>('AppVersion'),
+
   listBooks: (keyword?: string) => call<Book[]>('ListBooks', keyword ?? ''),
 
   /** Opens the native EPUB multi-select dialog; returns [] when cancelled. */

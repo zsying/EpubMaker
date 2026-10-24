@@ -3,7 +3,6 @@ import { Link, useNavigate } from 'react-router-dom';
 import { useBackClose } from '../backNav';
 import {
   api,
-  AppPaths,
   Book,
   DictStatus,
   downloadDataUrl,
@@ -24,13 +23,12 @@ import { toast, toastError } from '../toast';
 // those strings (a few hundred KB at most) alive across navigations.
 type ShelfCache = {
   books: Book[];
-  paths: AppPaths | null;
   dict: DictStatus | null;
 };
 let shelfCache: ShelfCache | null = null;
 
 function cacheShelf(patch: Partial<ShelfCache>) {
-  shelfCache = { books: [], paths: null, dict: null, ...shelfCache, ...patch };
+  shelfCache = { books: [], dict: null, ...shelfCache, ...patch };
 }
 
 /* ---- shelf ordering + paging (phone) ---- */
@@ -66,7 +64,7 @@ export default function Library() {
   const [loading, setLoading] = useState(shelfCache === null);
   const [importing, setImporting] = useState(false);
   const [over, setOver] = useState(false);
-  const [paths, setPaths] = useState<AppPaths | null>(() => shelfCache?.paths ?? null);
+
   // Local ECDICT dictionary: imported from a csv chosen on disk. Without it the
   // reader's lookup is disabled, so its state is surfaced here.
   const [dict, setDict] = useState<DictStatus | null>(() => shelfCache?.dict ?? null);
@@ -219,13 +217,6 @@ export default function Library() {
 
   useEffect(() => {
     void load();
-    api
-      .paths()
-      .then((p) => {
-        setPaths(p);
-        cacheShelf({ paths: p });
-      })
-      .catch(() => undefined);
     api
       .dictStatus()
       .then((d) => {
@@ -584,18 +575,6 @@ export default function Library() {
         {visibleBooks.length < sortedBooks.length && (
           <div className="shelf-sentinel" ref={sentinelRef}>
             加载更多…
-          </div>
-        )}
-
-        {paths && (
-          <div style={{ marginTop: 40, fontSize: 12, color: 'var(--text-3)', lineHeight: 1.9 }}>
-            <div>
-              <strong style={{ color: 'var(--text-2)' }}>存储位置</strong>（可在 config.json 中修改）
-            </div>
-            <div>配置文件：{paths.configFile}</div>
-            <div>数据目录：{paths.dataDir}</div>
-            <div>导出目录：{paths.exportDir}</div>
-            <div>日志目录：{paths.logDir}</div>
           </div>
         )}
       </div>
