@@ -114,13 +114,17 @@ func (b *Backend) WifiShareStatus() (map[string]any, error) {
 }
 
 func (s *wifiShareState) snapshotLocked() map[string]any {
+	// append onto an empty non-nil slice: a nil slice here would serialize to
+	// JSON null, and the frontend's failures.length would throw — which took
+	// down the whole React tree (black screen) the moment sharing started.
+	fails := append([]string{}, s.fails...)
 	out := map[string]any{
 		"running":    s.srv != nil,
 		"port":       s.port,
 		"url":        s.url,
 		"imports":    s.imports,
 		"duplicates": s.dups,
-		"failures":   append([]string(nil), s.fails...),
+		"failures":   fails,
 	}
 	if !s.lastAt.IsZero() {
 		// Raw seconds again: the phone formats it, Go's time.Local cannot be

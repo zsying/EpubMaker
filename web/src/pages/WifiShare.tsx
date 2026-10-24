@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { api, WifiShareStatus } from '../api';
+import { toast, toastError } from '../toast';
 import SubHeader from '../components/SubHeader';
 
 /**
@@ -50,7 +51,7 @@ export default function WifiShare() {
     }
     let alive = true;
     import('qrcode')
-      .then((QRCode) => QRCode.toDataURL(status.url, { width: 200, margin: 1 }))
+      .then((QRCode) => QRCode.toDataURL(status.url, { width: 320, margin: 1 }))
       .then((url) => {
         if (alive) setQr(url);
       })
@@ -65,34 +66,74 @@ export default function WifiShare() {
     setBusy(true);
     try {
       setStatus(status?.running ? await api.wifiShareStop() : await api.wifiShareStart());
+    } catch (e) {
+      toastError(e);
     } finally {
       setBusy(false);
     }
   }
 
+  // Backend fields can arrive null (older builds, serializers) — the shelf
+  // once went black reading .length of a null failures array.
+  const failures = status?.failures ?? [];
   const running = !!status?.running;
+
+  async function copyAddress() {
+    if (!status?.url) return;
+    try {
+      await navigator.clipboard.writeText(status.url);
+      toast('地址已复制', 'success');
+    } catch {
+      toast('复制失败，请手动记录地址', 'info');
+    }
+  }
 
   return (
     <div className="page wifi-page">
       <SubHeader title="Wi-Fi 传书" />
 
       <div className="wifi-hero">
+        <div className={`wifi-orb${running ? ' on' : ''}`}>
+          <svg width="26" height="26" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+            <path
+              d="M2.5 9.5C8 4.5 16 4.5 21.5 9.5M5.5 13C9.5 9.7 14.5 9.7 18.5 13M8.6 16.4c2-1.7 4.8-1.7 6.8 0M12 19.6h.01"
+              stroke="currentColor"
+              strokeWidth="1.8"
+              strokeLinecap="round"
+            />
+          </svg>
+        </div>
+        <div className={`wifi-state${running ? ' on' : ''}`}>
+          <i className="wifi-dot" aria-hidden="true" />
+          {running ? '传书中' : '未开启'}
+        </div>
         <p className="wifi-desc">
           在同一 Wi-Fi 下，用电脑浏览器打开下方地址（或扫码），即可把 EPUB 文件推送到本书架。传输不经过任何服务器。
         </p>
 
         <button type="button" className={`btn wifi-toggle${running ? ' on' : ''}`} disabled={busy} onClick={() => void toggle()}>
-          {running ? '停止传书' : '开启传书'}
+          {busy ? '切换中…' : running ? '停止传书' : '开启传书'}
         </button>
-
-        {running && (
-          <div className="wifi-live">
-            <img className="wifi-qr" src={qr} alt="传书地址二维码" style={{ opacity: qr ? 1 : 0 }} />
-            <div className="wifi-url">{status.url}</div>
-            <div className="wifi-hint">手机与电脑需连接同一 Wi-Fi；传输期间请保持本页在后台运行。</div>
-          </div>
-        )}
       </div>
+
+      {running && (
+        <div className="wifi-live">
+          <div className="wifi-qr-card">
+            <img className="wifi-qr" src={qr} alt="传书地址二维码" style={{ opacity: qr ? 1 : 0 }} />
+            {!qr && <div className="wifi-qr-loading" />}
+            <div className="wifi-qr-label">电脑浏览器扫码打开</div>
+          </div>
+
+          <button type="button" className="wifi-url" onClick={() => void copyAddress()} title="点击复制">
+            {status.url}
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+              <rect x="9" y="9" width="11" height="11" rx="2" stroke="currentColor" strokeWidth="1.8" />
+              <path d="M5 15V6a2 2 0 0 1 2-2h9" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+            </svg>
+          </button>
+          <div className="wifi-hint">手机与电脑需连接同一 Wi-Fi；传输期间请保持本页在后台运行。</div>
+        </div>
+      )}
 
       {running && (
         <div className="wifi-stats">
@@ -105,7 +146,7 @@ export default function WifiShare() {
             <span>重复跳过</span>
           </div>
           <div className="wifi-stat">
-            <strong>{status.failures.length}</strong>
+            <strong>{failures.length}</strong>
             <span>失败</span>
           </div>
           {status.lastImportUnix ? (
@@ -123,9 +164,9 @@ export default function WifiShare() {
         </div>
       )}
 
-      {running && status.failures.length > 0 && (
+      {running && failures.length > 0 && (
         <div className="wifi-fails">
-          {status.failures.map((f, i) => (
+          {failures.map((f, i) => (
             <div key={i}>{f}</div>
           ))}
         </div>

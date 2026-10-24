@@ -2922,16 +2922,74 @@ button.me-dict:disabled {
 
 /* Wi-Fi 传书 page: switch + live address + QR + transfer counters. */
 .wifi-hero {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
   margin: 12px 14px;
-  padding: 16px;
+  padding: 24px 18px 18px;
   border: 1px solid var(--border);
   border-radius: var(--radius);
   background: var(--panel);
   text-align: center;
 }
 
+.wifi-orb {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 54px;
+  height: 54px;
+  margin-bottom: 2px;
+  color: var(--text-3);
+  border: 1px solid var(--border);
+  border-radius: 50%;
+  background: var(--panel-2);
+  transition: color 0.2s, border-color 0.2s, background 0.2s;
+}
+
+.wifi-orb.on {
+  color: var(--accent);
+  border-color: rgba(47, 107, 255, 0.3);
+  background: var(--accent-soft);
+}
+
+.wifi-state {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-3);
+}
+
+.wifi-state.on {
+  color: var(--ok);
+}
+
+.wifi-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: currentColor;
+}
+
+.wifi-state.on .wifi-dot {
+  animation: wifi-pulse 1.6s ease-in-out infinite;
+}
+
+@keyframes wifi-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.35;
+  }
+}
+
 .wifi-desc {
-  margin: 0 0 14px;
+  margin: 6px 0 12px;
   font-size: 12.5px;
   line-height: 1.7;
   color: var(--text-3);
@@ -2940,36 +2998,80 @@ button.me-dict:disabled {
 
 .wifi-toggle {
   width: 100%;
-  padding: 11px 0;
-  font-size: 14px;
+  padding: 12px 0;
+  font-size: 14.5px;
+  font-weight: 600;
 }
 
 .wifi-toggle.on {
   background: var(--panel-2);
+  color: var(--text-2);
+  border-color: var(--border-strong);
 }
 
 .wifi-live {
-  margin-top: 18px;
+  margin: 0 14px;
+  padding: 20px 16px 16px;
   display: flex;
   flex-direction: column;
   align-items: center;
   gap: 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--panel);
+}
+
+.wifi-qr-card {
+  position: relative;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: #fff;
+  box-shadow: var(--shadow);
 }
 
 .wifi-qr {
-  width: 176px;
-  height: 176px;
-  border: 1px solid var(--border);
-  border-radius: 10px;
-  background: #fff;
-  padding: 10px;
+  display: block;
+  width: 168px;
+  height: 168px;
+}
+
+.wifi-qr-loading {
+  position: absolute;
+  inset: 12px;
+  width: 168px;
+  height: 168px;
+  border-radius: 4px;
+  background: var(--fill);
+  animation: wifi-pulse 1.2s ease-in-out infinite;
+}
+
+.wifi-qr-label {
+  margin-top: 8px;
+  font-size: 11px;
+  color: var(--text-3);
+  text-align: center;
 }
 
 .wifi-url {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 14px;
   font-size: 15px;
   font-weight: 600;
+  font-family: inherit;
   word-break: break-all;
-  color: var(--text);
+  color: var(--accent);
+  border: 1px dashed rgba(47, 107, 255, 0.35);
+  border-radius: 8px;
+  background: var(--accent-soft);
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.wifi-url:active {
+  transform: scale(0.98);
 }
 
 .wifi-hint {
@@ -2980,7 +3082,7 @@ button.me-dict:disabled {
 .wifi-stats {
   display: flex;
   gap: 8px;
-  margin: 0 14px;
+  margin: 10px 14px 0;
 }
 
 .wifi-stat {
@@ -2989,7 +3091,7 @@ button.me-dict:disabled {
   flex-direction: column;
   align-items: center;
   gap: 2px;
-  padding: 12px 4px;
+  padding: 13px 4px;
   border: 1px solid var(--border);
   border-radius: var(--radius);
   background: var(--panel);
@@ -3007,9 +3109,9 @@ button.me-dict:disabled {
 .wifi-fails {
   margin: 10px 14px 0;
   padding: 10px 14px;
-  border: 1px solid var(--border);
+  border: 1px solid rgba(217, 59, 59, 0.25);
   border-radius: var(--radius);
-  background: var(--panel);
+  background: var(--danger-soft);
   font-size: 12px;
   color: var(--text-2);
   word-break: break-all;
