@@ -643,11 +643,9 @@ export default function Reader() {
   // A selection to raise once the jump target is actually on screen: the
   // notebook hands over the word's offsets, the annotation drawer the line's.
   // Consumed by the next measure pass (paged) or restore (scroll) — both run
-  // after the target text exists and is positioned.
+  // after the target text exists and is positioned. Only reader-internal jumps
+  // (annotation popover) set it; preview visits never raise menus.
   const pendingRevealRef = useRef<{ start: number; end: number } | null>(null);
-  // A detour is revealed once per visit: the anchor effect re-runs on every
-  // annotation change, and re-selecting the word then would fight the reader.
-  const detourRevealedRef = useRef(false);
   // Layout-independent map: sampled source character offsets -> visual page.
   // Used to derive a page number from a stored offset (bookmark / annotation /
   // progress) and vice-versa, so layout changes (font size / window) don't drift.
@@ -708,15 +706,11 @@ export default function Reader() {
         }
         // A preview visit (生词本 / 划线 / 书签) carries its own anchor, which
         // outranks the saved progress: the whole point is landing on THAT spot.
+        // It raises no menus — the anchored highlight alone marks the spot.
         const entry = entryRef.current;
         if (entry && !locationUsedRef.current) {
           restoreOffsetRef.current = entry.offset;
           locationUsedRef.current = true;
-          // Annotation jumps bring the highlighted range; the reader selects
-          // it (toolbar and handles included) once the text has landed.
-          if (entry.end !== undefined && entry.end > entry.offset) {
-            pendingRevealRef.current = { start: entry.offset, end: entry.end };
-          }
         }
         if (restoreOffsetRef.current === null) {
           pageIntentRef.current = { type: 'first' };
@@ -857,8 +851,7 @@ export default function Reader() {
   }, [safeHtml, mode, preview]);
 
   // The word a 生词本 jump points at stays lit for as long as you are on the
-  // page. A 1.4s flash is enough to find a bookmark; it is not enough to study
-  // a word, and this visit exists precisely to look at the word in context.
+  // page — the highlight marks the spot; no menus are raised by themselves.
   useEffect(() => {
     if (mode !== 'scroll' || preview?.source !== 'vocab' || !preview.word) return;
     const el = contentRef.current;
@@ -866,11 +859,6 @@ export default function Reader() {
     const r = wordRangeAt(el, preview.offset, [preview.surface, preview.word].filter((s): s is string => !!s));
     if (!r) return;
     applyHighlights(el, [{ id: ANCHOR_ID, startOffset: r.start, endOffset: r.end, color: 'vocab' }]);
-    if (!detourRevealedRef.current) {
-      detourRevealedRef.current = true;
-      pendingRevealRef.current = { start: r.start, end: r.end };
-      window.setTimeout(() => revealOffsets(r.start, r.end), 80);
-    }
   }, [safeHtml, mode, preview]);
 
   /* ---- imperatively set content + highlights (paged mode) ---- */
@@ -884,10 +872,6 @@ export default function Reader() {
       preview && preview.word
         ? wordRangeAt(el, preview.offset, [preview.surface, preview.word].filter((s): s is string => !!s))
         : null;
-    if (anchor && !detourRevealedRef.current) {
-      detourRevealedRef.current = true;
-      pendingRevealRef.current = { start: anchor.start, end: anchor.end };
-    }
     applyHighlights(
       el,
       anchor
@@ -1815,7 +1799,6 @@ export default function Reader() {
         m.replaceWith(frag);
       });
     }
-    detourRevealedRef.current = false;
   }
 
   /* ---- preview (opened from 生词本 / 划线 / 书签) ---- */
@@ -2923,10 +2906,9 @@ export default function Reader() {
     </>
   );
 
-  // The banner that explains a preview visit and carries its unified toolbar:
-  // back to the list that opened the book, jump to the real reading position,
-  // or adopt this spot and read on. It is the only place in the reader that
-  // admits it is not a normal visit.
+  // The preview toolbar: exactly three regular buttons, nothing else — the
+  // visit itself speaks through the anchored highlight, not through banners or
+  // auto-raised menus.
   //
   // Floating above the page it sits clear of the bottom chrome instead of under
   // it, so the buttons never end up behind a bar that appears on approach.
@@ -2936,9 +2918,6 @@ export default function Reader() {
       className={`detour-bar${mode === 'paged' ? ' floating' : ''}`}
       style={mode === 'paged' && chromeOpen ? { bottom: touchPrimary ? 132 : 58 } : undefined}
     >
-      <span className="detour-word">{preview.label}</span>
-      <span className="detour-hint">{previewSrc.hint}</span>
-      <span className="detour-gap" />
       <button className="btn sm" onClick={() => nav(previewSrc.back)} title="返回来源列表">
         返回
       </button>
