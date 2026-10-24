@@ -127,8 +127,17 @@ export interface Book {
   coverUrl: string | null;
   sourceName: string | null;
   chapterCount: number;
+  /** User-managed tags; always an array (possibly empty). */
+  tags: string[];
   deletedAt: string | null;
   createdAt: string;
+  updatedAt: string;
+}
+
+/** Shelf-level reading progress for one book (0..1). */
+export interface BookProgress {
+  bookId: string;
+  percent: number;
   updatedAt: string;
 }
 
@@ -318,8 +327,45 @@ export function hasNativeDialogs(): boolean {
   return !hasV3Runtime();
 }
 
-/** Calls a bound App (native integration) method: window.go.app.App.<method>. */async function callApp<T>(method: string, ...args: unknown[]): Promise<T> {
-  const fn = (window as any).go?.app?.App?.[method];
+/**
+ * Opens the host's file picker and returns real filesystem paths.
+ *
+ * Desktop: the v2 App dialog (SelectEpubFiles). Phone (v3 host): the runtime's
+ * dialog module, which on Android routes to the SAF document picker and copies
+ * the picked documents into the app cache — the Go side then reads plain
+ * paths, exactly like the desktop flow.
+ */
+async function pickV3(multiple: boolean, title: string): Promise<string[]> {
+  const runtime = await loadV3Runtime();
+  const res = await runtime.Dialogs.OpenFile({
+    CanChooseFiles: true,
+    AllowsMultipleSelection: multiple,
+    Title: title,
+  });
+  if (!res) return [];
+  return Array.isArray(res) ? res : [res];
+}
+
+/** EPUB multi-select that works on both hosts. [] = cancelled. */
+export async function pickEpubFiles(): Promise<string[]> {
+  if (!hasV3Runtime()) {
+    const paths = await callApp<string[]>('SelectEpubFiles');
+    return paths ?? [];
+  }
+  return pickV3(true, '选择 EPUB 文件');
+}
+
+/** Single image pick for the mobile cover editor. null = cancelled. */
+export async function pickImageFile(): Promise<string | null> {
+  if (!hasV3Runtime()) {
+    const p = await callApp<string>('SelectCoverFile');
+    return p || null;
+  }
+  const paths = await pickV3(false, '选择封面图片');
+  return paths[0] ?? null;
+}
+
+/** Calls a bound App (native integration) method: window.go.app.App.<method>. */async function callApp<T>(method: string, ...args: unknown[]): Promise<T> {  const fn = (window as any).go?.app?.App?.[method];
   if (typeof fn === 'function') {
     return (await fn(...args)) as T;
   }
@@ -403,6 +449,9 @@ export const api = {
 
   getProgress: (bookId: string) => call<ReadingProgress | null>('GetProgress', bookId),
 
+  /** Shelf-level progress (0..1) for every book that has one. */
+  listBookProgress: () => call<BookProgress[]>('ListProgress'),
+
   saveProgress: (bookId: string, chapterId: string, positionOffset: number, pageCount: number) =>
     call<ReadingProgress>('SaveProgress', bookId, chapterId, positionOffset, pageCount),
 
@@ -443,6 +492,10 @@ export const api = {
       return call<{ href: string; url: string; mediaType: string }>('UploadCoverPath', bookId, p);
     });
   },
+
+  /** Uploads a cover from a path already on disk (mobile picker output). */
+  uploadCoverFromPath: (bookId: string, path: string) =>
+    call<{ href: string; url: string; mediaType: string }>('UploadCoverPath', bookId, path),
 
   split: (
     bookId: string,

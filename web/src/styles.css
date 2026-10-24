@@ -454,6 +454,32 @@ a {
   white-space: nowrap;
 }
 
+/* Author line with the shelf progress badge pinned at its end. The author
+   span shrinks (min-width: 0) so a long name ellipsizes instead of pushing
+   the fixed-size badge out of the card. */
+.book-meta-row {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  min-width: 0;
+}
+
+.book-author {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.book-progress {
+  flex: 0 0 auto;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--accent, #4b7bec);
+  font-variant-numeric: tabular-nums;
+}
+
 .book-actions {
   display: flex;
   gap: 5px;
@@ -2607,6 +2633,69 @@ a {
   border-top: 1px solid var(--border);
   color: var(--text-2);
   text-align: center;
+}
+
+/* Phone metadata editor: the same bottom sheet, carrying a small form. */
+.edit-sheet {
+  padding: 6px 18px calc(14px + env(safe-area-inset-bottom));
+}
+
+.edit-field {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  margin: 10px 0 0;
+  min-width: 0;
+}
+
+.edit-field span {
+  font-size: 12px;
+  color: var(--text-3);
+}
+
+.edit-field .input {
+  width: 100%;
+  font-size: 15px;
+  padding: 9px 10px;
+}
+
+.edit-cover-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin: 14px 0;
+}
+
+.edit-cover {
+  width: 56px;
+  height: 75px;
+  border-radius: 6px;
+  overflow: hidden;
+  background: linear-gradient(150deg, #eef1f7, #dde3ee);
+  display: grid;
+  place-items: center;
+  font-family: var(--font-serif);
+  font-size: 16px;
+  color: #7c869a;
+  flex: 0 0 auto;
+}
+
+.edit-cover img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.edit-actions {
+  display: flex;
+  gap: 10px;
+  border-top: 1px solid var(--border);
+  padding-top: 12px;
+}
+
+.edit-actions .primary {
+  flex: 1;
 }
 
 @media (max-width: 640px) {

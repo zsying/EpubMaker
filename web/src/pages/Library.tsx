@@ -1,6 +1,15 @@
 import { DragEvent as ReactDragEvent, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import { api, AppPaths, Book, DictStatus, downloadDataUrl, hasNativeDialogs } from '../api';
+import {
+  api,
+  AppPaths,
+  Book,
+  DictStatus,
+  downloadDataUrl,
+  hasNativeDialogs,
+  pickEpubFiles,
+  pickImageFile,
+} from '../api';
 import { canResolveDropPaths, onDroppedFiles } from '../filedrop';
 import { toast, toastError } from '../toast';
 
@@ -72,6 +81,13 @@ export default function Library() {
   const [importOpen, setImportOpen] = useState(false);
   const [sortOpen, setSortOpen] = useState(false);
   const [menuBook, setMenuBook] = useState<Book | null>(null);
+  // The phone's metadata editor: title / author / tags / cover only. The
+  // desktop edit page stays the place for chapter surgery.
+  const [editBook, setEditBook] = useState<Book | null>(null);
+  const [editForm, setEditForm] = useState({ title: '', author: '', tags: '' });
+  const [editBusy, setEditBusy] = useState(false);
+  // Shelf progress badges (bookId -> 0..1), refreshed with the shelf.
+  const [progress, setProgress] = useState<Record<string, number>>({});
   const [sort, setSort] = useState<ShelfSort>(
     () => (localStorage.getItem(SORT_KEY) as ShelfSort) || 'default',
   );
@@ -163,6 +179,23 @@ export default function Library() {
     nav(`/books/${b.id}/read`);
   }
 
+  // The long-press gesture belongs to the whole card face, not just the cover:
+  // a thumb lands on the title or the author line just as often. Both areas
+  // share these handlers; the cover additionally keeps its tap-to-open.
+  function holdProps(b: Book) {
+    return {
+      onTouchStart: () => startLongPress(b),
+      onTouchMove: cancelLongPress,
+      onTouchEnd: cancelLongPress,
+      onTouchCancel: cancelLongPress,
+      onContextMenu: (e: { preventDefault: () => void }) => {
+        // The WebView's own long-press menu must not compete with ours
+        // (touch devices only; desktop keeps text menus).
+        if (isTouchPrimary()) e.preventDefault();
+      },
+    };
+  }
+
   const load = useCallback(async (kw?: string) => {
     try {
       const next = await api.listBooks(kw);
@@ -193,6 +226,16 @@ export default function Library() {
         cacheShelf({ dict: d });
       })
       .catch(() => undefined);
+    // Progress badges are display sugar: a miss (old backend, mock) just
+    // leaves the shelf without them.
+    api
+      .listBookProgress()
+      .then((rows) => {
+        const m: Record<string, number> = {};
+        for (const r of rows ?? []) m[r.bookId] = r.percent;
+        setProgress(m);
+      })
+      .catch(() => undefined);
   }, [load]);
 
   // Search is debounced, and the first render is skipped: the effect above has
@@ -208,10 +251,11 @@ export default function Library() {
     return () => clearTimeout(t);
   }, [keyword, load]);
 
-  // Opens the native EPUB picker and imports the chosen files via bindings.
+  // Opens the file picker (native dialog on desktop, SAF via the v3 runtime on
+  // the phone) and imports the chosen files via bindings.
   async function pickAndImport() {
     try {
-      const paths = await api.selectEpubFiles();
+      const paths = await pickEpubFiles();
       if (!paths?.length) return; // cancelled
       await importPaths(paths);
     } catch (e) {
@@ -309,6 +353,60 @@ export default function Library() {
       // Drop the card first so the click feels immediate; the reload only puts
       // the rest of the shelf back in order.
       setBooks((prev) => prev.filter((b) => b.id !== book.id));
+      await load(keyword.trim() || undefined);
+    } catch (e) {
+      toastError(e);
+    }
+  }
+
+  /* ----------------------- phone metadata editor ----------------------- */
+
+  function openEdit(b: Book) {
+    setMenuBook(null);
+    setEditBook(b);
+    setEditForm({
+      title: b.title,
+      author: b.author || '',
+      tags: (b.tags || []).join(', '),
+    });
+  }
+
+  // Tags are free text on the phone keyboard: split on the separators people
+  // actually type (Chinese comma/ enumeration mark included).
+  function parseTagInput(s: string): string[] {
+    return s
+      .split(/[,，、;；]/)
+      .map((t) => t.trim())
+      .filter(Boolean);
+  }
+
+  async function saveEdit() {
+    if (!editBook || editBusy) return;
+    setEditBusy(true);
+    try {
+      await api.updateBook(editBook.id, {
+        title: editForm.title.trim() || editBook.title,
+        author: editForm.author.trim(),
+        tags: parseTagInput(editForm.tags),
+      });
+      toast('已保存', 'success');
+      setEditBook(null);
+      await load(keyword.trim() || undefined);
+    } catch (e) {
+      toastError(e);
+    } finally {
+      setEditBusy(false);
+    }
+  }
+
+  async function changeCover() {
+    if (!editBook || editBusy) return;
+    try {
+      const path = await pickImageFile();
+      if (!path) return;
+      await api.uploadCoverFromPath(editBook.id, path);
+      toast('封面已更新', 'success');
+      setEditBook(null);
       await load(keyword.trim() || undefined);
     } catch (e) {
       toastError(e);
@@ -429,54 +527,49 @@ export default function Library() {
           </div>
         ) : (
           <div className="grid">
-            {visibleBooks.map((b) => (
-              <div className="book-card" key={b.id}>
-                <div
-                  className="cover"
-                  onClick={() => coverClick(b)}
-                  onTouchStart={() => startLongPress(b)}
-                  onTouchMove={cancelLongPress}
-                  onTouchEnd={cancelLongPress}
-                  onTouchCancel={cancelLongPress}
-                  onContextMenu={(e) => {
-                    // The WebView's own long-press menu must not compete with
-                    // ours (touch devices only; desktop keeps text menus).
-                    if (isTouchPrimary()) e.preventDefault();
-                  }}
-                  style={{ cursor: 'pointer' }}
-                >
-                  {b.coverUrl ? (
-                    <img src={b.coverUrl} alt={b.title} loading="lazy" />
-                  ) : (
-                    <div className="placeholder">{b.title}</div>
-                  )}
-                </div>
-                <div className="book-body">
-                  <div className="book-title" title={b.title}>
-                    {b.title}
+            {visibleBooks.map((b) => {
+              const pct = progress[b.id];
+              const pctLabel = pct > 0 ? `${Math.min(100, Math.round(pct * 100))}%` : null;
+              return (
+                <div className="book-card" key={b.id}>
+                  <div className="cover" onClick={() => coverClick(b)} {...holdProps(b)} style={{ cursor: 'pointer' }}>
+                    {b.coverUrl ? (
+                      <img src={b.coverUrl} alt={b.title} loading="lazy" />
+                    ) : (
+                      <div className="placeholder">{b.title}</div>
+                    )}
                   </div>
-                  <div className="book-meta">{b.author || '未知作者'}</div>
-                  <div className="book-meta">{b.chapterCount} 章</div>
+                  <div className="book-body" {...holdProps(b)}>
+                    <div className="book-title" title={b.title}>
+                      {b.title}
+                    </div>
+                    <div className="book-meta book-meta-row">
+                      <span className="book-author">{b.author || '未知作者'}</span>
+                      {/* The badge is fixed-size and sits at the line's end; the
+                          author span shrinks instead of ever covering it. */}
+                      {pctLabel && <span className="book-progress">{pctLabel}</span>}
+                    </div>
+                  </div>
+                  <div className="book-actions">
+                    <Link className="btn sm" to={`/books/${b.id}/read`}>
+                      阅读
+                    </Link>
+                    <Link className="btn sm" to={`/books/${b.id}/edit`}>
+                      整理
+                    </Link>
+                    <Link className="btn sm" to={`/books/${b.id}/split`}>
+                      拆分
+                    </Link>
+                    <button className="btn sm" onClick={() => void exportBook(b)}>
+                      导出
+                    </button>
+                    <button className="btn sm danger" onClick={() => void remove(b)}>
+                      删除
+                    </button>
+                  </div>
                 </div>
-                <div className="book-actions">
-                  <Link className="btn sm" to={`/books/${b.id}/read`}>
-                    阅读
-                  </Link>
-                  <Link className="btn sm" to={`/books/${b.id}/edit`}>
-                    整理
-                  </Link>
-                  <Link className="btn sm" to={`/books/${b.id}/split`}>
-                    拆分
-                  </Link>
-                  <button className="btn sm" onClick={() => void exportBook(b)}>
-                    导出
-                  </button>
-                  <button className="btn sm danger" onClick={() => void remove(b)}>
-                    删除
-                  </button>
-                </div>
-              </div>
-            ))}
+              );
+            })}
           </div>
         )}
 
@@ -511,18 +604,19 @@ export default function Library() {
         <div className="sheet-mask" onClick={() => setImportOpen(false)}>
           <div className="sheet" role="menu" onClick={(e) => e.stopPropagation()}>
             <div className="sheet-title">导入书籍</div>
-            {desktop && (
-              <button
-                className="sheet-item"
-                disabled={importing}
-                onClick={() => {
-                  setImportOpen(false);
-                  void pickAndImport();
-                }}
-              >
-                {importing ? '导入中…' : '从本地文件导入'}
-              </button>
-            )}
+            {/* Both hosts can pick files now: the phone routes the SAF document
+                picker through the v3 runtime, so local import is offered there
+                next to WebDAV. */}
+            <button
+              className="sheet-item"
+              disabled={importing}
+              onClick={() => {
+                setImportOpen(false);
+                void pickAndImport();
+              }}
+            >
+              {importing ? '导入中…' : '从本地文件导入'}
+            </button>
             <Link className="sheet-item" to="/webdav" onClick={() => setImportOpen(false)}>
               从 WebDAV 导入
             </Link>
@@ -559,19 +653,17 @@ export default function Library() {
         </div>
       )}
 
-      {/* The phone's per-book menu, reached by long-pressing a cover: edit the
-          metadata or delete. Everything else (拆分/导出) stays a desktop job. */}
+      {/* The phone's per-book menu, reached by long-pressing the cover, title
+          or author line. 编辑 opens the phone-sized metadata editor (title /
+          author / tags / cover only); the desktop edit page stays a desktop
+          job. */}
       {menuBook && (
         <div className="sheet-mask" onClick={() => setMenuBook(null)}>
           <div className="sheet" role="menu" onClick={(e) => e.stopPropagation()}>
             <div className="sheet-title">{menuBook.title}</div>
-            <Link
-              className="sheet-item"
-              to={`/books/${menuBook.id}/edit`}
-              onClick={() => setMenuBook(null)}
-            >
-              编辑（书名 / 作者 / 封面）
-            </Link>
+            <button className="sheet-item" onClick={() => openEdit(menuBook)}>
+              编辑（书名 / 作者 / 标签 / 封面）
+            </button>
             <button
               className="sheet-item danger"
               onClick={() => {
@@ -585,6 +677,60 @@ export default function Library() {
             <button className="sheet-item cancel" onClick={() => setMenuBook(null)}>
               取消
             </button>
+          </div>
+        </div>
+      )}
+
+      {/* The phone-sized metadata editor. Four fields, thumb-sized rows, and
+          no chapter tooling — that is what the desktop edit page is for. */}
+      {editBook && (
+        <div className="sheet-mask" onClick={() => (editBusy ? undefined : setEditBook(null))}>
+          <div className="sheet edit-sheet" onClick={(e) => e.stopPropagation()}>
+            <div className="sheet-title">编辑书籍</div>
+            <label className="edit-field">
+              <span>书名</span>
+              <input
+                className="input"
+                value={editForm.title}
+                maxLength={200}
+                onChange={(e) => setEditForm((f) => ({ ...f, title: e.target.value }))}
+              />
+            </label>
+            <label className="edit-field">
+              <span>作者</span>
+              <input
+                className="input"
+                value={editForm.author}
+                maxLength={120}
+                onChange={(e) => setEditForm((f) => ({ ...f, author: e.target.value }))}
+              />
+            </label>
+            <label className="edit-field">
+              <span>标签（用逗号分隔）</span>
+              <input
+                className="input"
+                value={editForm.tags}
+                maxLength={200}
+                placeholder="如：小说, 历史"
+                onChange={(e) => setEditForm((f) => ({ ...f, tags: e.target.value }))}
+              />
+            </label>
+            <div className="edit-cover-row">
+              <div className="edit-cover">
+                {editBook.coverUrl ? <img src={editBook.coverUrl} alt="" /> : <span>{editBook.title.slice(0, 2)}</span>}
+              </div>
+              <button className="btn ghost" onClick={() => void changeCover()}>
+                更换封面
+              </button>
+            </div>
+            <div className="edit-actions">
+              <button className="btn ghost" disabled={editBusy} onClick={() => setEditBook(null)}>
+                取消
+              </button>
+              <button className="btn primary" disabled={editBusy} onClick={() => void saveEdit()}>
+                {editBusy ? '保存中…' : '保存'}
+              </button>
+            </div>
           </div>
         </div>
       )}
