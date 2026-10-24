@@ -218,6 +218,24 @@ public class MainActivity extends AppCompatActivity {
                         return serveCaptureFile(path.substring("/__capture__/".length()), request);
                     }
 
+                    // Downloaded reading fonts, written by the Go DownloadFont
+                    // binding into <EPUBMAKER_HOME>/data/fonts. EPUBMAKER_HOME is
+                    // pinned to files/.epubmaker by the Go entry point (see
+                    // cmd/mobile/main.go), so that path is stable here too.
+                    // Streaming straight from disk (Range support included) keeps
+                    // an 8-20 MB face out of a JNI byte[] on every app start.
+                    if (path != null && path.startsWith("/fonts/")) {
+                        String rel = path.substring("/fonts/".length());
+                        String lower = Uri.decode(rel).toLowerCase();
+                        String mime = lower.endsWith(".ttf") ? "font/ttf"
+                                : lower.endsWith(".otf") ? "font/otf"
+                                : lower.endsWith(".woff2") ? "font/woff2"
+                                : lower.endsWith(".woff") ? "font/woff"
+                                : "application/octet-stream";
+                        File fontsDir = new File(getFilesDir(), ".epubmaker/data/fonts");
+                        return serveFileFromDir(fontsDir, rel, request, mime);
+                    }
+
                     // For regular assets, use the asset loader
                     return assetLoader.shouldInterceptRequest(request.getUrl());
                 }
@@ -410,25 +428,34 @@ public class MainActivity extends AppCompatActivity {
     }
 
     /**
-     * Serve a captured file (under the app cache) to the webview with HTTP Range
-     * support, so &lt;video&gt; can stream and seek a clip of any length without
-     * inlining it as a data URL.
+     * Serve a captured file (under the app cache) to the webview. The capture
+     * mime type is derived from the file extension, the rest is shared with the
+     * font server.
      */
     private WebResourceResponse serveCaptureFile(String relPath, WebResourceRequest request) {
+        String name = new File(Uri.decode(relPath)).getName().toLowerCase();
+        String mime = name.endsWith(".mp4") ? "video/mp4"
+                : name.endsWith(".mov") ? "video/quicktime"
+                : name.endsWith(".jpg") || name.endsWith(".jpeg") ? "image/jpeg"
+                : name.endsWith(".png") ? "image/png" : "application/octet-stream";
+        return serveFileFromDir(getCacheDir(), relPath, request, mime);
+    }
+
+    /**
+     * Serve a file under baseDir to the webview with HTTP Range support, so
+     * &lt;video&gt; can stream and seek a clip of any length without inlining
+     * it as a data URL, and the font loader can fetch faces progressively.
+     */
+    private WebResourceResponse serveFileFromDir(File baseDir, String relPath,
+            WebResourceRequest request, String mime) {
         try {
-            File cache = getCacheDir();
-            File file = new File(cache, Uri.decode(relPath));
-            // Path-traversal guard: only ever serve files under the cache dir.
-            if (!file.getCanonicalPath().startsWith(cache.getCanonicalPath() + File.separator)
+            File file = new File(baseDir, Uri.decode(relPath));
+            // Path-traversal guard: only ever serve files under the base dir.
+            if (!file.getCanonicalPath().startsWith(baseDir.getCanonicalPath() + File.separator)
                     || !file.exists() || !file.isFile()) {
                 return new WebResourceResponse("text/plain", "UTF-8", 404, "Not Found",
                         new java.util.HashMap<>(), new java.io.ByteArrayInputStream(new byte[0]));
             }
-            String name = file.getName().toLowerCase();
-            String mime = name.endsWith(".mp4") ? "video/mp4"
-                    : name.endsWith(".mov") ? "video/quicktime"
-                    : name.endsWith(".jpg") || name.endsWith(".jpeg") ? "image/jpeg"
-                    : name.endsWith(".png") ? "image/png" : "application/octet-stream";
             long length = file.length();
             java.util.Map<String, String> reqHeaders = request.getRequestHeaders();
             String range = reqHeaders != null ? reqHeaders.get("Range") : null;
@@ -469,7 +496,7 @@ public class MainActivity extends AppCompatActivity {
             return new WebResourceResponse(mime, null, 200, "OK", headers,
                     new java.io.FileInputStream(file));
         } catch (Exception e) {
-            Log.e(TAG, "serveCaptureFile failed", e);
+            Log.e(TAG, "serveFileFromDir failed", e);
             return new WebResourceResponse("text/plain", "UTF-8", 500, "Error",
                     new java.util.HashMap<>(), new java.io.ByteArrayInputStream(new byte[0]));
         }

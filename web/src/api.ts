@@ -108,6 +108,12 @@ export interface DictStatus {
   entries: number;
 }
 
+/** A reading font stored in the app data dir (see /fonts/<file> serving). */
+export interface FontInfo {
+  file: string;
+  size: number;
+}
+
 export interface Book {
   id: string;
   title: string;
@@ -460,6 +466,16 @@ export const api = {
   /* ---------------- reading: dictionary / vocabulary ---------------- */
 
   dictStatus: () => call<DictStatus>('DictStatus'),
+
+  /* ---------------- reading fonts ---------------- */
+
+  /** Downloaded fonts stored under <dataDir>/fonts (served at /fonts/<file>). */
+  listFonts: () => call<FontInfo[]>('ListFonts'),
+
+  /** Downloads a font file into the data dir. Blocking; call again on failure. */
+  downloadFont: (file: string, url: string) => call<FontInfo>('DownloadFont', file, url),
+
+  deleteFont: (file: string) => call<boolean>('DeleteFont', file),
 
   /** Opens the native csv picker; returns '' when the user cancels. */
   selectDictFile: () => callApp<string>('SelectDictFile'),

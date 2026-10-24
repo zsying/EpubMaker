@@ -3146,3 +3146,55 @@ a {
     scroll-behavior: auto;
   }
 }
+
+/* ------------------------- reader chrome anti-flicker -------------------------
+   On Android WebView, mounting an element with backdrop-filter forces the whole
+   backdrop to re-rasterize and visibly flashes the page. The phone chrome is
+   therefore an opaque bar with a short fade: it reads as an animation, not a
+   repaint glitch. Desktop (WebView2) keeps the blur. */
+@keyframes chrome-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+@media (max-width: 640px) {
+  .reader-chrome {
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+    background: #12141af8;
+    animation: chrome-in 150ms ease-out;
+  }
+}
+
+/* ------------------------------ font picker row ------------------------------ */
+.rd-font-row {
+  flex-wrap: wrap;
+}
+.rd-fonts {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+  width: 100%;
+}
+.rd-font {
+  padding: 8px 16px;
+  border: 1px solid var(--border-strong);
+  border-radius: 9px;
+  background: var(--panel-2);
+  color: var(--text-2);
+  font-size: 13px;
+  font-family: var(--font);
+  cursor: pointer;
+}
+.rd-font:active {
+  background: var(--panel);
+}
+.rd-font.on {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+  font-weight: 600;
+}
+.rd-font:disabled {
+  opacity: 0.55;
+}

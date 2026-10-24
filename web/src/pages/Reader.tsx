@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent } from 'react';
+import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type MouseEvent as ReactMouseEvent } from 'react';
 import { Link, useLocation, useNavigate, useParams } from 'react-router-dom';
 import DOMPurify from 'dompurify';
 import { api, Annotation, Book, Bookmark, Chapter, LookupResult, ReadingProgress, TocEntry } from '../api';
@@ -8,9 +8,32 @@ import { Anchor, EDGE_GAP, placeOverlay } from '../overlay';
 import { wordAt } from '../wordHit';
 
 const FONT_KEY = 'epubmaker.fontSize';
-const MODE_KEY = 'epubmaker.readMode';
+// v2: the original key was written on every mount, so every existing user has
+// the old default ('scroll') persisted under it — bumping the key is the only
+// way a new default can actually reach them.
+const MODE_KEY = 'epubmaker.readMode.v2';
 const THEME_KEY = 'epubmaker.readTheme';
 const TOC_DOCK_KEY = 'epubmaker.tocDocked';
+const FONT_FAMILY_KEY = 'epubmaker.readFont';
+
+/** The @font-face family name the custom reading font is registered under. */
+const CUSTOM_FONT_FAMILY = 'EpubBookFont';
+
+/** Downloadable open-source fonts (OFL licensed, single-file, jsDelivr-served
+ * from the vendors' own release branches). Files land in the app data dir via
+ * Backend.DownloadFont and are served back at /fonts/<file>. */
+const FONT_CATALOG: Array<{ file: string; label: string; url: string }> = [
+  {
+    file: 'SourceHanSerifCN-Regular.otf',
+    label: '思源宋体',
+    url: 'https://cdn.jsdelivr.net/gh/adobe-fonts/source-han-serif@release/SubsetOTF/CN/SourceHanSerifCN-Regular.otf',
+  },
+  {
+    file: 'SourceHanSansCN-Regular.otf',
+    label: '思源黑体',
+    url: 'https://cdn.jsdelivr.net/gh/adobe-fonts/source-han-sans@release/SubsetOTF/CN/SourceHanSansCN-Regular.otf',
+  },
+];
 
 // Reading surface themes. Only the phone shows the settings panel today, but
 // the class applies to both hosts: the colours are plain CSS overrides on
@@ -475,8 +498,17 @@ export default function Reader() {
   const [loading, setLoading] = useState(true);
   const [fontSize, setFontSize] = useState(() => Number(localStorage.getItem(FONT_KEY)) || 17);
 
-  const [mode, setMode] = useState<ReadMode>(() => (localStorage.getItem(MODE_KEY) as ReadMode) || 'scroll');
+  const [mode, setMode] = useState<ReadMode>(() => (localStorage.getItem(MODE_KEY) as ReadMode) || 'paged');
   const [theme, setTheme] = useState<ReadTheme>(() => (localStorage.getItem(THEME_KEY) as ReadTheme) || 'paper');
+
+  // Reading font: 'default' (system) or the file name of a downloaded font.
+  // `fonts` mirrors Backend.ListFonts for the settings sheet; `fontEpoch`
+  // increments once the custom face has actually loaded, so the paged layout
+  // re-measures against the real metrics instead of the fallback's.
+  const [readFont, setReadFont] = useState<string>(() => localStorage.getItem(FONT_FAMILY_KEY) || 'default');
+  const [fonts, setFonts] = useState<Array<{ file: string; size: number }>>([]);
+  const [fontBusy, setFontBusy] = useState<string | null>(null);
+  const [fontEpoch, setFontEpoch] = useState(0);
 
   // paged reading state
   const [pageIndex, setPageIndex] = useState(0);
@@ -696,6 +728,42 @@ export default function Reader() {
   useEffect(() => localStorage.setItem(MODE_KEY, mode), [mode]);
   useEffect(() => localStorage.setItem(THEME_KEY, theme), [theme]);
   useEffect(() => localStorage.setItem(TOC_DOCK_KEY, tocDocked ? '1' : '0'), [tocDocked]);
+  useEffect(() => localStorage.setItem(FONT_FAMILY_KEY, readFont), [readFont]);
+
+  // Registers the selected reading font once per change and re-measures the
+  // paged layout after the face is really loaded: a font swap changes every
+  // text metric, and pagination measured against the fallback would drift
+  // until the next relayout. document.fonts.load rejects on a failed fetch
+  // (e.g. the font file is gone) — the fallback stays, which is fine.
+  useEffect(() => {
+    const id = 'rd-custom-font-face';
+    let style = document.getElementById(id) as HTMLStyleElement | null;
+    if (readFont === 'default') {
+      if (style) style.remove();
+      setFontEpoch((e) => e + 1);
+      return;
+    }
+    if (!style) {
+      style = document.createElement('style');
+      style.id = id;
+      document.head.appendChild(style);
+    }
+    style.textContent = `@font-face { font-family: '${CUSTOM_FONT_FAMILY}'; src: url('/fonts/${encodeURIComponent(readFont)}'); font-display: swap; }`;
+    document.fonts
+      .load(`16px '${CUSTOM_FONT_FAMILY}'`)
+      .then(() => setFontEpoch((e) => e + 1))
+      .catch(() => {});
+  }, [readFont]);
+
+  // The font picker reads the downloaded list when it is shown (and after a
+  // download completes).
+  useEffect(() => {
+    if (!settingsOpen) return;
+    api
+      .listFonts()
+      .then((list) => setFonts(list.map((f) => ({ file: f.file, size: f.size }))))
+      .catch(() => {});
+  }, [settingsOpen]);
 
   // The docked TOC is 268px of a 390px phone — 122px left for the text. It is a
   // desktop affordance (and its toggle is hidden on touch); if the desktop
@@ -834,7 +902,7 @@ export default function Reader() {
     if (mode !== 'paged') return;
     measureAndLayout();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [html, fontSize, mode, stageWidth, stageHeight]);
+  }, [html, fontSize, mode, stageWidth, stageHeight, fontEpoch]);
 
   // Builds a layout-independent map: source character offset -> visual page.
   //
@@ -1338,17 +1406,33 @@ export default function Reader() {
     // turn again.
     if (Date.now() - turnedAtRef.current < 300) return;
 
-    // Touch cannot hover, so the edge bands that slide the chrome in on desktop
-    // are unreachable. A tap in the same band does the same job — but the band
-    // is now exactly the top/bottom margin, not the desktop's 64px hover strip.
-    // With a full-screen page the text starts 22px from the top, so a 64px band
-    // covered the first line and every tap on it opened the toolbar instead of
-    // the dictionary card. The margin is the only strip guaranteed to be blank.
-    if (touchPrimary && (e.clientY < marginPx || e.clientY > window.innerHeight - marginPx)) {
+    // Touch division of labour (微信读书/番茄 school):
+    //   1. a tap on a word looks it up — wherever the word is. Lookup wins over
+    //      everything because it only ever fires when a real word was hit;
+    //   2. the remaining taps split the screen into thirds: left turns back,
+    //      right turns forward (mirroring the swipe gestures), and ONLY the
+    //      middle third toggles the chrome. The earlier rules — a top/bottom
+    //      margin band and "any blank tap toggles" — meant every tap anywhere
+    //      could summon the menu, which read as a bug.
+    if (touchPrimary) {
+      if (scheduleWordLookup(e.clientX, e.clientY)) return;
+      const rect = stageRef.current?.getBoundingClientRect();
+      const r = rect && rect.width > 0 ? (e.clientX - rect.left) / rect.width : 0.5;
+      if (r < 1 / 3) {
+        turn(-1);
+        return;
+      }
+      if (r > 2 / 3) {
+        turn(1);
+        return;
+      }
       setChromeOpen((o) => !o);
       return;
     }
 
+    // Desktop: the paper's own outer margin is a page-turn surface (and the
+    // drag-to-turn gesture targets), then word lookup, then the narrow middle
+    // band toggles the chrome.
     const zone = turnZoneAt(e.clientX);
     if (zone < 0) {
       turn(-1);
@@ -1359,9 +1443,6 @@ export default function Reader() {
       return;
     }
 
-    // A tap on a word looks it up, wherever the word is — no selection needed.
-    // This stays after the page-turn zones: a click on the outer edge has to
-    // turn the page even when the word hit-test would return a nearby word.
     if (scheduleWordLookup(e.clientX, e.clientY)) return;
 
     const stage = stageRef.current;
@@ -1372,12 +1453,7 @@ export default function Reader() {
 
     // The narrow middle band toggles the chrome. Everything else in the page is
     // left to text selection and links.
-    //
-    // On touch that band is useless: at 390px wide it is ~4 characters of text,
-    // so every tap inside it lands on a word and opens a card instead. Any tap
-    // that found no word toggles the chrome instead — the page-turn zones above
-    // have already claimed the edges.
-    if (touchPrimary || (ratio > 0.42 && ratio < 0.58)) setChromeOpen((o) => !o);
+    if (ratio > 0.42 && ratio < 0.58) setChromeOpen((o) => !o);
   }
 
   /* ---- drag along the page edge to turn ---- */
@@ -1783,10 +1859,13 @@ export default function Reader() {
       const selection = window.getSelection();
       if (selection && !selection.isCollapsed && selection.toString().trim()) return;
       // Touch division of labour, same as paged mode: a tap on a word looks it
-      // up; a tap on blank space toggles the chrome, which is the only way a
-      // phone reaches the toolbar in scrolling mode.
-      if (touchPrimary && !scheduleWordLookup(e.clientX, e.clientY)) {
-        setChromeOpen((o) => !o);
+      // up; only a tap in the middle third of the screen toggles the chrome —
+      // the horizontal thirds do nothing in scroll mode (no pages to turn),
+      // and a tap anywhere summoning the menu read as a bug.
+      if (touchPrimary) {
+        if (scheduleWordLookup(e.clientX, e.clientY)) return;
+        const r = e.clientX / Math.max(1, window.innerWidth);
+        if (r > 1 / 3 && r < 2 / 3) setChromeOpen((o) => !o);
         return;
       }
       scheduleWordLookup(e.clientX, e.clientY);
@@ -1839,7 +1918,10 @@ export default function Reader() {
 
   // The word under a point in the page, if the point is on one at all. The
   // caret comes from the browser's own hit test — the same one a text cursor
-  // uses — so a click in the margin or between words simply finds nothing.
+  // uses — but that test SNAPS: a tap in a line gap or just off the text edge
+  // still resolves to the nearest caret. Without the box check below, the
+  // lookup would eat nearly every middle-of-the-page tap and the chrome would
+  // become unreachable on touch.
   function wordHitAt(x: number, y: number): { word: string; offset: number; rect: DOMRect } | null {
     const root = contentRef.current;
     if (!root) return null;
@@ -1857,6 +1939,18 @@ export default function Reader() {
     range.setEnd(node, span.end);
     const rect = range.getBoundingClientRect();
     if (rect.width <= 0) return null;
+    // Trust the snap only when the point actually sits on the word's box (a
+    // little slack for glyph edges). A word wrapped across lines yields the
+    // union box, so either of its lines accepts the tap — which is correct.
+    const SLACK = 4;
+    if (
+      x < rect.left - SLACK ||
+      x > rect.right + SLACK ||
+      y < rect.top - SLACK ||
+      y > rect.bottom + SLACK
+    ) {
+      return null;
+    }
     return { word: span.word, offset: charOffset(root, node, span.start), rect };
   }
 
@@ -1992,6 +2086,32 @@ export default function Reader() {
       toastError(e);
     }
   }
+
+  /** Picks a reading font: undownloaded catalogue entries download first (the
+   * binding blocks until the file is stored), then the font is applied. */
+  async function pickFont(f: { file: string; label: string; url: string }) {
+    if (readFont === f.file || fontBusy) return;
+    if (!fonts.some((x) => x.file === f.file)) {
+      setFontBusy(f.file);
+      try {
+        await api.downloadFont(f.file, f.url);
+        const list = await api.listFonts().catch(() => []);
+        setFonts(list.map((x) => ({ file: x.file, size: x.size })));
+        toast(`已下载「${f.label}」`, 'success');
+      } catch (e) {
+        toastError(e);
+        return;
+      } finally {
+        setFontBusy(null);
+      }
+    }
+    setReadFont(f.file);
+  }
+
+  // The reading surface's text style. The custom family falls back to a serif
+  // so Chinese/latin text stays legible during the (brief) font load.
+  const contentStyle: CSSProperties = { fontSize };
+  if (readFont !== 'default') contentStyle.fontFamily = `'${CUSTOM_FONT_FAMILY}', Georgia, serif`;
 
   async function removeBookmark(bid: string) {
     try {
@@ -2299,6 +2419,32 @@ export default function Reader() {
                 </button>
               </div>
             </div>
+            {/* Reading font: 默认 plus the open-source catalogue. An undownloaded
+                font downloads on first tap (label shows ↓), then applies. */}
+            <div className="rd-set-row rd-font-row">
+              <span className="rd-set-label">字体</span>
+              <div className="rd-fonts">
+                <button
+                  className={`rd-font${readFont === 'default' ? ' on' : ''}`}
+                  onClick={() => setReadFont('default')}
+                >
+                  默认
+                </button>
+                {FONT_CATALOG.map((f) => {
+                  const installed = fonts.some((x) => x.file === f.file);
+                  return (
+                    <button
+                      key={f.file}
+                      className={`rd-font${readFont === f.file ? ' on' : ''}`}
+                      disabled={fontBusy === f.file}
+                      onClick={() => void pickFont(f)}
+                    >
+                      {fontBusy === f.file ? '下载中…' : f.label + (installed ? '' : ' ↓')}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
             <div className="rd-set-row last">
               <span className="rd-set-label">背景</span>
               <div className="rd-themes">
@@ -2415,7 +2561,7 @@ export default function Reader() {
             <div
               className="reader-content"
               ref={contentRef}
-              style={{ fontSize }}
+              style={contentStyle}
               dangerouslySetInnerHTML={{ __html: safeHtml }}
             />
           </article>
@@ -2600,7 +2746,7 @@ export default function Reader() {
                 columnGap: columnGap,
               }}
             >
-              <div className="reader-content" ref={contentRef} style={{ fontSize }} />
+              <div className="reader-content" ref={contentRef} style={contentStyle} />
             </div>
           </div>
         </div>
