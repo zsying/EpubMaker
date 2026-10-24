@@ -1,10 +1,5 @@
 package app
 
-import (
-	"strconv"
-	"time"
-)
-
 // AppVersion is the version string surfaced by the 关于 page. Keep it in sync
 // with app/wails.json (info.productVersion); either side may override it at
 // build time with -ldflags "-X epubmaker-desktop/internal/app.AppVersion=x.y.z".
@@ -19,11 +14,10 @@ var BuildTimeUnix = "0"
 // AppVersion reports the running build's version for the frontend's about page.
 func (b *Backend) AppVersion() string { return AppVersion }
 
-// BuildTime reports when this binary was linked, formatted for the about page.
-// Empty on dev builds where no timestamp was injected.
+// BuildTime reports the link timestamp as raw unix seconds so the frontend can
+// format it with the device's own timezone — Go's time.Local is unreliable
+// inside the Android c-shared runtime, which is why the phone showed UTC.
+// "0" (a plain `go build`, i.e. a dev run) formats to "" and the UI hides it.
 func (b *Backend) BuildTime() string {
-	if n, err := strconv.ParseInt(BuildTimeUnix, 10, 64); err == nil && n > 0 {
-		return time.Unix(n, 0).Local().Format("2006-01-02 15:04")
-	}
-	return ""
+	return BuildTimeUnix
 }

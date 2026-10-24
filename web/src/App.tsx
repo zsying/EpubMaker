@@ -11,10 +11,12 @@ import Annotations from './pages/Annotations';
 import Vocab from './pages/Vocab';
 import Me from './pages/Me';
 import About from './pages/About';
+import WifiShare from './pages/WifiShare';
 import Settings from './pages/Settings';
 import { initFileDrop } from './filedrop';
 import { clearBackClosers } from './backNav';
-import { Toaster } from './toast';
+import { api, onSharedImport } from './api';
+import { toast, toastError, Toaster } from './toast';
 import MobileTabs from './components/MobileTabs';
 
 export default function App() {
@@ -30,6 +32,34 @@ export default function App() {
   useEffect(() => {
     clearBackClosers();
   }, [loc.pathname]);
+
+  // A book shared to EpubMaker from another app (WeChat, browser, file
+  // manager) arrives as a copied cache path. Import it wherever the user
+  // happens to be, then tell the shelf to refresh if it is watching.
+  useEffect(() => {
+    let alive = true;
+    let off: (() => void) | null = null;
+    onSharedImport((path) => {
+      api
+        .importPaths([path])
+        .then((res) => {
+          const n = res.books.length;
+          const dups = res.duplicates?.length ?? 0;
+          if (n > 0) toast(`已导入《${res.books[0].title}》`, 'success');
+          else if (dups > 0) toast(res.duplicates![0], 'info');
+          else toastError(res.errors?.[0] ?? '导入失败');
+          window.dispatchEvent(new CustomEvent('epubmaker:imported'));
+        })
+        .catch((e) => toastError(e));
+    }).then((unsub) => {
+      if (alive) off = unsub;
+      else unsub();
+    });
+    return () => {
+      alive = false;
+      off?.();
+    };
+  }, []);
 
   // The drop bridge is registered here rather than on the shelf: it is what
   // stops the webview from navigating to a dropped file, and a delayed
@@ -86,6 +116,7 @@ export default function App() {
             <Route path="/webdav" element={<WebDav />} />
             <Route path="/me" element={<Me />} />
             <Route path="/about" element={<About />} />
+            <Route path="/wifi" element={<WifiShare />} />
             <Route path="/settings" element={<Settings />} />
             <Route path="/books/:id/edit" element={<Editor />} />
             <Route path="/books/:id/split" element={<Split />} />

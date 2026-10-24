@@ -229,6 +229,17 @@ export interface AppPaths {
   dbFile: string;
 }
 
+export interface WifiShareStatus {
+  running: boolean;
+  port: number;
+  url: string;
+  ips?: string[];
+  imports: number;
+  duplicates: number;
+  failures: string[];
+  lastImportUnix?: number;
+}
+
 export interface WebDavConn {
   baseUrl: string;
   username?: string;
@@ -312,6 +323,30 @@ async function call<T>(method: string, ...args: unknown[]): Promise<T> {
     return await callV3<T>(method, args);
   }
   throw new Error('后端尚未就绪，请稍候重试');
+}
+
+/**
+ * Subscribes to the Android system-share import events. When a book is shared
+ * to EpubMaker from another app (WeChat, a browser, a file manager), the Java
+ * host copies the content URI into the cache and emits "common:sharedImport"
+ * with the copied file's path; this surfaces it to the frontend, which imports
+ * it like any other path. v3 hosts only — a no-op unsubscribe elsewhere.
+ */
+export async function onSharedImport(fn: (path: string) => void): Promise<() => void> {
+  if (!hasV3Runtime()) return () => {};
+  const runtime = await loadV3Runtime();
+  const off = runtime.Events?.On?.('common:sharedImport', (payload: {
+    name?: string;
+    data?: { path?: string };
+    path?: string;
+  }) => {
+    // The v3 runtime hands the callback the whole {name, data} envelope, not
+    // the bare payload; accept both shapes anyway.
+    const data = payload?.data ?? payload;
+    const path = typeof data === 'string' ? data : data?.path;
+    if (typeof path === 'string' && path) fn(path);
+  });
+  return typeof off === 'function' ? off : () => {};
 }
 
 /**
@@ -405,6 +440,10 @@ export const api = {
 
   /** Link timestamp for the about page; '' on dev builds (Backend.BuildTime). */
   buildTime: () => call<string>('BuildTime'),
+
+  wifiShareStart: () => call<WifiShareStatus>('WifiShareStart'),
+  wifiShareStop: () => call<WifiShareStatus>('WifiShareStop'),
+  wifiShareStatus: () => call<WifiShareStatus>('WifiShareStatus'),
 
   listBooks: (keyword?: string) => call<Book[]>('ListBooks', keyword ?? ''),
 

@@ -2739,7 +2739,6 @@ a {
    defaults hide the new affordances, and one media query switches them in. */
 
 .tabbar,
-.fab,
 .lib-search-toggle,
 .lib-sort-toggle,
 .lib-plus-toggle {
@@ -2919,6 +2918,101 @@ button.me-dict:disabled {
 
 .about-foot a {
   color: var(--text-2);
+}
+
+/* Wi-Fi 传书 page: switch + live address + QR + transfer counters. */
+.wifi-hero {
+  margin: 12px 14px;
+  padding: 16px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--panel);
+  text-align: center;
+}
+
+.wifi-desc {
+  margin: 0 0 14px;
+  font-size: 12.5px;
+  line-height: 1.7;
+  color: var(--text-3);
+  text-align: left;
+}
+
+.wifi-toggle {
+  width: 100%;
+  padding: 11px 0;
+  font-size: 14px;
+}
+
+.wifi-toggle.on {
+  background: var(--panel-2);
+}
+
+.wifi-live {
+  margin-top: 18px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+}
+
+.wifi-qr {
+  width: 176px;
+  height: 176px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: #fff;
+  padding: 10px;
+}
+
+.wifi-url {
+  font-size: 15px;
+  font-weight: 600;
+  word-break: break-all;
+  color: var(--text);
+}
+
+.wifi-hint {
+  font-size: 11.5px;
+  color: var(--text-3);
+}
+
+.wifi-stats {
+  display: flex;
+  gap: 8px;
+  margin: 0 14px;
+}
+
+.wifi-stat {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  padding: 12px 4px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--panel);
+}
+
+.wifi-stat strong {
+  font-size: 17px;
+}
+
+.wifi-stat span {
+  font-size: 11px;
+  color: var(--text-3);
+}
+
+.wifi-fails {
+  margin: 10px 14px 0;
+  padding: 10px 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--panel);
+  font-size: 12px;
+  color: var(--text-2);
+  word-break: break-all;
 }
 
 /* Bottom action sheets (per-book menu, import chooser). Only reachable from
@@ -3149,28 +3243,6 @@ button.me-dict:disabled {
 
   .book-actions .btn {
     display: none;
-  }
-
-  .fab {
-    position: fixed;
-    right: 16px;
-    bottom: calc(80px + env(safe-area-inset-bottom));
-    z-index: 55;
-    width: 52px;
-    height: 52px;
-    border-radius: 50%;
-    border: none;
-    background: var(--accent);
-    color: #fff;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    box-shadow: var(--shadow);
-    cursor: pointer;
-  }
-
-  .fab:active {
-    transform: scale(0.96);
   }
 
   /* Filter buttons become a swipeable chip row. */

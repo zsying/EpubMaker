@@ -104,6 +104,61 @@ public class MainActivity extends AppCompatActivity {
 
         // Load the application
         loadApplication();
+
+        // An EPUB shared/opened from another app may have launched us; queue
+        // it and hand it to the frontend once the page can listen.
+        handleSendIntent(getIntent());
+    }
+
+    @Override
+    protected void onNewIntent(Intent intent) {
+        super.onNewIntent(intent);
+        // singleTask: warm-start shares arrive here.
+        handleSendIntent(intent);
+    }
+
+    /** Queue an EPUB that arrived via ACTION_SEND / ACTION_VIEW. */
+    private void handleSendIntent(@Nullable Intent intent) {
+        if (intent == null) return;
+        String action = intent.getAction();
+        Uri uri = null;
+        if (Intent.ACTION_SEND.equals(action)) {
+            uri = intent.getParcelableExtra(Intent.EXTRA_STREAM);
+        } else if (Intent.ACTION_VIEW.equals(action)) {
+            uri = intent.getData();
+        }
+        if (uri == null) return;
+        final Uri u = uri;
+        // Copy off the main thread: the stream can be several MB.
+        new Thread(() -> {
+            String path = copyUriToCache(u);
+            if (path != null) {
+                queueSharedImport(path);
+            }
+        }).start();
+    }
+
+    // An EPUB path waiting for the webview to mount its event listeners
+    // (cold-start shares land before onPageFinished). Guarded by itself.
+    private volatile String pendingSharedPath;
+
+    private synchronized void queueSharedImport(String path) {
+        pendingSharedPath = path;
+        runOnUiThread(this::flushPendingSharedImport);
+    }
+
+    /** Deliver the queued shared path to JS, if the page is ready to listen. */
+    private void flushPendingSharedImport() {
+        String path = pendingSharedPath;
+        if (path == null || bridge == null) return;
+        pendingSharedPath = null;
+        try {
+            String json = new JSONObject().put("path", path).toString();
+            bridge.emitEvent("common:sharedImport", json);
+            Log.d(TAG, "sharedImport emitted: " + json);
+        } catch (Exception e) {
+            Log.e(TAG, "flushPendingSharedImport failed", e);
+        }
     }
 
     @SuppressLint("SetJavaScriptEnabled")
@@ -252,6 +307,8 @@ public class MainActivity extends AppCompatActivity {
                 // Now that JS listeners are mounted, push a snapshot of the
                 // current battery / network / theme so the UI starts populated.
                 emitSystemSnapshot();
+                // A share that cold-started the app can only be delivered now.
+                flushPendingSharedImport();
             }
         });
 

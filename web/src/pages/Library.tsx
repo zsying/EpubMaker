@@ -217,6 +217,10 @@ export default function Library() {
 
   useEffect(() => {
     void load();
+    // Books can also arrive while the user is elsewhere: a system-share
+    // import (App.tsx) or a Wi-Fi transfer announces itself with this event.
+    const onImported = () => void load();
+    window.addEventListener('epubmaker:imported', onImported);
     api
       .dictStatus()
       .then((d) => {
@@ -234,6 +238,7 @@ export default function Library() {
         setProgress(m);
       })
       .catch(() => undefined);
+    return () => window.removeEventListener('epubmaker:imported', onImported);
   }, [load]);
 
   // Search is debounced, and the first render is skipped: the effect above has
@@ -578,14 +583,6 @@ export default function Library() {
           </div>
         )}
       </div>
-
-      {/* Phone-only floating import button; CSS hides it outside the 640px
-          breakpoint, where the header buttons do this job. */}
-      <button className="fab" aria-label="导入书籍" onClick={() => setImportOpen(true)}>
-        <svg width="22" height="22" viewBox="0 0 22 22" aria-hidden="true">
-          <path d="M11 4.5 V17.5 M4.5 11 H17.5" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" />
-        </svg>
-      </button>
 
       {importOpen && (
         <div className="sheet-mask" onClick={() => setImportOpen(false)}>

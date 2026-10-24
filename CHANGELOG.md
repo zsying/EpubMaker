@@ -5,6 +5,19 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+- **Wi-Fi 传书** — a new「我的」entry starts a tiny LAN upload server on the
+  phone; a computer on the same Wi-Fi opens the shown URL (or scans the QR
+  code) and drops EPUB files straight into the shelf, with per-file progress
+  and duplicate/failure reporting. Requires no account and no cloud; the
+  router must allow device-to-device traffic (AP isolation off).
+- **System-share import (Android)** — sharing an EPUB from WeChat, a browser
+  or a file manager ("分享到 EpubMaker") or opening one with the app now
+  imports it directly: the host copies the content URI into the cache and
+  hands it to the frontend, which imports it wherever the user happens to be.
+- **About page fixes** — the build time now formats in the device's timezone
+  (Go's time.Local is unusable inside the Android c-shared runtime, so the
+  backend hands over raw unix seconds); the shelf's floating ＋ button is
+  gone, the header ＋ is the one import entry.
 - **About page** — a new「关于」entry on the「我的」tab shows the app version
   (new `Backend.AppVersion` binding) and the system paths block that used to
   trail the shelf (config file, data/export/log dirs). The shelf footer is gone.

@@ -22,8 +22,23 @@ export default function About() {
       .catch(() => undefined);
     api
       .buildTime()
-      .then((t) => {
-        if (alive) setBuildTime(t);
+      .then((sec) => {
+        // The backend hands over raw unix seconds (Go's time.Local is
+        // unreliable inside the Android c-shared runtime), so the device's
+        // timezone does the formatting here.
+        const n = Number(sec);
+        if (alive && n > 0) {
+          setBuildTime(
+            new Date(n * 1000).toLocaleString('zh-CN', {
+              year: 'numeric',
+              month: '2-digit',
+              day: '2-digit',
+              hour: '2-digit',
+              minute: '2-digit',
+              hour12: false,
+            }),
+          );
+        }
       })
       .catch(() => undefined);
     api

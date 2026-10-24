@@ -14,6 +14,7 @@ const ENTRIES = [
   { to: '/annotations', title: '划线', desc: '高亮与批注' },
   { to: '/trash', title: '回收站', desc: '已删除的书' },
   { to: '/webdav', title: 'WebDAV', desc: '远程书库连接与导入' },
+  { to: '/wifi', title: 'Wi-Fi 传书', desc: '电脑扫码，局域网直传 EPUB' },
   { to: '/settings', title: '设置', desc: '字体、翻页模式等阅读偏好' },
   { to: '/about', title: '关于', desc: '版本与系统信息' },
 ];
