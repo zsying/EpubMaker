@@ -34,10 +34,18 @@ export default function Annotations() {
   }
 
   function jump(a: AnnotationListItem) {
-    // `reveal` makes the reader select the annotated range on arrival: the
-    // page locks onto the line and the selection toolbar is already up.
+    // `preview` puts the reader in its locked visit mode: the page opens on the
+    // highlighted range (selected, toolbar up) and the reading position stays
+    // untouched.
     nav(`/books/${a.bookId}/read/${a.chapterId}`, {
-      state: { offset: a.startOffset, reveal: { start: a.startOffset, end: a.endOffset } },
+      state: {
+        preview: {
+          source: 'annotation',
+          label: a.text,
+          offset: a.startOffset,
+          end: a.endOffset,
+        },
+      },
     });
   }
 

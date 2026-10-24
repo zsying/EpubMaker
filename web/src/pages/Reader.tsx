@@ -257,10 +257,30 @@ type LookupCardState = {
   context: string;
 } | null;
 
-// A visit opened from the notebook: "show me where I met this word". It is a
-// detour, not reading — the position it opens at must not become the reading
-// position, which is why the whole session disables progress saving.
-type Detour = { word: string; surface: string; offset: number };
+// A visit opened from one of the notebook pages (生词本 / 划线 / 书签): "show me
+// this entry in the book". It is a detour, not reading — the position it opens
+// at must not become the reading position, which is why the whole session
+// disables progress saving AND page turning: a preview that drifts through the
+// book would invite exactly the record clobbering the mode exists to prevent.
+type Preview = {
+  source: 'vocab' | 'annotation' | 'bookmark';
+  // What the banner names: the word, the annotated text or the bookmark label.
+  label: string;
+  offset: number;
+  // Annotation jumps carry the full highlighted range to re-select on arrival.
+  end?: number;
+  // Vocab jumps anchor a single word (surface form first, then the lemma).
+  word?: string;
+  surface?: string;
+};
+
+// Where each preview came from — the label on the banner and the page the
+// back button returns to.
+const PREVIEW_SOURCE: Record<Preview['source'], { back: string; hint: string }> = {
+  vocab: { back: '/vocab', hint: '生词本 · 临时查看，不记录阅读进度' },
+  annotation: { back: '/annotations', hint: '划线 · 临时查看，不记录阅读进度' },
+  bookmark: { back: '/bookmarks', hint: '书签 · 临时查看，不记录阅读进度' },
+};
 
 // Pseudo-annotation id for the word being looked at. Prefixing it keeps it from
 // colliding with real annotation ids, and the click handler skips it because
@@ -460,10 +480,14 @@ export default function Reader() {
   const loc = useLocation();
 
   // Read once on mount: the router keeps this state for the whole visit, but a
-  // chapter change inside the reader must not re-open a detour.
-  const [detour, setDetour] = useState<Detour | null>(
-    () => (loc.state as { detour?: Detour } | null)?.detour ?? null,
+  // chapter change inside the reader must not re-open a preview.
+  const entryRef = useRef<Preview | null>(
+    (loc.state as { preview?: Preview } | null)?.preview ?? null,
   );
+  const [preview, setPreview] = useState<Preview | null>(() => entryRef.current);
+  // Mirror for gesture guards (turn / openChapter run in listeners and effects
+  // that must not depend on — or trail — a state update).
+  const previewRef = useRef<Preview | null>(entryRef.current);
   // Where the reader actually was before being pulled here from the notebook.
   const [origin, setOrigin] = useState<ReadingProgress | null>(null);
 
@@ -670,7 +694,7 @@ export default function Reader() {
         setToc(tocEntries ?? []);
         setBookmarks(bms);
         setAnnotations(anns);
-        // Kept so a detour can offer "back to where I actually was".
+        // Kept so a preview can offer "jump to where I actually was".
         setOrigin(prog);
 
         const exists = (cid: string | undefined) => !!cid && cs.some((c) => c.id === cid);
@@ -682,15 +706,18 @@ export default function Reader() {
         if (prog && prog.chapterId === target && prog.positionOffset > 0) {
           restoreOffsetRef.current = prog.positionOffset;
         }
-        const restoreOffset = (loc.state as { offset?: number } | null)?.offset;
-        if (restoreOffset !== undefined && !locationUsedRef.current) {
-          restoreOffsetRef.current = restoreOffset;
+        // A preview visit (生词本 / 划线 / 书签) carries its own anchor, which
+        // outranks the saved progress: the whole point is landing on THAT spot.
+        const entry = entryRef.current;
+        if (entry && !locationUsedRef.current) {
+          restoreOffsetRef.current = entry.offset;
           locationUsedRef.current = true;
+          // Annotation jumps bring the highlighted range; the reader selects
+          // it (toolbar and handles included) once the text has landed.
+          if (entry.end !== undefined && entry.end > entry.offset) {
+            pendingRevealRef.current = { start: entry.offset, end: entry.end };
+          }
         }
-        // The annotation list page jumps with the range pre-computed; the
-        // reader selects it (toolbar and handles included) once landed.
-        const revealSel = (loc.state as { reveal?: { start: number; end: number } } | null)?.reveal;
-        if (revealSel && revealSel.end > revealSel.start) pendingRevealRef.current = revealSel;
         if (restoreOffsetRef.current === null) {
           pageIntentRef.current = { type: 'first' };
         }
@@ -715,10 +742,10 @@ export default function Reader() {
   /* ---- render current chapter HTML ---- */
   useEffect(() => {
     if (!current) return;
-    // A detour from the notebook never writes progress: the reader is here to
-    // look at one word, and opening the book again should return them to where
-    // they were actually reading.
-    if (mode === 'scroll' && !detour) {
+    // A preview visit (生词本 / 划线 / 书签) never writes progress: the reader
+    // is here to look at one spot, and opening the book again should return
+    // them to where they were actually reading.
+    if (mode === 'scroll' && !preview) {
       localStorage.setItem(posKey(id), current);
       // Writing the chapter start here would clobber the position that is about
       // to be restored a moment later, so it only happens when there is nothing
@@ -820,23 +847,23 @@ export default function Reader() {
       pendingRevealRef.current = null;
       window.setTimeout(() => revealOffsets(pr.start, pr.end), 80);
     }
-    if (detour) return;
+    if (preview) return;
     // Landing counts as a position: record it, otherwise a reader who jumps
     // back and leaves immediately would find the old anchor next time.
     if (current) api.saveProgress(id, current, target, 1).catch(() => {});
     setFlash({ left: after.left - 2, top: after.top - 3, width: Math.max(after.width, 6), height: after.height + 6 });
     const timer = window.setTimeout(() => setFlash(null), 1400);
     return () => window.clearTimeout(timer);
-  }, [safeHtml, mode, detour]);
+  }, [safeHtml, mode, preview]);
 
-  // The word a notebook jump points at stays lit for as long as you are on the
+  // The word a 生词本 jump points at stays lit for as long as you are on the
   // page. A 1.4s flash is enough to find a bookmark; it is not enough to study
   // a word, and this visit exists precisely to look at the word in context.
   useEffect(() => {
-    if (mode !== 'scroll' || !detour) return;
+    if (mode !== 'scroll' || preview?.source !== 'vocab' || !preview.word) return;
     const el = contentRef.current;
     if (!el || el.querySelector('mark.hl-vocab')) return;
-    const r = wordRangeAt(el, detour.offset, [detour.surface, detour.word]);
+    const r = wordRangeAt(el, preview.offset, [preview.surface, preview.word].filter((s): s is string => !!s));
     if (!r) return;
     applyHighlights(el, [{ id: ANCHOR_ID, startOffset: r.start, endOffset: r.end, color: 'vocab' }]);
     if (!detourRevealedRef.current) {
@@ -844,16 +871,19 @@ export default function Reader() {
       pendingRevealRef.current = { start: r.start, end: r.end };
       window.setTimeout(() => revealOffsets(r.start, r.end), 80);
     }
-  }, [safeHtml, mode, detour]);
+  }, [safeHtml, mode, preview]);
 
   /* ---- imperatively set content + highlights (paged mode) ---- */
   useLayoutEffect(() => {
     const el = contentRef.current;
     if (!el || mode !== 'paged') return;
     el.innerHTML = safeHtml;
-    // The detour word is wrapped exactly like a highlight, so it survives page
+    // The preview word is wrapped exactly like a highlight, so it survives page
     // turns: the markup lives in the chapter, not in a floating layer.
-    const anchor = detour ? wordRangeAt(el, detour.offset, [detour.surface, detour.word]) : null;
+    const anchor =
+      preview && preview.word
+        ? wordRangeAt(el, preview.offset, [preview.surface, preview.word].filter((s): s is string => !!s))
+        : null;
     if (anchor && !detourRevealedRef.current) {
       detourRevealedRef.current = true;
       pendingRevealRef.current = { start: anchor.start, end: anchor.end };
@@ -872,7 +902,7 @@ export default function Reader() {
     });
     scheduleMeasure();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [safeHtml, annotationsForChapter, mode, detour]);
+  }, [safeHtml, annotationsForChapter, mode, preview]);
 
   /* ---- measure pages (paged mode) ---- */
   useEffect(() => {
@@ -1261,17 +1291,17 @@ export default function Reader() {
 
   /* ---- progress persistence (paged mode) ---- */
   useEffect(() => {
-    if (mode !== 'paged' || !current || detour) return;
+    if (mode !== 'paged' || !current || preview) return;
     const t = setTimeout(() => {
       const off = offsetForPage(pageIndex);
       api.saveProgress(id, current, off, pageCount).catch(() => {});
     }, 600);
     return () => clearTimeout(t);
-  }, [mode, current, pageIndex, pageCount, id, detour]);
+  }, [mode, current, pageIndex, pageCount, id, preview]);
 
   /* ---- progress persistence (scrolling mode) ---- */
   useEffect(() => {
-    if (mode !== 'scroll' || !current || detour) return;
+    if (mode !== 'scroll' || !current || preview) return;
     const scroller = mainRef.current;
     if (!scroller) return;
     let timer = 0;
@@ -1287,7 +1317,7 @@ export default function Reader() {
       window.clearTimeout(timer);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [mode, current, id, detour, safeHtml]);
+  }, [mode, current, id, preview, safeHtml]);
 
   const idx = chapters.findIndex((c) => c.id === current);
   const prev = idx > 0 ? chapters[idx - 1] : null;
@@ -1341,6 +1371,11 @@ export default function Reader() {
 
   /* ---- navigation ---- */
   function openChapter(cid: string, intent: PageIntent = { type: 'first' }) {
+    // A preview visit is pinned to its anchor: chapter hopping from the TOC
+    // would drift through the book, and the mode exists precisely so that
+    // wandering never touches the reading position. The two exits
+    // (jump-to-last / start-from-here) clear the preview before calling in.
+    if (previewRef.current) return;
     setPopover(null);
     if (sel) clearSelectionUI();
     setBmOpen(false);
@@ -1378,6 +1413,10 @@ export default function Reader() {
   }
 
   function turn(delta: number) {
+    // Preview visits do not turn pages: the position must stay on the anchor,
+    // and every save guard aside, drifting would break the "temporary look"
+    // model. Use the banner's two exits to leave the mode.
+    if (previewRef.current) return;
     // The card points at a word on the page being left behind.
     cancelWordLookup();
     setLookupCard(null);
@@ -1760,22 +1799,42 @@ export default function Reader() {
   }, [mode, pageIndex, pageCount, pagesPerView, prev, next]);
 
   /* ---- detour (opened from the notebook) ---- */
-  // Adopts the detour position as the reading position. Deliberately explicit:
-  // it is the only way a notebook visit is allowed to overwrite progress.
-  function resumeFromDetour() {
-    setDetour(null);
+  // Ends the preview and switches to normal reading. Every exit below calls
+  // this FIRST: it clears both the state and the gesture guard ref, so the
+  // openChapter / turn calls that follow are no longer blocked.
+  function endPreview() {
+    previewRef.current = null;
+    setPreview(null);
+    // The visit's anchor mark has served its purpose; unwrap it so normal
+    // reading shows plain text again.
+    const root = contentRef.current;
+    if (root) {
+      root.querySelectorAll('mark.hl-vocab').forEach((m) => {
+        const frag = document.createDocumentFragment();
+        while (m.firstChild) frag.appendChild(m.firstChild);
+        m.replaceWith(frag);
+      });
+    }
+    detourRevealedRef.current = false;
+  }
+
+  /* ---- preview (opened from 生词本 / 划线 / 书签) ---- */
+  // Adopts the preview position as the reading position. Deliberately explicit:
+  // it is the only way a jumped-in visit is allowed to overwrite progress.
+  function resumeFromPreview() {
+    endPreview();
     if (!current) return;
     const off = mode === 'paged' ? offsetForPage(pageIndex) : offsetAtViewportTop();
     api.saveProgress(id, current, off, mode === 'paged' ? pageCount : 1).catch(() => {});
-    toast('已从当前位置继续阅读', 'success');
+    toast('已从当前位置开始阅读', 'success');
   }
 
-  // Goes back to where the reader actually was. The detour ends here: they are
+  // Jumps to where the reader actually was. The preview ends here: they are
   // standing on their own reading position again, so saving progress from now
   // on records the same place rather than a place they never chose.
-  function backToLastReading() {
+  function jumpToLastReading() {
     if (!origin || !origin.chapterId) return;
-    setDetour(null);
+    endPreview();
     if (origin.chapterId !== current) {
       openChapter(origin.chapterId, { type: 'restore', offset: origin.positionOffset });
       return;
@@ -1791,10 +1850,10 @@ export default function Reader() {
 
   /* ---- keyboard ---- */
   function exitReading() {
-    // Leaving a detour returns to the notebook and leaves the reading position
-    // alone — that is the whole point of the visit.
-    if (detour) {
-      nav('/vocab');
+    // Leaving a preview returns to the page that opened it and leaves the
+    // reading position alone — that is the whole point of the visit.
+    if (previewRef.current) {
+      nav(PREVIEW_SOURCE[previewRef.current.source].back);
       return;
     }
     // Persist current position before leaving so progress isn't lost.
@@ -1886,16 +1945,16 @@ export default function Reader() {
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [mode, prev, next, pageIndex, pageCount, chromeOpen, chromeHover, popover, sel, bmOpen, annOpen, tocOpen, settingsOpen, lookupCard, current, id, detour]);
+  }, [mode, prev, next, pageIndex, pageCount, chromeOpen, chromeHover, popover, sel, bmOpen, annOpen, tocOpen, settingsOpen, lookupCard, current, id, preview]);
 
   /* ---- hover the top/bottom edge to reveal the reader chrome (paged) ---- */
   useEffect(() => {
     if (mode !== 'paged') return;
-    // During a notebook detour the banner floats along the bottom edge, and a
+    // During a preview visit the banner floats along the bottom edge, and a
     // chrome bar sliding out under the pointer would cover the very buttons the
     // reader is reaching for. The bars stay reachable: Enter, or a click in the
     // middle of the page.
-    if (detour) {
+    if (preview) {
       setChromeHover(false);
       return;
     }
@@ -1925,7 +1984,7 @@ export default function Reader() {
       if (raf) cancelAnimationFrame(raf);
       setChromeHover(false);
     };
-  }, [mode, detour]);
+  }, [mode, preview]);
 
   /* ---- selection -> toolbar (both modes) ---- */
 
@@ -2581,7 +2640,11 @@ export default function Reader() {
 
   const mTopBar = (
     <div className={`reader-chrome top m-top${chromeCls}`}>
-      <button className="chrome-icon" onClick={exitReading} aria-label={detour ? '返回生词本' : '返回书架'}>
+      <button
+        className="chrome-icon"
+        onClick={exitReading}
+        aria-label={preview ? '返回来源页' : '返回书架'}
+      >
         {iconBack}
       </button>
       <div className="m-title">{currentChapter?.title || book.title}</div>
@@ -2603,7 +2666,7 @@ export default function Reader() {
       <div className="m-slider-row">
         <button
           className="chrome-icon text"
-          disabled={!prev}
+          disabled={!prev || !!preview}
           onClick={() => prev && openChapter(prev.id, { type: 'last' })}
         >
           上一章
@@ -2614,6 +2677,7 @@ export default function Reader() {
           min={0}
           max={Math.max(0, maxPageIndex)}
           value={Math.min(pageIndex, maxPageIndex)}
+          disabled={!!preview}
           onChange={(e) => {
             setLookupCard(null);
             setSel(null);
@@ -2624,7 +2688,7 @@ export default function Reader() {
         />
         <button
           className="chrome-icon text"
-          disabled={!next}
+          disabled={!next || !!preview}
           onClick={() => next && openChapter(next.id, { type: 'first' })}
         >
           下一章
@@ -2859,32 +2923,39 @@ export default function Reader() {
     </>
   );
 
-  // The banner that explains a detour and offers the two ways out of it. It is
-  // the only place in the reader that admits it is not a normal visit.
+  // The banner that explains a preview visit and carries its unified toolbar:
+  // back to the list that opened the book, jump to the real reading position,
+  // or adopt this spot and read on. It is the only place in the reader that
+  // admits it is not a normal visit.
   //
   // Floating above the page it sits clear of the bottom chrome instead of under
   // it, so the buttons never end up behind a bar that appears on approach.
-  const detourBar = detour ? (
+  const previewSrc = preview ? PREVIEW_SOURCE[preview.source] : null;
+  const detourBar = preview && previewSrc ? (
     <div
       className={`detour-bar${mode === 'paged' ? ' floating' : ''}`}
       style={mode === 'paged' && chromeOpen ? { bottom: touchPrimary ? 132 : 58 } : undefined}
     >
-      <span className="detour-word">{detour.word}</span>
-      <span className="detour-hint">生词本跳转 · 临时查看，不记录阅读进度</span>
+      <span className="detour-word">{preview.label}</span>
+      <span className="detour-hint">{previewSrc.hint}</span>
       <span className="detour-gap" />
+      <button className="btn sm" onClick={() => nav(previewSrc.back)} title="返回来源列表">
+        返回
+      </button>
       <button
         className="btn sm"
-        disabled={!origin}
-        onClick={backToLastReading}
-        title={origin ? '回到上次读到的地方' : '这本书还没有阅读记录'}
+        disabled={!origin || !origin.chapterId}
+        onClick={jumpToLastReading}
+        title={origin ? '回到上次读到的地方，正常阅读' : '这本书还没有阅读记录'}
       >
-        回到上次阅读
+        跳到最后阅读
       </button>
-      <button className="btn sm" onClick={resumeFromDetour} title="把当前位置记为阅读进度，正常往下读">
-        从此处继续读
-      </button>
-      <button className="btn sm" onClick={() => nav('/vocab')}>
-        返回生词本
+      <button
+        className="btn sm"
+        onClick={resumeFromPreview}
+        title="把当前位置记为阅读进度，从这里开始正常阅读"
+      >
+        从当前开始阅读
       </button>
     </div>
   ) : null;
@@ -2944,8 +3015,11 @@ export default function Reader() {
               <Link className="btn sm" to={`/books/${id}/edit`}>
                 整理
               </Link>
-              <button className="btn sm" onClick={() => nav(detour ? '/vocab' : '/')}>
-                {detour ? '生词本' : '书架'}
+              <button
+                className="btn sm"
+                onClick={() => nav(preview ? PREVIEW_SOURCE[preview.source].back : '/')}
+              >
+                {preview ? '返回' : '书架'}
               </button>
             </div>
           </div>
@@ -3158,8 +3232,11 @@ export default function Reader() {
           <>
           <div className="reader-chrome top">
             <div className="chrome-left">
-              <button className="btn sm" onClick={() => nav(detour ? '/vocab' : '/')}>
-                {detour ? '← 生词本' : '← 书架'}
+              <button
+                className="btn sm"
+                onClick={() => nav(preview ? PREVIEW_SOURCE[preview.source].back : '/')}
+              >
+                {preview ? '← 返回' : '← 书架'}
               </button>
               <div className="crumb">
                 <strong>{book.title}</strong>

@@ -34,7 +34,17 @@ export default function Bookmarks() {
   }
 
   function jump(b: BookmarkListItem) {
-    nav(`/books/${b.bookId}/read/${b.chapterId}`, { state: { offset: b.anchor } });
+    // `preview` locks the visit: opens on the bookmark, never touches the
+    // reading position.
+    nav(`/books/${b.bookId}/read/${b.chapterId}`, {
+      state: {
+        preview: {
+          source: 'bookmark',
+          label: b.label || b.chapterTitle || b.bookTitle,
+          offset: b.anchor,
+        },
+      },
+    });
   }
 
   return (

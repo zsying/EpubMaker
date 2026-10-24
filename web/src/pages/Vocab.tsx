@@ -186,10 +186,15 @@ export default function Vocab() {
     if (!it.bookId || !it.chapterId) return;
     nav(`/books/${it.bookId}/read/${it.chapterId}`, {
       state: {
-        offset: it.offset,
-        // Marking the visit as a detour is what keeps it from overwriting the
+        // Marking the visit as a preview is what keeps it from overwriting the
         // reading position: the reader came here to see one word, not to read.
-        detour: { word: it.term, surface: it.surface || it.term, offset: it.offset },
+        preview: {
+          source: 'vocab',
+          label: it.term,
+          offset: it.offset,
+          word: it.term,
+          surface: it.surface || it.term,
+        },
       },
     });
   }
