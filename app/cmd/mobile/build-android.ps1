@@ -179,8 +179,12 @@ if (-not $ApkOnly) {
 
   Push-Location $MobileDir
   try {
+    # The about page shows when this binary was linked; unix seconds keep the
+    # -X flag free of spaces and quoting hazards.
+    $buildUnix = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
     & go build -buildmode=c-shared -overlay build/android/overlay.json `
-      -tags android,debug -buildvcs=false '-gcflags=all=-l' -o $SoOut .
+      -tags android,debug -buildvcs=false '-gcflags=all=-l' `
+      -ldflags "-X epubmaker-desktop/internal/app.BuildTimeUnix=$buildUnix" -o $SoOut .
     if ($LASTEXITCODE -ne 0) { throw 'go build failed' }
 
     # Restore whatever host build settings later tooling expects.

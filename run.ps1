@@ -260,10 +260,13 @@ function Invoke-Build {
   try {
     # wails build runs frontend:build (npm run build + sync-frontend-dist.js)
     # itself, so the frontend bundle is produced and embedded automatically.
+    # Plain unix seconds again: no spaces for the wails -> go flag chain.
+    $buildUnix = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
+    $ldflags = "-X epubmaker-desktop/internal/app.BuildTimeUnix=$buildUnix"
     if ($Installer) {
-      Invoke-Native 'wails' @('build', '-nsis')
+      Invoke-Native 'wails' @('build', '-nsis', '-ldflags', $ldflags)
     } else {
-      Invoke-Native 'wails' @('build')
+      Invoke-Native 'wails' @('build', '-ldflags', $ldflags)
     }
   } finally {
     Pop-Location

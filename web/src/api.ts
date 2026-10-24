@@ -403,6 +403,9 @@ export const api = {
   /** Version string for the about page (Backend.AppVersion). */
   appVersion: () => call<string>('AppVersion'),
 
+  /** Link timestamp for the about page; '' on dev builds (Backend.BuildTime). */
+  buildTime: () => call<string>('BuildTime'),
+
   listBooks: (keyword?: string) => call<Book[]>('ListBooks', keyword ?? ''),
 
   /** Opens the native EPUB multi-select dialog; returns [] when cancelled. */

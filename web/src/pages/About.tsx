@@ -9,6 +9,7 @@ import SubHeader from '../components/SubHeader';
  */
 export default function About() {
   const [version, setVersion] = useState<string | null>(null);
+  const [buildTime, setBuildTime] = useState('');
   const [paths, setPaths] = useState<AppPaths | null>(null);
 
   useEffect(() => {
@@ -17,6 +18,12 @@ export default function About() {
       .appVersion()
       .then((v) => {
         if (alive) setVersion(v);
+      })
+      .catch(() => undefined);
+    api
+      .buildTime()
+      .then((t) => {
+        if (alive) setBuildTime(t);
       })
       .catch(() => undefined);
     api
@@ -39,7 +46,10 @@ export default function About() {
           E
         </span>
         <div className="about-name">EpubMaker</div>
-        <div className="about-version">{version ? `版本 ${version}` : ''}</div>
+        <div className="about-version">
+          {version ? `版本 ${version}` : ''}
+          {buildTime ? ` · 编译于 ${buildTime}` : ''}
+        </div>
         <p className="about-desc">本地 EPUB 阅读与整理工具</p>
       </div>
 
