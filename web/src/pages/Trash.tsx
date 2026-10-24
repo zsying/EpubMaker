@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { api, TrashItem } from '../api';
 import { toast, toastError } from '../toast';
+import SubHeader from '../components/SubHeader';
 
 function fmt(iso: string | null) {
   if (!iso) return '—';
@@ -63,14 +64,11 @@ export default function Trash() {
 
   return (
     <div className="page">
-      <div className="lib-head">
-        <h1>回收站</h1>
-        <span className="tag">{items.length} 项</span>
-        <span style={{ flex: 1 }} />
+      <SubHeader title="回收站" tag={`${items.length} 项`}>
         <Link className="btn" to="/">
           返回书架
         </Link>
-      </div>
+      </SubHeader>
 
       {loading ? (
         <div className="loading">加载中…</div>

@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { api, BookmarkListItem } from '../api';
 import { toastError } from '../toast';
+import SubHeader from '../components/SubHeader';
 
 export default function Bookmarks() {
   const nav = useNavigate();
@@ -38,10 +39,7 @@ export default function Bookmarks() {
 
   return (
     <div className="page">
-      <div className="lib-head">
-        <h1>书签</h1>
-        <span className="tag">{items.length} 条</span>
-      </div>
+      <SubHeader title="书签" tag={`${items.length} 条`} />
 
       {loading ? (
         <div className="loading">加载中…</div>

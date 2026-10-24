@@ -10,6 +10,7 @@ import Bookmarks from './pages/Bookmarks';
 import Annotations from './pages/Annotations';
 import Vocab from './pages/Vocab';
 import Me from './pages/Me';
+import Settings from './pages/Settings';
 import { initFileDrop } from './filedrop';
 import { Toaster } from './toast';
 import MobileTabs from './components/MobileTabs';
@@ -72,6 +73,7 @@ export default function App() {
             <Route path="/trash" element={<Trash />} />
             <Route path="/webdav" element={<WebDav />} />
             <Route path="/me" element={<Me />} />
+            <Route path="/settings" element={<Settings />} />
             <Route path="/books/:id/edit" element={<Editor />} />
             <Route path="/books/:id/split" element={<Split />} />
             <Route path="*" element={<div className="page empty">页面不存在</div>} />

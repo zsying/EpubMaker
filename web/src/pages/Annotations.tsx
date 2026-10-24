@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { api, AnnotationListItem } from '../api';
 import { toastError } from '../toast';
+import SubHeader from '../components/SubHeader';
 
 export default function Annotations() {
   const nav = useNavigate();
@@ -38,10 +39,7 @@ export default function Annotations() {
 
   return (
     <div className="page">
-      <div className="lib-head">
-        <h1>划线 / 批注</h1>
-        <span className="tag">{items.length} 条</span>
-      </div>
+      <SubHeader title="划线 / 批注" tag={`${items.length} 条`} />
 
       {loading ? (
         <div className="loading">加载中…</div>

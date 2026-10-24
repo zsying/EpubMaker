@@ -5,6 +5,7 @@ import { api, Book, Chapter, ImageAsset, TocEntry, downloadDataUrl } from '../ap
 import { buildTocItems, visibleTocItems } from '../tocLayout';
 import { Caret } from '../Caret';
 import { toast, toastError } from '../toast';
+import SubHeader from '../components/SubHeader';
 
 type Tab = 'book' | 'chapter';
 
@@ -249,9 +250,7 @@ export default function Editor() {
 
   return (
     <div className="page wide">
-      <div className="lib-head">
-        <h1 style={{ fontSize: 18 }}>整理 · {book.title}</h1>
-        <span style={{ flex: 1 }} />
+      <SubHeader title={`整理 · ${book.title}`}>
         <Link className="btn" to={`/books/${id}/read`}>
           阅读
         </Link>
@@ -261,7 +260,7 @@ export default function Editor() {
         <button className="btn primary" onClick={() => void exportBook()}>
           导出 EPUB
         </button>
-      </div>
+      </SubHeader>
 
       <div className="editor-grid">
         {/* 章节列表 */}

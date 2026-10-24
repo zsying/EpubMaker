@@ -6,77 +6,24 @@ import { Caret } from '../Caret';
 import { toast, toastError } from '../toast';
 import { Anchor, EDGE_GAP, placeOverlay } from '../overlay';
 import { wordAt } from '../wordHit';
+import {
+  MODE_KEY,
+  THEME_KEY,
+  FONT_FAMILY_KEY,
+  FONT_OVERRIDE_KEY,
+  fontOverrideEnabled,
+  type ReadMode,
+  type ReadTheme,
+} from '../readingPrefs';
+import FontPicker, { CUSTOM_FONT_FAMILY } from '../components/FontPicker';
 
 const FONT_KEY = 'epubmaker.fontSize';
-// v2: the original key was written on every mount, so every existing user has
-// the old default ('scroll') persisted under it — bumping the key is the only
-// way a new default can actually reach them.
-const MODE_KEY = 'epubmaker.readMode.v2';
-const THEME_KEY = 'epubmaker.readTheme';
 const TOC_DOCK_KEY = 'epubmaker.tocDocked';
-const FONT_FAMILY_KEY = 'epubmaker.readFont';
-
-/** The @font-face family name the custom reading font is registered under. */
-const CUSTOM_FONT_FAMILY = 'EpubBookFont';
-
-/** Downloadable open-source fonts (OFL licensed, single-file, jsDelivr-served
- * from the vendors' own release branches). Files land in the app data dir via
- * Backend.DownloadFont and are served back at /fonts/<file>. */
-const FONT_CATALOG: Array<{ file: string; label: string; note: string; url: string }> = [
-  {
-    file: 'SourceHanSerifCN-Regular.otf',
-    label: '思源宋体',
-    note: '正文推荐',
-    url: 'https://cdn.jsdelivr.net/gh/adobe-fonts/source-han-serif@release/SubsetOTF/CN/SourceHanSerifCN-Regular.otf',
-  },
-  {
-    file: 'SourceHanSansCN-Regular.otf',
-    label: '思源黑体',
-    note: '正文推荐',
-    url: 'https://cdn.jsdelivr.net/gh/adobe-fonts/source-han-sans@release/SubsetOTF/CN/SourceHanSansCN-Regular.otf',
-  },
-  {
-    // Kai style brush handwriting (Google Fonts, OFL).
-    file: 'MaShanZheng-Regular.ttf',
-    label: '马善政楷书',
-    note: '毛笔楷体',
-    url: 'https://cdn.jsdelivr.net/gh/google/fonts@main/ofl/mashanzheng/MaShanZheng-Regular.ttf',
-  },
-  {
-    // Semi-cursive running hand (Google Fonts, OFL).
-    file: 'ZhiMangXing-Regular.ttf',
-    label: '志莽行书',
-    note: '行书',
-    url: 'https://cdn.jsdelivr.net/gh/google/fonts@main/ofl/zhimangxing/ZhiMangXing-Regular.ttf',
-  },
-  {
-    // Loose cursive brush hand (Google Fonts, OFL).
-    file: 'LiuJianMaoCao-Regular.ttf',
-    label: '柳建毛草',
-    note: '草书手写',
-    url: 'https://cdn.jsdelivr.net/gh/google/fonts@main/ofl/liujianmaocao/LiuJianMaoCao-Regular.ttf',
-  },
-  {
-    // Running-hand casual script (Google Fonts, OFL).
-    file: 'LongCang-Regular.ttf',
-    label: '龙藏行书',
-    note: '行楷手写',
-    url: 'https://cdn.jsdelivr.net/gh/google/fonts@main/ofl/longcang/LongCang-Regular.ttf',
-  },
-  {
-    // Rounded playful handwriting (Google Fonts, OFL).
-    file: 'ZCOOLKuaiLe-Regular.ttf',
-    label: '站酷快乐体',
-    note: '圆润手写',
-    url: 'https://cdn.jsdelivr.net/gh/google/fonts@main/ofl/zcoolkuaile/ZCOOLKuaiLe-Regular.ttf',
-  },
-];
 
 // Reading surface themes. Only the phone shows the settings panel today, but
 // the class applies to both hosts: the colours are plain CSS overrides on
 // `.reader.theme-*`, so pagination is untouched (text metrics change, but the
 // measure pass re-runs on any relayout anyway).
-type ReadTheme = 'paper' | 'green' | 'dark';
 const THEMES: Array<{ id: ReadTheme; label: string }> = [
   { id: 'paper', label: '纸白' },
   { id: 'green', label: '护眼' },
@@ -297,7 +244,6 @@ function TocNode({
 }
 const posKey = (id: string) => `epubmaker.pos.${id}`;
 
-type ReadMode = 'scroll' | 'paged';
 // restore carries a layout-independent source character offset (not a page
 // number), so the target page is re-derived from the current layout.
 type PageIntent = { type: 'first' | 'last' | 'restore'; offset?: number } | null;
@@ -539,12 +485,13 @@ export default function Reader() {
   const [theme, setTheme] = useState<ReadTheme>(() => (localStorage.getItem(THEME_KEY) as ReadTheme) || 'paper');
 
   // Reading font: 'default' (system) or the file name of a downloaded font.
-  // `fonts` mirrors Backend.ListFonts for the settings sheet; `fontEpoch`
-  // increments once the custom face has actually loaded, so the paged layout
-  // re-measures against the real metrics instead of the fallback's.
+  // `fontEpoch` increments once the custom face has actually loaded, so the
+  // paged layout re-measures against the real metrics instead of the fallback's.
   const [readFont, setReadFont] = useState<string>(() => localStorage.getItem(FONT_FAMILY_KEY) || 'default');
-  const [fonts, setFonts] = useState<Array<{ file: string; size: number }>>([]);
-  const [fontBusy, setFontBusy] = useState<string | null>(null);
+  // When on, the picked face beats the families an EPUB embeds (inline CSS or
+  // stylesheets would otherwise win the cascade and the choice would appear to
+  // do nothing for most books).
+  const [fontOverride, setFontOverride] = useState<boolean>(fontOverrideEnabled);
   const [fontEpoch, setFontEpoch] = useState(0);
 
   // paged reading state
@@ -766,6 +713,7 @@ export default function Reader() {
   useEffect(() => localStorage.setItem(THEME_KEY, theme), [theme]);
   useEffect(() => localStorage.setItem(TOC_DOCK_KEY, tocDocked ? '1' : '0'), [tocDocked]);
   useEffect(() => localStorage.setItem(FONT_FAMILY_KEY, readFont), [readFont]);
+  useEffect(() => localStorage.setItem(FONT_OVERRIDE_KEY, fontOverride ? '1' : '0'), [fontOverride]);
 
   // Registers the selected reading font once per change and re-measures the
   // paged layout after the face is really loaded: a font swap changes every
@@ -785,22 +733,18 @@ export default function Reader() {
       style.id = id;
       document.head.appendChild(style);
     }
-    style.textContent = `@font-face { font-family: '${CUSTOM_FONT_FAMILY}'; src: url('/fonts/${encodeURIComponent(readFont)}'); font-display: swap; }`;
+    // The override rule is a !important cascade win over EPUB-embedded
+    // font-family declarations; without it most books simply ignore the pick.
+    style.textContent =
+      `@font-face { font-family: '${CUSTOM_FONT_FAMILY}'; src: url('/fonts/${encodeURIComponent(readFont)}'); font-display: swap; }` +
+      (fontOverride
+        ? `\n.reader-content, .reader-content * { font-family: '${CUSTOM_FONT_FAMILY}', Georgia, serif !important; }`
+        : '');
     document.fonts
       .load(`16px '${CUSTOM_FONT_FAMILY}'`)
       .then(() => setFontEpoch((e) => e + 1))
       .catch(() => {});
-  }, [readFont]);
-
-  // The font picker reads the downloaded list when it is shown (and after a
-  // download completes).
-  useEffect(() => {
-    if (!settingsOpen) return;
-    api
-      .listFonts()
-      .then((list) => setFonts(list.map((f) => ({ file: f.file, size: f.size }))))
-      .catch(() => {});
-  }, [settingsOpen]);
+  }, [readFont, fontOverride]);
 
   // The docked TOC is 268px of a 390px phone — 122px left for the text. It is a
   // desktop affordance (and its toggle is hidden on touch); if the desktop
@@ -2124,27 +2068,6 @@ export default function Reader() {
     }
   }
 
-  /** Picks a reading font: undownloaded catalogue entries download first (the
-   * binding blocks until the file is stored), then the font is applied. */
-  async function pickFont(f: { file: string; label: string; url: string }) {
-    if (readFont === f.file || fontBusy) return;
-    if (!fonts.some((x) => x.file === f.file)) {
-      setFontBusy(f.file);
-      try {
-        await api.downloadFont(f.file, f.url);
-        const list = await api.listFonts().catch(() => []);
-        setFonts(list.map((x) => ({ file: x.file, size: x.size })));
-        toast(`已下载「${f.label}」`, 'success');
-      } catch (e) {
-        toastError(e);
-        return;
-      } finally {
-        setFontBusy(null);
-      }
-    }
-    setReadFont(f.file);
-  }
-
   // The reading surface's text style. The custom family falls back to a serif
   // so Chinese/latin text stays legible during the (brief) font load.
   const contentStyle: CSSProperties = { fontSize };
@@ -2456,38 +2379,26 @@ export default function Reader() {
                 </button>
               </div>
             </div>
-            {/* Reading font: 默认 plus the open-source catalogue. An undownloaded
-                font downloads on first tap (label shows ↓), then applies. */}
+            {/* Reading font: 默认 plus the open-source catalogue (download on
+                first tap). Shared with the Me→设置 page. */}
             <div className="rd-set-row rd-font-row">
               <span className="rd-set-label">字体</span>
-              <div className="rd-fonts">
-                <button
-                  className={`rd-font${readFont === 'default' ? ' on' : ''}`}
-                  onClick={() => setReadFont('default')}
-                >
-                  默认
-                </button>
-                {FONT_CATALOG.map((f) => {
-                  const installed = fonts.some((x) => x.file === f.file);
-                  return (
-                    <button
-                      key={f.file}
-                      className={`rd-font${readFont === f.file ? ' on' : ''}`}
-                      disabled={fontBusy === f.file}
-                      onClick={() => void pickFont(f)}
-                    >
-                      {fontBusy === f.file ? (
-                        '下载中…'
-                      ) : (
-                        <>
-                          {f.label + (installed ? '' : ' ↓')}
-                          <small className="rd-font-note">{f.note}</small>
-                        </>
-                      )}
-                    </button>
-                  );
-                })}
-              </div>
+              <FontPicker value={readFont} onChange={setReadFont} />
+            </div>
+            <div className="rd-set-row">
+              <span className="rd-set-label">
+                覆盖书籍字体
+                <small className="rd-set-desc">忽略 EPUB 内嵌字体设定</small>
+              </span>
+              <button
+                role="switch"
+                aria-checked={fontOverride}
+                aria-label="覆盖书籍字体"
+                className={`rd-switch${fontOverride ? ' on' : ''}`}
+                onClick={() => setFontOverride((v) => !v)}
+              >
+                <span className="rd-switch-knob" />
+              </button>
             </div>
             <div className="rd-set-row last">
               <span className="rd-set-label">背景</span>

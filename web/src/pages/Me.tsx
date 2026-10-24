@@ -12,6 +12,7 @@ const ENTRIES = [
   { to: '/annotations', title: '划线', desc: '高亮与批注' },
   { to: '/trash', title: '回收站', desc: '已删除的书' },
   { to: '/webdav', title: 'WebDAV', desc: '远程书库连接与导入' },
+  { to: '/settings', title: '设置', desc: '字体、翻页模式等阅读偏好' },
 ];
 
 export default function Me() {

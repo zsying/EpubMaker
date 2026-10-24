@@ -5,6 +5,7 @@ import { api, Book, Chapter, ImageAsset, TocEntry } from '../api';
 import { buildTocItems, visibleTocItems, splitByHierarchy } from '../tocLayout';
 import { Caret } from '../Caret';
 import { toast, toastError } from '../toast';
+import SubHeader from '../components/SubHeader';
 
 const COLORS = ['#2f6bff', '#e2725b', '#1a9c62', '#a05ce0', '#d9a12b', '#0e9ba8', '#d94f8a', '#6b7a90'];
 
@@ -343,14 +344,11 @@ export default function Split() {
 
   return (
     <div className="page wide split-page">
-      <div className="lib-head">
-        <h1 style={{ fontSize: 18 }}>拆分 · {book.title}</h1>
-        <span className="tag">{chapters.length} 章</span>
-        <span style={{ flex: 1 }} />
+      <SubHeader title={`拆分 · ${book.title}`} tag={`${chapters.length} 章`}>
         <Link className="btn" to={`/books/${id}/edit`}>
           返回整理
         </Link>
-      </div>
+      </SubHeader>
 
       <div className="split-grid">
         {/* 左栏：章节列表，独立滚动 */}
