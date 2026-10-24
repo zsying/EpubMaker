@@ -2486,7 +2486,8 @@ a {
 .tabbar,
 .fab,
 .lib-search-toggle,
-.book-more {
+.lib-sort-toggle,
+.lib-plus-toggle {
   display: none;
 }
 
@@ -2657,13 +2658,39 @@ a {
     display: none !important;
   }
 
-  .lib-search-toggle {
+  /* Icon buttons: .btn's 13px horizontal padding would leave ~12px of content
+     box inside a 38px circle and flex-shrink the svg to 10px — the squinty
+     search icon this block replaces. */
+  .lib-search-toggle,
+  .lib-sort-toggle,
+  .lib-plus-toggle {
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    width: 34px;
-    height: 34px;
+    width: 38px;
+    height: 38px;
+    padding: 0;
     border-radius: 50%;
+    flex: none;
+  }
+
+  .lib-sort-toggle:active,
+  .lib-plus-toggle:active,
+  .lib-search-toggle:active {
+    background: var(--panel-2);
+  }
+
+  /* A long-press on a cover must open the book sheet, not start a text
+     selection. */
+  .book-card {
+    -webkit-user-select: none;
+    user-select: none;
+  }
+
+  /* The ⋯ menu is gone on the phone: the empty actions row must not leave
+     padding behind. */
+  .book-actions:empty {
+    display: none;
   }
 
   .lib-head .lib-search-input {
@@ -2691,15 +2718,6 @@ a {
 
   .book-actions .btn {
     display: none;
-  }
-
-  .book-actions .book-more {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    width: 30px;
-    height: 30px;
-    border-radius: 50%;
   }
 
   .fab {
@@ -2736,6 +2754,21 @@ a {
     flex: 0 0 auto;
     white-space: nowrap;
   }
+}
+
+/* Paged-shelf sentinel: sits below the grid while cards remain; the
+   IntersectionObserver loads the next page when it drifts into view. */
+.shelf-sentinel {
+  padding: 20px 0;
+  text-align: center;
+  font-size: 13px;
+  color: var(--text-3);
+}
+
+/* Active order in the sort sheet. */
+.sheet-item.sort-on {
+  color: var(--accent);
+  font-weight: 600;
 }
 
 /* ------------------------------ mobile reader chrome ------------------------------

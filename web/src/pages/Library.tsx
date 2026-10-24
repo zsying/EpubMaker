@@ -1,4 +1,4 @@
-import { DragEvent as ReactDragEvent, useCallback, useEffect, useRef, useState } from 'react';
+import { DragEvent as ReactDragEvent, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { api, AppPaths, Book, DictStatus, downloadDataUrl, hasNativeDialogs } from '../api';
 import { canResolveDropPaths, onDroppedFiles } from '../filedrop';
@@ -23,6 +23,31 @@ function cacheShelf(patch: Partial<ShelfCache>) {
   shelfCache = { books: [], paths: null, dict: null, ...shelfCache, ...patch };
 }
 
+/* ---- shelf ordering + paging (phone) ---- */
+
+const SORT_KEY = 'epubmaker.shelfSort';
+type ShelfSort = 'default' | 'title' | 'author' | 'created';
+const SORT_OPTIONS: Array<{ id: ShelfSort; label: string }> = [
+  { id: 'default', label: '默认排序' },
+  { id: 'title', label: '按书名' },
+  { id: 'author', label: '按作者' },
+  { id: 'created', label: '按添加时间' },
+];
+
+// How many cards render before the reader has to scroll for more. The backend
+// returns the whole shelf in one query (local SQLite), so paging is purely a
+// rendering budget: 30 covers as base64 data URLs is real decode work, and a
+// phone should not pay it up front.
+const PAGE_SIZE = 12;
+
+// Same rule as the reader: a device whose primary pointer cannot hover is a
+// touch device, and a touchscreen laptop with a mouse stays "desktop".
+function isTouchPrimary(): boolean {
+  if (typeof window === 'undefined' || !window.matchMedia) return false;
+  if (window.matchMedia('(any-pointer: fine)').matches) return false;
+  return window.matchMedia('(pointer: coarse)').matches || window.matchMedia('(hover: none)').matches;
+}
+
 export default function Library() {
   const [books, setBooks] = useState<Book[]>(() => shelfCache?.books ?? []);
   const [keyword, setKeyword] = useState('');
@@ -40,12 +65,103 @@ export default function Library() {
   // A phone has no native file dialog and cannot receive an OS file drop, so
   // the import controls have to point at something that works there.
   const desktop = hasNativeDialogs();
-  // Phone layout: the search field collapses behind a header icon, the import
-  // controls move into a floating button, and per-book actions live in a
-  // bottom sheet opened from the ⋯ on each card.
+  // Phone layout: the search field, sort and the import entry collapse behind
+  // header icons, and per-book actions live in a bottom sheet opened by a
+  // long-press on the cover.
   const [searchOpen, setSearchOpen] = useState(false);
   const [importOpen, setImportOpen] = useState(false);
+  const [sortOpen, setSortOpen] = useState(false);
   const [menuBook, setMenuBook] = useState<Book | null>(null);
+  const [sort, setSort] = useState<ShelfSort>(
+    () => (localStorage.getItem(SORT_KEY) as ShelfSort) || 'default',
+  );
+  // How many cards are currently rendered (paging, see PAGE_SIZE). Paging is a
+  // phone affordance only: the desktop always painted the whole shelf, and the
+  // desktop regressions (drop / shelf) pin that — import must be visible
+  // without a scroll.
+  const [touch] = useState(isTouchPrimary);
+  const [visibleCount, setVisibleCount] = useState(PAGE_SIZE);
+  useEffect(() => localStorage.setItem(SORT_KEY, sort), [sort]);
+
+  // Ordering is a display concern: the backend returns the shelf in its own
+  // order (默认), everything else sorts client-side. localeCompare with the
+  // Chinese locale keeps 「书名」 ordering sane for mixed CJK/Latin shelves.
+  const sortedBooks = useMemo(() => {
+    if (sort === 'default') return books;
+    const arr = [...books];
+    if (sort === 'title') arr.sort((a, b) => a.title.localeCompare(b.title, 'zh'));
+    else if (sort === 'author')
+      arr.sort((a, b) => (a.author || '未知作者').localeCompare(b.author || '未知作者', 'zh'));
+    else arr.sort((a, b) => (a.createdAt < b.createdAt ? 1 : a.createdAt > b.createdAt ? -1 : 0));
+    return arr;
+  }, [books, sort]);
+  const visibleBooks = touch ? sortedBooks.slice(0, visibleCount) : sortedBooks;
+  const totalRef = useRef(sortedBooks.length);
+  totalRef.current = sortedBooks.length;
+
+  // A fresh keyword or order restarts paging — otherwise the reader could be
+  // parked on page 4 of a list that just changed underneath them.
+  useEffect(() => {
+    if (touch) setVisibleCount(PAGE_SIZE);
+  }, [keyword, sort, touch]);
+
+  // Load more when the sentinel drifts into view. The scroll container is
+  // .lib-scroll (the only scroller on this page), the sentinel renders just
+  // below the grid and only while cards remain.
+  const sentinelRef = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    if (!touch) return;
+    const el = sentinelRef.current;
+    if (!el) return;
+    const io = new IntersectionObserver(
+      (entries) => {
+        if (entries.some((e) => e.isIntersecting)) {
+          setVisibleCount((n) => Math.min(totalRef.current, n + PAGE_SIZE));
+        }
+      },
+      { root: el.closest('.lib-scroll'), rootMargin: '240px' },
+    );
+    io.observe(el);
+    return () => io.disconnect();
+  }, [keyword, sort, books, loading, touch]);
+
+  /* ---- long-press: the phone's per-book menu ----
+     A 500ms hold on the cover opens the sheet; any movement cancels it (it is
+     a scroll, not a hold), and the click that ends the gesture is swallowed so
+     the sheet does not immediately open the reader. */
+  const longPressRef = useRef<{ timer: number | null; fired: boolean }>({ timer: null, fired: false });
+
+  function startLongPress(b: Book) {
+    if (!isTouchPrimary()) return;
+    cancelLongPress();
+    longPressRef.current.fired = false;
+    longPressRef.current.timer = window.setTimeout(() => {
+      longPressRef.current.timer = null;
+      longPressRef.current.fired = true;
+      setMenuBook(b);
+      try {
+        navigator.vibrate?.(10);
+      } catch {
+        /* vibration is a nicety, not a requirement */
+      }
+    }, 500);
+  }
+
+  function cancelLongPress() {
+    const lp = longPressRef.current;
+    if (lp.timer !== null) {
+      window.clearTimeout(lp.timer);
+      lp.timer = null;
+    }
+  }
+
+  function coverClick(b: Book) {
+    if (longPressRef.current.fired) {
+      longPressRef.current.fired = false;
+      return;
+    }
+    nav(`/books/${b.id}/read`);
+  }
 
   const load = useCallback(async (kw?: string) => {
     try {
@@ -256,9 +372,29 @@ export default function Library() {
           aria-label={searchOpen ? '收起搜索' : '搜索'}
           onClick={() => setSearchOpen((v) => !v)}
         >
-          <svg width="15" height="15" viewBox="0 0 15 15" aria-hidden="true">
-            <circle cx="6.4" cy="6.4" r="4.6" fill="none" stroke="currentColor" strokeWidth="1.5" />
-            <path d="M10 10 L13.4 13.4" stroke="currentColor" strokeWidth="1.5" />
+          <svg width="20" height="20" viewBox="0 0 20 20" aria-hidden="true">
+            <circle cx="8.6" cy="8.6" r="5.9" fill="none" stroke="currentColor" strokeWidth="1.7" />
+            <path d="M13.2 13.2 L17.4 17.4" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" />
+          </svg>
+        </button>
+        {/* 排序 and ＋: phone-only header icons (the desktop header has the
+            search input and the 导入 EPUB button in their place). */}
+        <button
+          className="btn ghost lib-sort-toggle"
+          aria-label="排序方式"
+          onClick={() => setSortOpen(true)}
+        >
+          <svg width="20" height="20" viewBox="0 0 20 20" aria-hidden="true">
+            <path d="M3 6h14M3 10h10M3 14h6" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" />
+          </svg>
+        </button>
+        <button
+          className="btn ghost lib-plus-toggle"
+          aria-label="添加书籍"
+          onClick={() => setImportOpen(true)}
+        >
+          <svg width="20" height="20" viewBox="0 0 20 20" aria-hidden="true">
+            <path d="M10 4v12M4 10h12" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" />
           </svg>
         </button>
         <input
@@ -280,9 +416,9 @@ export default function Library() {
           <div className={`dropzone${over ? ' over' : ''}`} onClick={() => void pickAndImport()}>
             {importing ? '正在解析 EPUB…' : '把 .epub 文件拖到这里，或点击选择文件（支持多选）'}
           </div>
-        ) : (
-          <div className="dropzone hint">手机版点右下角的 ＋ 按钮，从 WebDAV 导入书籍。</div>
-        )}
+        ) : null}
+        {/* Phone: no hint bar. Drag-import cannot happen there and the ＋ in
+            the header (and the FAB) already say where import lives. */}
 
         {loading ? (
           <div className="loading">加载中…</div>
@@ -293,9 +429,22 @@ export default function Library() {
           </div>
         ) : (
           <div className="grid">
-            {books.map((b) => (
+            {visibleBooks.map((b) => (
               <div className="book-card" key={b.id}>
-                <div className="cover" onClick={() => nav(`/books/${b.id}/read`)} style={{ cursor: 'pointer' }}>
+                <div
+                  className="cover"
+                  onClick={() => coverClick(b)}
+                  onTouchStart={() => startLongPress(b)}
+                  onTouchMove={cancelLongPress}
+                  onTouchEnd={cancelLongPress}
+                  onTouchCancel={cancelLongPress}
+                  onContextMenu={(e) => {
+                    // The WebView's own long-press menu must not compete with
+                    // ours (touch devices only; desktop keeps text menus).
+                    if (isTouchPrimary()) e.preventDefault();
+                  }}
+                  style={{ cursor: 'pointer' }}
+                >
                   {b.coverUrl ? (
                     <img src={b.coverUrl} alt={b.title} loading="lazy" />
                   ) : (
@@ -325,20 +474,15 @@ export default function Library() {
                   <button className="btn sm danger" onClick={() => void remove(b)}>
                     删除
                   </button>
-                  <button
-                    className="btn sm book-more"
-                    aria-label={`${b.title} 的操作`}
-                    onClick={() => setMenuBook(b)}
-                  >
-                    <svg width="14" height="14" viewBox="0 0 14 14" aria-hidden="true">
-                      <circle cx="2.4" cy="7" r="1.3" fill="currentColor" />
-                      <circle cx="7" cy="7" r="1.3" fill="currentColor" />
-                      <circle cx="11.6" cy="7" r="1.3" fill="currentColor" />
-                    </svg>
-                  </button>
                 </div>
               </div>
             ))}
+          </div>
+        )}
+
+        {visibleBooks.length < sortedBooks.length && (
+          <div className="shelf-sentinel" ref={sentinelRef}>
+            加载更多…
           </div>
         )}
 
@@ -389,41 +533,45 @@ export default function Library() {
         </div>
       )}
 
+      {/* Shelf ordering. Persisted; the phone reaches it from the header
+          sort icon. */}
+      {sortOpen && (
+        <div className="sheet-mask" onClick={() => setSortOpen(false)}>
+          <div className="sheet" role="menu" onClick={(e) => e.stopPropagation()}>
+            <div className="sheet-title">排序方式</div>
+            {SORT_OPTIONS.map((o) => (
+              <button
+                key={o.id}
+                className={`sheet-item${sort === o.id ? ' sort-on' : ''}`}
+                onClick={() => {
+                  setSort(o.id);
+                  setSortOpen(false);
+                }}
+              >
+                {sort === o.id ? '✓ ' : ''}
+                {o.label}
+              </button>
+            ))}
+            <button className="sheet-item cancel" onClick={() => setSortOpen(false)}>
+              取消
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* The phone's per-book menu, reached by long-pressing a cover: edit the
+          metadata or delete. Everything else (拆分/导出) stays a desktop job. */}
       {menuBook && (
         <div className="sheet-mask" onClick={() => setMenuBook(null)}>
           <div className="sheet" role="menu" onClick={(e) => e.stopPropagation()}>
             <div className="sheet-title">{menuBook.title}</div>
             <Link
               className="sheet-item"
-              to={`/books/${menuBook.id}/read`}
-              onClick={() => setMenuBook(null)}
-            >
-              阅读
-            </Link>
-            <Link
-              className="sheet-item"
               to={`/books/${menuBook.id}/edit`}
               onClick={() => setMenuBook(null)}
             >
-              整理
+              编辑（书名 / 作者 / 封面）
             </Link>
-            <Link
-              className="sheet-item"
-              to={`/books/${menuBook.id}/split`}
-              onClick={() => setMenuBook(null)}
-            >
-              拆分
-            </Link>
-            <button
-              className="sheet-item"
-              onClick={() => {
-                const bk = menuBook;
-                setMenuBook(null);
-                void exportBook(bk);
-              }}
-            >
-              导出
-            </button>
             <button
               className="sheet-item danger"
               onClick={() => {
