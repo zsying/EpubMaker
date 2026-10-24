@@ -195,6 +195,15 @@ html[data-app-theme='midnight'] {
   box-sizing: border-box;
 }
 
+/* Android WebView draws a translucent dark highlight over the *touched
+   element* on every tap/long-press. When the touch lands on a full-page
+   element (the reader stage, or content whose user-select is disabled), the
+   highlight covers the whole screen — the "整页变暗闪一下" bug. The app has
+   its own :active feedback everywhere, so the browser's is pure noise. */
+html {
+  -webkit-tap-highlight-color: transparent;
+}
+
 html,
 body,
 #root {
@@ -1273,13 +1282,18 @@ a {
   background: var(--chrome-bg);
   color: var(--chrome-fg);
   backdrop-filter: blur(8px);
-  /* Always mounted on touch (see Reader): open/close is an opacity change, so
-     Android WebView never rebuilds its layer tree mid-gesture. */
+  /* Always mounted on touch (see Reader): open/close is an opacity change on
+     a promoted layer (translateZ keeps the bars on the compositor), so Android
+     WebView never repaints the page mid-gesture. */
   transition: opacity 160ms ease-out;
+  transform: translateZ(0);
 }
 .reader-chrome.chrome-hidden {
   opacity: 0;
-  visibility: hidden;
+  /* No `visibility: hidden` here: flipping visibility forces a style/paint
+     pass on the composited bars and on Android shows as a page-wide flicker.
+     opacity+pointer-events is enough — the bars fade and stop receiving
+     touches while their layer keeps living on the compositor. */
   pointer-events: none;
 }
 .reader-chrome.top { top: 0; border-bottom: 1px solid var(--chrome-border); justify-content: space-between; }
@@ -2769,6 +2783,21 @@ a {
   background: var(--panel);
 }
 
+/* The dictionary row is now a real button (tap to import); a <button> carries
+   UA styles a <div> never had. */
+button.me-dict {
+  width: calc(100% - 28px);
+  font-family: inherit;
+  text-align: left;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+  transition: opacity 0.14s ease;
+}
+button.me-dict:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
 /* Bottom action sheets (per-book menu, import chooser). Only reachable from
    the phone UI, but styled for both so a desktop narrow window works too. */
 .sheet-mask {
@@ -3536,7 +3565,9 @@ a {
     position: sticky;
     top: 0;
     z-index: 40;
-    margin: 0 -20px 12px;
+    /* Cancel .page's padding so the header sits flush with the viewport top
+       (the back bar reads as a system bar, not as a card). */
+    margin: -24px -20px 12px;
     padding: 6px 8px;
     padding-top: calc(6px + env(safe-area-inset-top));
     background: var(--panel);

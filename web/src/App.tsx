@@ -18,6 +18,10 @@ import MobileTabs from './components/MobileTabs';
 export default function App() {
   const loc = useLocation();
   const isReader = /\/books\/[^/]+\/read/.test(loc.pathname);
+  // The bottom tab bar belongs to the three top-level destinations only;
+  // second-level pages (设置/书签/回收站/…) are stacked on top of them and
+  // carry their own back header instead.
+  const showTabs = ['/', '/vocab', '/me'].includes(loc.pathname);
 
   // The drop bridge is registered here rather than on the shelf: it is what
   // stops the webview from navigating to a dropped file, and a delayed
@@ -56,9 +60,9 @@ export default function App() {
       {/* The phone navigates from the bottom (tabbar); the desktop keeps the
           top bar. CSS picks which one is visible per breakpoint. The reader is
           its own fullscreen surface and never shows tabs. */}
-      {!isReader && <MobileTabs />}
+      {!isReader && showTabs && <MobileTabs />}
 
-      <main className={isReader ? 'main' : 'main with-tabs'}>
+      <main className={isReader ? 'main' : showTabs ? 'main with-tabs' : 'main'}>
         {isReader ? (
           <Routes>
             <Route path="/books/:id/read" element={<Reader />} />

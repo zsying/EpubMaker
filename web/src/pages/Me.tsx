@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { api, DictStatus } from '../api';
+import { api, DictStatus, pickDictFile } from '../api';
+import { toast, toastError } from '../toast';
 
 /**
  * The mobile「我的」tab. The desktop top bar spreads the low-frequency
@@ -17,6 +18,7 @@ const ENTRIES = [
 
 export default function Me() {
   const [dict, setDict] = useState<DictStatus | null>(null);
+  const [importing, setImporting] = useState(false);
 
   useEffect(() => {
     let alive = true;
@@ -30,6 +32,39 @@ export default function Me() {
       alive = false;
     };
   }, []);
+
+  // The dictionary row is a button, not a status line: tapping it opens the
+  // host's file picker (SAF on the phone) and builds the dictionary from the
+  // chosen ECDICT csv. Importing a full dictionary blocks the binding call for
+  // a while, so the row flips to a busy label until it lands.
+  async function importDict() {
+    if (importing) return;
+    let path: string | null = null;
+    try {
+      path = await pickDictFile();
+    } catch (e) {
+      toastError(e);
+      return;
+    }
+    if (!path) return; // cancelled
+    setImporting(true);
+    try {
+      const res = await api.dictImport(path);
+      const fresh = await api.dictStatus();
+      setDict(fresh);
+      toast(`词库导入完成 · ${res.entries} 条`, 'success');
+    } catch (e) {
+      toastError(e);
+    } finally {
+      setImporting(false);
+    }
+  }
+
+  const dictDesc = importing
+    ? '正在导入，大词库可能需要一两分钟…'
+    : dict?.installed
+      ? `已安装 · ${dict.entries} 条 · 点击更换词库`
+      : '未安装 · 点击选择词库 CSV 文件导入';
 
   return (
     <div className="page me-page">
@@ -51,12 +86,10 @@ export default function Me() {
         ))}
       </div>
 
-      <div className="me-dict">
+      <button type="button" className="me-dict" disabled={importing} onClick={() => void importDict()}>
         <span>查词词库</span>
-        <span className={dict?.installed ? 'tag' : 'tag muted-tag'}>
-          {dict?.installed ? `已安装 · ${dict.entries} 条` : '未安装（手机暂不支持导入）'}
-        </span>
-      </div>
+        <span className={dict?.installed || importing ? 'tag' : 'tag muted-tag'}>{dictDesc}</span>
+      </button>
     </div>
   );
 }

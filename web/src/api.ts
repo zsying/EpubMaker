@@ -365,6 +365,16 @@ export async function pickImageFile(): Promise<string | null> {
   return paths[0] ?? null;
 }
 
+/** Single dictionary-file pick (ECDICT csv). null = cancelled. */
+export async function pickDictFile(): Promise<string | null> {
+  if (!hasV3Runtime()) {
+    const p = await callApp<string>('SelectDictFile');
+    return p || null;
+  }
+  const paths = await pickV3(false, '选择词库 CSV 文件');
+  return paths[0] ?? null;
+}
+
 /** Calls a bound App (native integration) method: window.go.app.App.<method>. */async function callApp<T>(method: string, ...args: unknown[]): Promise<T> {  const fn = (window as any).go?.app?.App?.[method];
   if (typeof fn === 'function') {
     return (await fn(...args)) as T;
