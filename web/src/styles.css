@@ -2997,16 +2997,52 @@ button.me-dict:disabled {
 }
 
 .wifi-toggle {
+  /* .btn is an inline-flex sized to its content; at width:100% the text
+     defaults to flex-start — center it and give the tap target real height. */
   width: 100%;
-  padding: 12px 0;
-  font-size: 14.5px;
+  height: auto;
+  min-height: 48px;
+  justify-content: center;
+  gap: 8px;
+  padding: 0 16px;
+  font-size: 15px;
   font-weight: 600;
+  border-radius: 12px;
+  color: #fff;
+  background: var(--accent);
+  border-color: var(--accent);
+  transition: transform 0.12s ease, background 0.15s ease, border-color 0.15s ease;
+}
+
+.wifi-toggle:hover:not(:disabled) {
+  background: #2559dd;
+  border-color: #2559dd;
+}
+
+.wifi-toggle.on:hover:not(:disabled) {
+  background: var(--panel-2);
+  border-color: var(--border-strong);
+}
+
+.wifi-toggle:active:not(:disabled) {
+  transform: scale(0.98);
+  background: #2559dd;
+  border-color: #2559dd;
 }
 
 .wifi-toggle.on {
-  background: var(--panel-2);
   color: var(--text-2);
+  background: var(--panel-2);
   border-color: var(--border-strong);
+}
+
+.wifi-toggle.on:active:not(:disabled) {
+  background: var(--fill);
+  transform: scale(0.98);
+}
+
+.wifi-toggle svg {
+  flex: none;
 }
 
 .wifi-live {

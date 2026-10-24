@@ -112,6 +112,20 @@ export default function WifiShare() {
         </p>
 
         <button type="button" className={`btn wifi-toggle${running ? ' on' : ''}`} disabled={busy} onClick={() => void toggle()}>
+          {running ? (
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+              <rect x="6" y="6" width="12" height="12" rx="2.5" />
+            </svg>
+          ) : (
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+              <path
+                d="M12 3v8M6.3 6.5a8 8 0 1 0 11.4 0"
+                stroke="currentColor"
+                strokeWidth="2"
+                strokeLinecap="round"
+              />
+            </svg>
+          )}
           {busy ? '切换中…' : running ? '停止传书' : '开启传书'}
         </button>
       </div>
