@@ -8,7 +8,8 @@
   with it. Nothing here touches the desktop build.
 
   Steps: web bundle -> stage into frontend/dist -> Android main overlay ->
-  Go to libwails.so (NDK, c-shared) -> Gradle assembleDebug -> bin/EpubMaker.apk
+  Go to libwails.so (NDK, c-shared) -> Gradle assembleDebug ->
+  app/build/mobile/bin/EpubMaker.apk
 
 .PARAMETER Arch
   Target ABI. arm64 for phones (default), x86_64 for the emulator.
@@ -206,7 +207,7 @@ try {
 $apkSrc = Join-Path $AndroidDir 'app\build\outputs\apk\debug\app-debug.apk'
 if (-not (Test-Path $apkSrc)) { throw "APK not produced at $apkSrc" }
 
-$binDir = Join-Path $MobileDir 'bin'
+$binDir = Join-Path $AppDir 'build\mobile\bin'
 New-Item -ItemType Directory -Path $binDir -Force | Out-Null
 $apkOut = Join-Path $binDir "EpubMaker-$AbiDir.apk"
 Copy-Item $apkSrc $apkOut -Force

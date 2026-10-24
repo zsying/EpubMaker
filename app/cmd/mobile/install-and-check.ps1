@@ -25,6 +25,9 @@ param(
 
 $ErrorActionPreference = 'Stop'
 $here = Split-Path -Parent $MyInvocation.MyCommand.Path
+# Build artifacts (APK, diag screenshots) live in app/build/mobile/.
+$AppDir = Split-Path (Split-Path $here -Parent) -Parent
+$OutDir = Join-Path $AppDir 'build\mobile'
 
 # adb: honour the SDK env vars if set, then the D:\dev location this project's
 # README pins, then whatever is on PATH.
@@ -107,7 +110,7 @@ if ($abi -notmatch 'arm64') {
 
 # --- install -----------------------------------------------------------------
 $apkName = if ($Arch -eq 'arm64') { 'EpubMaker-arm64-v8a.apk' } else { 'EpubMaker-x86_64.apk' }
-$apk = Join-Path $here "bin\$apkName"
+$apk = Join-Path $OutDir "bin\$apkName"
 if (-not (Test-Path $apk)) { throw "APK not built yet: $apk  (run .\build-android.ps1 -Arch $Arch)" }
 Write-Step "Installing $apkName ($([math]::Round((Get-Item $apk).Length / 1MB, 1)) MB)"
 $install = (Invoke-Adb 'install' '-r' $apk) -join "`n"
@@ -153,7 +156,7 @@ $lines = (Invoke-Adb 'logcat' '-d') | Select-String -Pattern 'wails|GoLog|WebVie
 if ($lines) { $lines | Select-Object -Last 25 | ForEach-Object { Write-Host "    $_" } }
 
 # --- artifacts ---------------------------------------------------------------
-$diagDir = Join-Path $here 'diag'
+$diagDir = Join-Path $OutDir 'diag'
 if (-not (Test-Path $diagDir)) { New-Item -ItemType Directory -Path $diagDir | Out-Null }
 Write-Step 'Screenshot'
 $null = Invoke-Adb 'shell' 'screencap' '-p' '/sdcard/epub-shot.png'

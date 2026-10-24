@@ -59,7 +59,9 @@ cd app\cmd\mobile
 .\build-android.ps1 -ApkOnly        # Gradle only, after a Java-side tweak
 ```
 
-APK lands in `bin/EpubMaker-<abi>.apk`.
+APK lands in `app/build/mobile/bin/EpubMaker-<abi>.apk` (the shared output
+area for all generated files; diag screenshots from install-and-check.ps1
+land in `app/build/mobile/diag/`).
 
 `wails3 task apk` does **not** work here: go-task runs Taskfiles through `gosh`,
 which cannot execute the wrapper on Windows (`gradlew` has no extension, and
@@ -82,7 +84,7 @@ cd app\cmd\mobile
 or by hand:
 
 ```bash
-adb install -r bin/EpubMaker-arm64-v8a.apk
+adb install -r app/build/mobile/bin/EpubMaker-arm64-v8a.apk
 adb shell monkey -p com.wails.app -c android.intent.category.LAUNCHER 1
 adb shell run-as com.wails.app cat files/trace.log    # startup breadcrumbs
 ```
