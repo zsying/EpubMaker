@@ -34,7 +34,11 @@ export default function Annotations() {
   }
 
   function jump(a: AnnotationListItem) {
-    nav(`/books/${a.bookId}/read/${a.chapterId}`, { state: { offset: a.startOffset } });
+    // `reveal` makes the reader select the annotated range on arrival: the
+    // page locks onto the line and the selection toolbar is already up.
+    nav(`/books/${a.bookId}/read/${a.chapterId}`, {
+      state: { offset: a.startOffset, reveal: { start: a.startOffset, end: a.endOffset } },
+    });
   }
 
   return (

@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { api, VocabItem, VocabStats } from '../api';
 import { toast, toastError } from '../toast';
+import { speakWord } from '../speech';
 
 type Filter = '' | 'new' | 'learning' | 'known';
 
@@ -376,18 +377,6 @@ function Review({ items, onExit }: { items: VocabItem[]; onExit: () => void }) {
 
   const cur = list[index];
 
-  function speak(text: string) {
-    try {
-      const u = new SpeechSynthesisUtterance(text);
-      u.lang = 'en-US';
-      u.rate = 0.9;
-      window.speechSynthesis.cancel();
-      window.speechSynthesis.speak(u);
-    } catch {
-      /* speech synthesis unavailable in this WebView */
-    }
-  }
-
   async function grade(didKnow: boolean) {
     if (!cur || busy.current) return;
     busy.current = true;
@@ -463,7 +452,7 @@ function Review({ items, onExit }: { items: VocabItem[]; onExit: () => void }) {
       <div className="review-card">
         <div className="review-word">{cur.term}</div>
         {cur.phonetic && <div className="review-phon">/{cur.phonetic}/</div>}
-        <button className="btn sm" onClick={() => speak(cur.term)}>
+        <button className="btn sm" onClick={() => speakWord(cur.term)}>
           发音
         </button>
 

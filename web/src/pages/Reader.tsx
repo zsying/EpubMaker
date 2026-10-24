@@ -5,7 +5,8 @@ import { api, Annotation, Book, Bookmark, Chapter, LookupResult, ReadingProgress
 import { Caret } from '../Caret';
 import { toast, toastError } from '../toast';
 import { Anchor, EDGE_GAP, placeOverlay } from '../overlay';
-import { wordAt } from '../wordHit';
+import { wordAt, isCJK } from '../wordHit';
+import { speakWord } from '../speech';
 import {
   MODE_KEY,
   FONT_FAMILY_KEY,
@@ -550,6 +551,11 @@ export default function Reader() {
   const [sel, setSel] = useState<SelState>(null);
   // The live DOM selection behind `sel`: the anchor the drag handles reshape.
   const selRangeRef = useRef<Range | null>(null);
+  // True while the selection is OURS (long-press, handle drag, notebook jump).
+  // Blink momentarily reports a programmatic selection as collapsed around
+  // touch-gesture boundaries; without this flag every such hiccup tore the
+  // toolbar away mid-interaction, so a reshaped selection could never be used.
+  const selLockRef = useRef(false);
   // While a handle is being dragged the toolbar hides (it would chase the
   // thumb) and the handles follow every frame instead.
   const [selDragging, setSelDragging] = useState(false);
@@ -610,6 +616,14 @@ export default function Reader() {
   // — e.g. when the first measurement happens before the stage is laid out.
   const restoreOffsetRef = useRef<number | null>(null);
   const locationUsedRef = useRef(false);
+  // A selection to raise once the jump target is actually on screen: the
+  // notebook hands over the word's offsets, the annotation drawer the line's.
+  // Consumed by the next measure pass (paged) or restore (scroll) — both run
+  // after the target text exists and is positioned.
+  const pendingRevealRef = useRef<{ start: number; end: number } | null>(null);
+  // A detour is revealed once per visit: the anchor effect re-runs on every
+  // annotation change, and re-selecting the word then would fight the reader.
+  const detourRevealedRef = useRef(false);
   // Layout-independent map: sampled source character offsets -> visual page.
   // Used to derive a page number from a stored offset (bookmark / annotation /
   // progress) and vice-versa, so layout changes (font size / window) don't drift.
@@ -673,6 +687,10 @@ export default function Reader() {
           restoreOffsetRef.current = restoreOffset;
           locationUsedRef.current = true;
         }
+        // The annotation list page jumps with the range pre-computed; the
+        // reader selects it (toolbar and handles included) once landed.
+        const revealSel = (loc.state as { reveal?: { start: number; end: number } } | null)?.reveal;
+        if (revealSel && revealSel.end > revealSel.start) pendingRevealRef.current = revealSel;
         if (restoreOffsetRef.current === null) {
           pageIntentRef.current = { type: 'first' };
         }
@@ -795,8 +813,13 @@ export default function Reader() {
 
     const after = scrollTextTo(target);
     if (!after) return;
-    // The word you came here for keeps its highlight, so a fading flash on top
-    // of it would only repeat itself.
+    // A jump with a locked selection (annotation / notebook) raises its menu
+    // once the text is on screen.
+    if (pendingRevealRef.current) {
+      const pr = pendingRevealRef.current;
+      pendingRevealRef.current = null;
+      window.setTimeout(() => revealOffsets(pr.start, pr.end), 80);
+    }
     if (detour) return;
     // Landing counts as a position: record it, otherwise a reader who jumps
     // back and leaves immediately would find the old anchor next time.
@@ -816,6 +839,11 @@ export default function Reader() {
     const r = wordRangeAt(el, detour.offset, [detour.surface, detour.word]);
     if (!r) return;
     applyHighlights(el, [{ id: ANCHOR_ID, startOffset: r.start, endOffset: r.end, color: 'vocab' }]);
+    if (!detourRevealedRef.current) {
+      detourRevealedRef.current = true;
+      pendingRevealRef.current = { start: r.start, end: r.end };
+      window.setTimeout(() => revealOffsets(r.start, r.end), 80);
+    }
   }, [safeHtml, mode, detour]);
 
   /* ---- imperatively set content + highlights (paged mode) ---- */
@@ -826,6 +854,10 @@ export default function Reader() {
     // The detour word is wrapped exactly like a highlight, so it survives page
     // turns: the markup lives in the chapter, not in a floating layer.
     const anchor = detour ? wordRangeAt(el, detour.offset, [detour.surface, detour.word]) : null;
+    if (anchor && !detourRevealedRef.current) {
+      detourRevealedRef.current = true;
+      pendingRevealRef.current = { start: anchor.start, end: anchor.end };
+    }
     applyHighlights(
       el,
       anchor
@@ -1131,6 +1163,14 @@ export default function Reader() {
     setPageIndex(nextPage);
     pageIntentRef.current = null;
 
+    // A jump that wants its target selected (notebook word, annotation line)
+    // raises the selection UI once the landed page has painted.
+    if (pendingRevealRef.current) {
+      const pr = pendingRevealRef.current;
+      pendingRevealRef.current = null;
+      requestAnimationFrame(() => requestAnimationFrame(() => revealOffsets(pr.start, pr.end)));
+    }
+
     // A cross-chapter turn was faded out and is still waiting (see startTurn).
     // Fade the spread back in ONLY after this measurement has committed the new
     // chapter's page count and starting page. If we faded in on the safeHtml
@@ -1302,7 +1342,7 @@ export default function Reader() {
   /* ---- navigation ---- */
   function openChapter(cid: string, intent: PageIntent = { type: 'first' }) {
     setPopover(null);
-    setSel(null);
+    if (sel) clearSelectionUI();
     setBmOpen(false);
     setTocOpen(false);
     if (intent?.type === 'restore') {
@@ -1341,6 +1381,7 @@ export default function Reader() {
     // The card points at a word on the page being left behind.
     cancelWordLookup();
     setLookupCard(null);
+    if (sel) clearSelectionUI();
     const step = turnStep;
     if (delta > 0) {
       if (pageIndex + step <= maxPageIndex) setPageIndex(pageIndex + step);
@@ -1500,11 +1541,52 @@ export default function Reader() {
     return () => stage.removeEventListener('wheel', onWheel);
   }, [mode, pageIndex, pageCount, pagesPerView, prev, next]);
 
+  // Routes one tap (touch, after the reader claimed the gesture) to its
+  // meaning. Same division of labour as onStageClick's touch branch, but it
+  // works on raw coordinates: the native click event never fires for a touch
+  // this reader has prevented.
+  function routeTap(x: number, y: number) {
+    if (Date.now() - turnedAtRef.current < 300) return;
+    // A tap on a highlight opens its annotation popover — the mark check the
+    // click path used to do, re-expressed as a hit test.
+    const el = document.elementFromPoint(x, y) as HTMLElement | null;
+    const mark = el?.closest('mark.hl') as HTMLElement | null;
+    if (mark && mark.dataset.annId && mark.dataset.annId !== ANCHOR_ID) {
+      const ann = annotations.find((a) => a.id === mark.dataset.annId);
+      if (ann) {
+        const r = mark.getBoundingClientRect();
+        setNoteDraft(ann.note);
+        setPopover({ x: r.left + r.width / 2, y: r.bottom + 8, ann });
+      }
+      return;
+    }
+    if (scheduleWordLookup(x, y)) return;
+    const rect = stageRef.current?.getBoundingClientRect();
+    const r = rect && rect.width > 0 ? (x - rect.left) / rect.width : 0.5;
+    if (r < 1 / 3) {
+      turn(-1);
+      return;
+    }
+    if (r > 2 / 3) {
+      turn(1);
+      return;
+    }
+    setChromeOpen((o) => !o);
+  }
+  const routeTapRef = useRef(routeTap);
+  routeTapRef.current = routeTap;
+
   /* ---- touch: a horizontal swipe turns the page ---- */
   // Registered as native listeners so touchmove can be non-passive and own the
   // gesture: without that the WebView treats a fast horizontal drag as its own
   // overscroll/back gesture and the page never sees the move events. CSS
   // (`touch-action: pan-y` on the paged stage) keeps the browser out of the way.
+  //
+  // The reader OWNS the page gesture end to end: touchstart is prevented, so
+  // the browser never starts its own long-press selection, never shows its
+  // floating text menu (the "圆形菜单" the notebook jump used to surface) and
+  // never synthesises a click that would race our routing. Every meaning —
+  // tap, swipe, hold — is decided here.
   useEffect(() => {
     if (mode !== 'paged') return;
     // Listen on the whole reader, not just the stage: the word card and the
@@ -1518,50 +1600,64 @@ export default function Reader() {
     const MIN_RATIO = 1.2; // horizontal travel must beat vertical by this much
     const LP_MS = 450; // hold-to-select threshold, tuned like 微信读书
     const LP_SLOP = 10; // finger drift that cancels the hold
+    const TAP_MS = 500; // holds longer than this are a press, not a tap
     let startX = 0;
     let startY = 0;
+    let startT = 0;
     let active = false;
     let horizontal = false;
     let lpTimer = 0;
+    // Set only when the hold actually produced a selection, so a held press on
+    // blank paper still counts as a (chrome-toggling) tap on release.
+    let lpFired = false;
 
     const cancelLongPress = () => {
       window.clearTimeout(lpTimer);
       lpTimer = 0;
     };
 
+    // Surfaces that keep native behaviour — their buttons, sliders and inputs
+    // need real click events, and a drag inside them must never turn pages.
+    // The floating cards are deliberately NOT listed: everything interactive
+    // inside them is a button/input (matched below), and a swipe that starts
+    // on the word card must still turn the page.
+    const isNativeTarget = (t: EventTarget | null): boolean =>
+      !!(t instanceof Element &&
+        (t.closest('.drawer-mask') ||
+          t.closest('.sheet-mask') ||
+          t.closest('.reader-chrome') ||
+          t.closest('.sel-handle') ||
+          t.closest('button') ||
+          t.closest('input') ||
+          t.closest('textarea') ||
+          t.closest('a')));
+
     const onStart = (e: TouchEvent) => {
+      lpFired = false;
       // Multi-touch is never a page turn (pinch, or a stray second finger).
       if (e.touches.length !== 1) {
         active = false;
         return;
       }
-      // Modal surfaces own their gestures: dragging inside the drawer's chapter
-      // list, the settings sheet or the chrome bars (its slider is a horizontal
-      // drag!) must never turn pages underneath. Same for the selection drag
-      // handles — their touchstart must not clear the selection they reshape.
       const target = e.target as HTMLElement | null;
-      if (
-        target &&
-        (target.closest('.drawer-mask') ||
-          target.closest('.sheet-mask') ||
-          target.closest('.reader-chrome') ||
-          target.closest('.sel-handle') ||
-          target.closest('input') ||
-          target.closest('textarea'))
-      ) {
+      if (isNativeTarget(target)) {
         active = false;
         return;
       }
       const t = e.touches[0];
       startX = t.clientX;
       startY = t.clientY;
+      startT = Date.now();
       active = true;
       horizontal = false;
+      // Owning the gesture: no native long-press selection, no synthesized
+      // click, no native text handles. Everything below is ours.
+      if (e.cancelable) e.preventDefault();
       // The card points at a word on the page being left behind.
       cancelWordLookup();
       // A new touch on the page ends the previous word selection (dragging a
-      // handle is exempt — see the ignore list above) and with the flag off
-      // the native long-press cannot start its whole-page selection.
+      // handle or tapping the toolbar is exempt — see the ignore list above).
+      selLockRef.current = false;
       contentRef.current?.classList.remove('allow-sel');
       const s = window.getSelection();
       if (s && !s.isCollapsed) s.removeAllRanges();
@@ -1572,7 +1668,9 @@ export default function Reader() {
       lpTimer = window.setTimeout(() => {
         lpTimer = 0;
         if (!active) return;
-        const hit = wordHitAt(startX, startY);
+        // allowCJK: a hold on Chinese text selects that one character (a tap
+        // must not — there is no Chinese dictionary to open).
+        const hit = wordHitAt(startX, startY, true);
         if (!hit) return;
         // A tap on the word would have been a lookup; a hold is a selection.
         try {
@@ -1580,17 +1678,21 @@ export default function Reader() {
         } catch {
           /* no vibration on this device */
         }
+        lpFired = true;
         setLookupCard(null);
         // Blink refuses selections inside user-select:none subtrees, so the
         // word selection needs the flag on for its whole lifetime (until the
         // next touchstart, above).
         contentRef.current?.classList.add('allow-sel');
+        selLockRef.current = true;
+        selRangeRef.current = hit.range;
         const s = window.getSelection();
         if (s) {
           s.removeAllRanges();
           s.addRange(hit.range);
         }
-        // Swallow the click that ends the gesture: with a live selection it
+        applySelRange(hit.range);
+        // Swallow the tap that ends the gesture: with a live selection it
         // would be a no-op anyway, but turning the timestamp also protects the
         // no-hit case.
         turnedAtRef.current = Date.now();
@@ -1617,11 +1719,15 @@ export default function Reader() {
       if (!t) return;
       const dx = t.clientX - startX;
       const dy = t.clientY - startY;
-      if (!horizontal) return;
+      if (!horizontal) {
+        // A tap: the native click was suppressed at touchstart, so route it
+        // ourselves. A hold that produced a selection is not a tap.
+        if (!lpFired && Date.now() - startT < TAP_MS) routeTapRef.current(t.clientX, t.clientY);
+        return;
+      }
       if (Math.abs(dx) < MIN_TRAVEL) return;
       if (Math.abs(dx) < Math.abs(dy) * MIN_RATIO) return;
-      // The WebView still fires a click after the gesture; swallow it so the
-      // swipe cannot also be read as a tap-to-look-up or a chrome toggle.
+      // The gesture was ours end to end; no stray click can follow.
       turnedAtRef.current = Date.now();
       // Dismiss whatever floats over the page only once the gesture is over.
       // Unmounting the element under the finger mid-drag makes the browser
@@ -1640,7 +1746,7 @@ export default function Reader() {
       horizontal = false;
     };
 
-    host.addEventListener('touchstart', onStart, { passive: true });
+    host.addEventListener('touchstart', onStart, { passive: false });
     host.addEventListener('touchmove', onMove, { passive: false });
     host.addEventListener('touchend', onEnd, { passive: true });
     host.addEventListener('touchcancel', onCancel, { passive: true });
@@ -1718,10 +1824,7 @@ export default function Reader() {
         if (lookupCard) { setLookupCard(null); return; }
         if (popover) { setPopover(null); return; }
         if (sel) {
-          setSel(null);
-          // Also drop the DOM selection (and the touch-selection flag with it).
-          window.getSelection()?.removeAllRanges();
-          contentRef.current?.classList.remove('allow-sel');
+          clearSelectionUI();
           return;
         }
         if (settingsOpen) { setSettingsOpen(false); return; }
@@ -1826,6 +1929,22 @@ export default function Reader() {
 
   /* ---- selection -> toolbar (both modes) ---- */
 
+  // One place to tear the selection UI down: DOM selection, the locked-range
+  // bookkeeping and the selectable flag all go together. Callers that only
+  // swap `sel` for another state (lookup, annotation) clear the lock too —
+  // a stale lock would resurrect the dead range on the next selectionchange.
+  function clearSelectionUI() {
+    setSel(null);
+    selLockRef.current = false;
+    selRangeRef.current = null;
+    try {
+      window.getSelection()?.removeAllRanges();
+    } catch {
+      /* nothing selected */
+    }
+    contentRef.current?.classList.remove('allow-sel');
+  }
+
   // Reads whatever the browser currently has selected into the popover state.
   //
   // It has two triggers on purpose. A mouse delivers `mouseup`, but a long press
@@ -1837,6 +1956,21 @@ export default function Reader() {
     if (!root) return;
     const selection = window.getSelection();
     if (!selection || selection.isCollapsed || !selection.toString().trim()) {
+      // A locked selection must survive Blink's transient "empty" reports at
+      // gesture boundaries: re-assert the range we know is live instead of
+      // tearing the toolbar down. This is what kept the menu from vanishing
+      // the moment a drag handle was released.
+      const locked = selRangeRef.current;
+      if (selLockRef.current && locked && !locked.collapsed) {
+        try {
+          selection?.removeAllRanges();
+          selection?.addRange(locked);
+        } catch {
+          /* the range died with a re-render; fall through to dismissal */
+        }
+        applySelRange(locked);
+        return;
+      }
       setSel(null);
       return;
     }
@@ -1901,6 +2035,9 @@ export default function Reader() {
     // Programmatic selections need a selectable subtree (see the long-press
     // handler); the flag stays on until the next plain touch on the page.
     root.classList.add('allow-sel');
+    // The selection being reshaped is ours end to end: hold the lock so the
+    // selectionchange bursts a drag produces never dismiss the toolbar.
+    selLockRef.current = true;
     setSelDragging(true);
     let raf = 0;
     let px = 0;
@@ -1958,6 +2095,39 @@ export default function Reader() {
     window.addEventListener('touchmove', onMove, { capture: true, passive: false });
     window.addEventListener('touchend', onEnd, true);
     window.addEventListener('touchcancel', onEnd, true);
+  }
+
+  // Builds the DOM range for source offsets [start, end) and selects it, so a
+  // jump from the notebook or the annotation list lands with the target word
+  // visibly locked and its toolbar ready — the visit exists to act on that
+  // word, and making the reader re-select it by hand defeats the jump.
+  function revealOffsets(start: number, end: number) {
+    const root = contentRef.current;
+    if (!root || end <= start) return;
+    const s = textNodeAt(root, start);
+    const e = textNodeAt(root, end - 1);
+    if (!s || !e) return;
+    const range = document.createRange();
+    try {
+      range.setStart(s.node, Math.min(s.offset, (s.node.textContent || '').length));
+      range.setEnd(e.node, Math.min(e.offset + 1, (e.node.textContent || '').length));
+    } catch {
+      return;
+    }
+    if (range.collapsed) return;
+    // Programmatic selection needs the selectable subtree (user-select:none
+    // elsewhere), and the lock keeps it alive through selectionchange noise.
+    root.classList.add('allow-sel');
+    try {
+      const sel = window.getSelection();
+      sel?.removeAllRanges();
+      sel?.addRange(range);
+    } catch {
+      return;
+    }
+    selRangeRef.current = range;
+    selLockRef.current = true;
+    applySelRange(range);
   }
 
   useEffect(() => {
@@ -2060,17 +2230,25 @@ export default function Reader() {
     if (!sel) return;
     const { text, start, end } = sel;
     const at = { x: sel.x, top: sel.y, bottom: sel.bottom };
-    setSel(null);
+    clearSelectionUI();
     await runLookup(text.trim(), start, end, at);
   }
 
-  // The word under a point in the page, if the point is on one at all. The
-  // caret comes from the browser's own hit test — the same one a text cursor
-  // uses — but that test SNAPS: a tap in a line gap or just off the text edge
-  // still resolves to the nearest caret. Without the box check below, the
-  // lookup would eat nearly every middle-of-the-page tap and the chrome would
-  // become unreachable on touch.
-  function wordHitAt(x: number, y: number): {
+  // The word under a point in the page, if the point is on one at all.
+  //
+  // `caretRangeFromPoint` alone is not enough: it SNAPS to the nearest caret,
+  // which can land a character off the glyph the finger actually covered, and
+  // it reports an element (not a text node) at tag boundaries. So the caret
+  // only seeds a glyph scan: the character whose box really contains the point
+  // wins, and the word is expanded from there. `allowCJK` opts the long-press
+  // into treating a single Chinese character as the selectable unit — a bare
+  // tap never passes it, so Chinese taps keep turning pages instead of opening
+  // a dictionary that has no Chinese entries.
+  function wordHitAt(
+    x: number,
+    y: number,
+    allowCJK = false,
+  ): {
     word: string;
     offset: number;
     rect: DOMRect;
@@ -2083,10 +2261,65 @@ export default function Reader() {
     };
     const caret = doc.caretRangeFromPoint?.(x, y);
     if (!caret) return null;
-    const node = caret.startContainer;
-    if (node.nodeType !== Node.TEXT_NODE || !root.contains(node)) return null;
-    const span = wordAt(node.textContent || '', caret.startOffset);
+    const node = caret.startContainer.nodeType === Node.TEXT_NODE ? caret.startContainer : null;
+    if (!node || !root.contains(node)) return null;
+    const text = node.textContent || '';
+    // Glyph-precise index: scan a window around the snapped caret for the
+    // character whose box covers the point. Without this the caret's own
+    // snapping regularly resolved one glyph wide of the tap, and the expanded
+    // "word" was a fragment of the neighbour.
+    let idx = caret.startOffset;
+    {
+      const lo = Math.max(0, idx - 48);
+      const hi = Math.min(text.length, idx + 48);
+      const probe = document.createRange();
+      for (let i = lo; i < hi; i++) {
+        const ch = text[i];
+        if (!ch || !ch.trim()) continue;
+        probe.setStart(node, i);
+        probe.setEnd(node, i + 1);
+        const r = probe.getBoundingClientRect();
+        if (r.width <= 0) continue;
+        if (x >= r.left - 3 && x <= r.right + 3 && y >= r.top - 5 && y <= r.bottom + 5) {
+          idx = i;
+          break;
+        }
+      }
+    }
+    let span = wordAt(text, idx);
+    if (!span && allowCJK) {
+      let ci = idx;
+      if (ci >= text.length || !isCJK(text[ci])) {
+        if (ci > 0 && isCJK(text[ci - 1])) ci -= 1;
+        else return null;
+      }
+      span = { start: ci, end: ci + 1, word: text[ci] };
+    }
     if (!span) return null;
+    // Words split across inline boundaries (a mark, an <em>) expand only to
+    // the edge of this text node. When the expansion touches that edge, redo
+    // it on the chapter's full text stream, where the pieces join up.
+    if (span.start === 0 || span.end >= text.length) {
+      const nodeStart = charOffset(root, node, 0);
+      const rootText = root.textContent || '';
+      const gIdx = nodeStart + idx;
+      if (gIdx >= 0 && gIdx < rootText.length) {
+        const rspan = wordAt(rootText, gIdx);
+        if (rspan && rspan.end - rspan.start > span.end - span.start) {
+          const s = textNodeAt(root, rspan.start);
+          const e = textNodeAt(root, Math.max(rspan.start, rspan.end - 1));
+          if (s && e) {
+            const r2 = document.createRange();
+            r2.setStart(s.node, Math.min(s.offset, (s.node.textContent || '').length));
+            r2.setEnd(e.node, Math.min(e.offset + 1, (e.node.textContent || '').length));
+            const rect2 = r2.getBoundingClientRect();
+            if (rect2.width > 0) {
+              return { word: rspan.word, offset: rspan.start, rect: rect2, range: r2 };
+            }
+          }
+        }
+      }
+    }
     const range = document.createRange();
     range.setStart(node, span.start);
     range.setEnd(node, span.end);
@@ -2147,20 +2380,9 @@ export default function Reader() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Pronunciation via the WebView's built-in speech synthesis: no network, no
-  // bundled audio, works offline.
-  function speak(text: string) {
-    if (!text) return;
-    try {
-      const u = new SpeechSynthesisUtterance(text);
-      u.lang = 'en-US';
-      u.rate = 0.9;
-      window.speechSynthesis.cancel();
-      window.speechSynthesis.speak(u);
-    } catch {
-      /* speech synthesis unavailable in this WebView */
-    }
-  }
+  // Pronunciation lives in speech.ts: online dictvoice primary (the Android
+  // WebView has no TTS voices), system speech synthesis as the offline
+  // fallback on desktop.
 
   async function addCardToNotebook() {
     if (!lookupCard) return;
@@ -2182,8 +2404,7 @@ export default function Reader() {
     try {
       const a = await api.addAnnotation(id, current, sel.start, sel.end, pageIndex, sel.text, color, '');
       setAnnotations((prev) => [...prev, a]);
-      window.getSelection()?.removeAllRanges();
-      setSel(null);
+      clearSelectionUI();
       toast('已划线', 'success');
     } catch (e) {
       toastError(e);
@@ -2279,6 +2500,9 @@ export default function Reader() {
   }
 
   function jumpAnnotation(a: Annotation) {
+    // Same treatment as a notebook jump: land on the page AND raise the
+    // selection toolbar on the annotated range.
+    pendingRevealRef.current = { start: a.startOffset, end: a.endOffset };
     openChapter(a.chapterId, { type: 'restore', offset: a.startOffset });
     setAnnOpen(false);
   }
@@ -2489,7 +2713,7 @@ export default function Reader() {
                 <button
                   className="dict-speak"
                   title="朗读"
-                  onClick={() => speak(lookupCard.res.entry?.word || '')}
+                  onClick={() => speakWord(lookupCard.res.entry?.word || '')}
                 >
                   发音
                 </button>
