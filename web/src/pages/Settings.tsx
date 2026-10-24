@@ -2,31 +2,29 @@ import { useState } from 'react';
 import FontPicker from '../components/FontPicker';
 import SubHeader from '../components/SubHeader';
 import {
+  APP_THEMES,
   FONT_FAMILY_KEY,
   FONT_OVERRIDE_KEY,
   MODE_KEY,
-  THEME_KEY,
+  appTheme,
+  applyAppTheme,
+  type AppTheme,
   type ReadMode,
-  type ReadTheme,
 } from '../readingPrefs';
 
 /**
  * The Me→设置 page: the same reading preferences the reader's Aa sheet offers,
  * editable before opening a book. Everything writes the shared localStorage
  * keys the reader reads on mount, so a change here applies to every book.
+ * The theme is app-wide: picking one re-themes the whole application at once
+ * (html[data-app-theme] + CSS variables), not just the reading page.
  */
 export default function Settings() {
   const [font, setFont] = useState(() => localStorage.getItem(FONT_FAMILY_KEY) || 'default');
   const [mode, setMode] = useState<ReadMode>(() => (localStorage.getItem(MODE_KEY) as ReadMode) || 'paged');
-  const [theme, setTheme] = useState<ReadTheme>(() => (localStorage.getItem(THEME_KEY) as ReadTheme) || 'paper');
+  const [theme, setTheme] = useState<AppTheme>(() => appTheme());
   // Default ON: without it an EPUB's own font-family beats the picked face.
   const [override, setOverride] = useState(() => localStorage.getItem(FONT_OVERRIDE_KEY) !== '0');
-
-  const themes: Array<{ id: ReadTheme; label: string }> = [
-    { id: 'paper', label: '纸白' },
-    { id: 'green', label: '护眼' },
-    { id: 'dark', label: '夜间' },
-  ];
 
   return (
     <div className="page settings-page">
@@ -61,14 +59,14 @@ export default function Settings() {
           </div>
         </div>
         <div className="rd-set-row">
-          <span className="rd-set-label">阅读背景</span>
+          <span className="rd-set-label">主题</span>
           <div className="rd-themes">
-            {themes.map((t) => (
+            {APP_THEMES.map((t) => (
               <button
                 key={t.id}
                 className={`rd-theme t-${t.id}${theme === t.id ? ' on' : ''}`}
                 onClick={() => {
-                  localStorage.setItem(THEME_KEY, t.id);
+                  applyAppTheme(t.id);
                   setTheme(t.id);
                 }}
               >
@@ -99,7 +97,7 @@ export default function Settings() {
         </div>
       </div>
 
-      <p className="settings-hint">字体下载一次即可离线使用；阅读器内（Aa 面板）也可随时调整这些设置。</p>
+      <p className="settings-hint">主题全局生效（书架、阅读页同时切换）；字体下载一次即可离线使用，阅读器内（Aa 面板）也可随时调整。</p>
     </div>
   );
 }

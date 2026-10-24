@@ -18,6 +18,177 @@
   --font: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB',
     'Microsoft YaHei', sans-serif;
   --font-serif: Georgia, 'Songti SC', 'SimSun', 'Source Han Serif SC', serif;
+
+  /* Neutral fill for hover states, wells and quiet chips. Every theme
+     overrides it; component rules must never hardcode a grey. */
+  --fill: #eef1f6;
+  --fill-2: #f2f4f8;
+
+  /* Reading surface (defaults = the light theme; each app theme overrides). */
+  --rd-bg: #f6f7f9;
+  --rd-paper: #ffffff;
+  --rd-paper-2: #fafafa;
+  --rd-desk: #e3ddd1;
+  --rd-text: #22262e;
+  --rd-head: #1d2129;
+  --rd-muted: #5a6272;
+  --rd-border: #e3e6ec;
+  --rd-sel: rgba(47, 107, 255, 0.22);
+
+  /* Reader chrome bars follow the theme too (this was the complaint: a paper
+     page under jet-black bars). Opaque-ish so Android WebView never has to
+     re-rasterize the page behind them. */
+  --chrome-bg: rgba(255, 255, 255, 0.97);
+  --chrome-fg: #1d2129;
+  --chrome-muted: #8b93a3;
+  --chrome-border: #e3e6ec;
+  --chrome-btn-bg: #eef1f6;
+  --chrome-btn-fg: #1d2129;
+  --chrome-btn-border: #d2d7e0;
+  --chrome-track: rgba(0, 0, 0, 0.16);
+  --chrome-thumb: #ffffff;
+}
+
+/* ------------------------------ app themes ------------------------------
+   One attribute on <html> recolours the entire app: every surface reads the
+   variables above (or the app palette at the top), so shelf, settings, reader
+   paper and chrome bars always move together. Reader-specific values ride
+   along as --rd-* / --chrome-* overrides. */
+
+html[data-app-theme='sepia'] {
+  --bg: #f3ecdd;
+  --panel: #f9f4e8;
+  --panel-2: #f4eee0;
+  --border: #e2d8c3;
+  --border-strong: #d3c6ab;
+  --text: #3a3226;
+  --text-2: #6b5f4b;
+  --text-3: #988a6f;
+  --accent: #a3662b;
+  --accent-soft: #f3e5cd;
+  --fill: #ece2cc;
+  --fill-2: #efe6d3;
+  --shadow: 0 1px 2px rgba(80, 62, 30, 0.05), 0 4px 16px rgba(80, 62, 30, 0.08);
+  --rd-bg: #f3ecdd;
+  --rd-paper: #f9f3e4;
+  --rd-paper-2: #f4eddb;
+  --rd-desk: #ddd0b4;
+  --rd-text: #4a4030;
+  --rd-head: #33291a;
+  --rd-muted: #8a7c62;
+  --rd-border: rgba(0, 0, 0, 0.09);
+  --rd-sel: rgba(163, 102, 43, 0.26);
+  --chrome-bg: rgba(249, 244, 232, 0.97);
+  --chrome-fg: #3a3226;
+  --chrome-muted: #988a6f;
+  --chrome-border: #e2d8c3;
+  --chrome-btn-bg: #ece2cc;
+  --chrome-btn-fg: #3a3226;
+  --chrome-btn-border: #d3c6ab;
+  --chrome-track: rgba(58, 50, 38, 0.22);
+  --chrome-thumb: #fffdf7;
+}
+
+html[data-app-theme='green'] {
+  --bg: #cfe6d2;
+  --panel: #dcefdc;
+  --panel-2: #d3e9d4;
+  --border: #b5d2b8;
+  --border-strong: #a3c5a7;
+  --text: #22362a;
+  --text-2: #48604f;
+  --text-3: #6d8574;
+  --accent: #2e7d4f;
+  --accent-soft: #c8e6cd;
+  --fill: #c2dcc5;
+  --fill-2: #c8e2ca;
+  --shadow: 0 1px 2px rgba(24, 48, 30, 0.05), 0 4px 16px rgba(24, 48, 30, 0.08);
+  --rd-bg: #cfe6d2;
+  --rd-paper: #d9ecd9;
+  --rd-paper-2: #d2e6d2;
+  --rd-desk: #b7d4bb;
+  --rd-text: #24352a;
+  --rd-head: #16281c;
+  --rd-muted: #52705c;
+  --rd-border: rgba(0, 0, 0, 0.09);
+  --rd-sel: rgba(46, 125, 79, 0.3);
+  --chrome-bg: rgba(220, 239, 220, 0.97);
+  --chrome-fg: #22362a;
+  --chrome-muted: #6d8574;
+  --chrome-border: #b5d2b8;
+  --chrome-btn-bg: #c2dcc5;
+  --chrome-btn-fg: #22362a;
+  --chrome-btn-border: #a3c5a7;
+  --chrome-track: rgba(34, 54, 42, 0.24);
+  --chrome-thumb: #f4fbf4;
+}
+
+html[data-app-theme='dark'] {
+  --bg: #121417;
+  --panel: #1c1f25;
+  --panel-2: #171a20;
+  --border: #2a2e36;
+  --border-strong: #3a3f49;
+  --text: #d6dae1;
+  --text-2: #9aa3ad;
+  --text-3: #6f7883;
+  --accent: #5b8bff;
+  --accent-soft: #232c3f;
+  --fill: #262a32;
+  --fill-2: #22262d;
+  --shadow: 0 1px 2px rgba(0, 0, 0, 0.3), 0 4px 16px rgba(0, 0, 0, 0.35);
+  --rd-bg: #121417;
+  --rd-paper: #16181d;
+  --rd-paper-2: #14161b;
+  --rd-desk: #0b0d10;
+  --rd-text: #a8b0ba;
+  --rd-head: #ccd3da;
+  --rd-muted: #6b7480;
+  --rd-border: rgba(255, 255, 255, 0.08);
+  --rd-sel: rgba(91, 139, 255, 0.35);
+  --chrome-bg: rgba(28, 31, 37, 0.97);
+  --chrome-fg: #e8eaed;
+  --chrome-muted: #aab1bd;
+  --chrome-border: rgba(255, 255, 255, 0.08);
+  --chrome-btn-bg: rgba(255, 255, 255, 0.08);
+  --chrome-btn-fg: #cfd4da;
+  --chrome-btn-border: rgba(255, 255, 255, 0.18);
+  --chrome-track: rgba(255, 255, 255, 0.28);
+  --chrome-thumb: #ffffff;
+}
+
+html[data-app-theme='midnight'] {
+  --bg: #10151f;
+  --panel: #182031;
+  --panel-2: #141b29;
+  --border: #27334a;
+  --border-strong: #35435f;
+  --text: #c6d1e2;
+  --text-2: #8b99b0;
+  --text-3: #61708a;
+  --accent: #6f9bff;
+  --accent-soft: #1f2a42;
+  --fill: #202b40;
+  --fill-2: #1c2638;
+  --shadow: 0 1px 2px rgba(0, 0, 0, 0.35), 0 4px 16px rgba(0, 0, 0, 0.4);
+  --rd-bg: #10151f;
+  --rd-paper: #151c2b;
+  --rd-paper-2: #131926;
+  --rd-desk: #0a0e16;
+  --rd-text: #9fb0c8;
+  --rd-head: #cdd9ea;
+  --rd-muted: #64748f;
+  --rd-border: rgba(140, 170, 220, 0.12);
+  --rd-sel: rgba(111, 155, 255, 0.35);
+  --chrome-bg: rgba(24, 32, 49, 0.97);
+  --chrome-fg: #dde5f0;
+  --chrome-muted: #8b99b0;
+  --chrome-border: rgba(140, 170, 220, 0.12);
+  --chrome-btn-bg: rgba(140, 170, 220, 0.12);
+  --chrome-btn-fg: #c6d1e2;
+  --chrome-btn-border: rgba(140, 170, 220, 0.24);
+  --chrome-track: rgba(198, 209, 226, 0.3);
+  --chrome-thumb: #f2f6ff;
 }
 
 * {
@@ -137,7 +308,7 @@ a {
   padding: 0 13px;
   border-radius: 8px;
   border: 1px solid var(--border-strong);
-  background: #fff;
+  background: var(--panel);
   color: var(--text);
   font-size: 13px;
   font-family: inherit;
@@ -148,7 +319,7 @@ a {
 
 .btn:hover:not(:disabled) {
   border-color: #b9c0cd;
-  background: #fafbfc;
+  background: var(--panel-2);
 }
 
 .btn:disabled {
@@ -170,7 +341,7 @@ a {
 .btn.danger {
   color: var(--danger);
   border-color: #f0c9c9;
-  background: #fff;
+  background: var(--panel);
 }
 
 .btn.danger:hover:not(:disabled) {
@@ -184,7 +355,7 @@ a {
 }
 
 .btn.ghost:hover:not(:disabled) {
-  background: #eef0f4;
+  background: var(--fill);
 }
 
 .btn.sm {
@@ -201,7 +372,7 @@ a {
   padding: 7px 10px;
   border: 1px solid var(--border-strong);
   border-radius: 8px;
-  background: #fff;
+  background: var(--panel);
   color: var(--text);
   font-family: inherit;
   font-size: 13px;
@@ -261,7 +432,7 @@ a {
   display: inline-block;
   padding: 1px 7px;
   border-radius: 20px;
-  background: #eef1f6;
+  background: var(--fill);
   color: var(--text-2);
   font-size: 11.5px;
   line-height: 18px;
@@ -290,7 +461,7 @@ a {
   max-width: 380px;
   padding: 10px 14px;
   border-radius: 9px;
-  background: #fff;
+  background: var(--panel);
   border: 1px solid var(--border);
   box-shadow: 0 8px 28px rgba(16, 24, 40, 0.14);
   font-size: 13px;
@@ -400,7 +571,7 @@ a {
 
 .cover {
   aspect-ratio: 3 / 4;
-  background: linear-gradient(150deg, #eef1f7, #dde3ee);
+  background: linear-gradient(150deg, var(--fill-2), var(--fill));
   display: grid;
   place-items: center;
   overflow: hidden;
@@ -542,7 +713,7 @@ a {
 
 .toc-locate:hover {
   color: var(--accent);
-  background: rgba(0, 0, 0, 0.05);
+  background: var(--fill);
 }
 
 .toc-item {
@@ -561,7 +732,7 @@ a {
 }
 
 .toc-item:hover {
-  background: #f2f4f8;
+  background: var(--fill-2);
   color: var(--text);
 }
 
@@ -615,7 +786,7 @@ a {
 
 .toc-caret:hover {
   color: var(--text);
-  background: rgba(0, 0, 0, 0.05);
+  background: var(--fill);
 }
 
 .toc-caret svg {
@@ -641,7 +812,7 @@ a {
 }
 
 .hier-group:hover {
-  background: #f4f6fa;
+  background: var(--fill-2);
 }
 
 .hier-group .g-title {
@@ -653,7 +824,7 @@ a {
 
 .reader-main {
   overflow-y: auto;
-  background: var(--bg);
+  background: var(--rd-bg);
   scroll-behavior: smooth;
 }
 
@@ -665,16 +836,16 @@ a {
   align-items: center;
   gap: 8px;
   padding: 9px 22px;
-  background: rgba(246, 247, 249, 0.92);
+  background: var(--rd-bg);
   backdrop-filter: blur(8px);
-  border-bottom: 1px solid var(--border);
+  border-bottom: 1px solid var(--rd-border);
 }
 
 .reader-paper {
   max-width: 760px;
   margin: 28px auto 80px;
-  background: #fff;
-  border: 1px solid var(--border);
+  background: var(--rd-paper);
+  border: 1px solid var(--rd-border);
   border-radius: 12px;
   padding: 48px 56px 60px;
   box-shadow: var(--shadow);
@@ -682,9 +853,17 @@ a {
 
 .reader-content {
   font-family: var(--font-serif);
-  color: #22262e;
+  color: var(--rd-text);
   line-height: 1.95;
   word-wrap: break-word;
+}
+
+/* Selections: with native long-press selection disabled on touch, the reader
+   creates word selections programmatically — the paint still comes from
+   ::selection, tinted per theme so it never reads as a dark overlay. */
+.reader-content ::selection,
+.reader-content::selection {
+  background: var(--rd-sel);
 }
 
 .reader-content img,
@@ -702,6 +881,7 @@ a {
   font-family: var(--font);
   line-height: 1.4;
   margin: 1.6em 0 0.7em;
+  color: var(--rd-head);
 }
 
 .reader-content h1 {
@@ -764,7 +944,7 @@ a {
   overflow: hidden;
   background:
     radial-gradient(circle at 50% 30%, rgba(255, 255, 255, 0.18) 0%, transparent 60%),
-    #e3ddd1; /* warm desk surface */
+    var(--rd-desk); /* warm desk surface */
 }
 
 /* Docked TOC mode: the chapter list pins as a persistent left sidebar and the
@@ -844,7 +1024,7 @@ a {
   bottom: 14px;
   font-size: 11px;
   line-height: 1;
-  color: #9a8b78;
+  color: var(--rd-muted);
   pointer-events: none;
   user-select: none;
   font-family: var(--font);
@@ -886,7 +1066,7 @@ a {
   pointer-events: none;
   background:
     linear-gradient(90deg, rgba(0, 0, 0, 0.04) 0%, rgba(0, 0, 0, 0) 5%, rgba(0, 0, 0, 0) 95%, rgba(0, 0, 0, 0.04) 100%),
-    linear-gradient(180deg, #fdfbf6 0%, #faf8f3 100%);
+    linear-gradient(180deg, var(--rd-paper) 0%, var(--rd-paper-2) 100%);
   box-shadow:
     0 1px 3px rgba(0, 0, 0, 0.1),
     0 10px 28px rgba(0, 0, 0, 0.16);
@@ -921,7 +1101,7 @@ a {
 .reader-fill .page-sheet.right {
   border-radius: 0;
   box-shadow: none;
-  background: linear-gradient(180deg, #fdfbf6 0%, #faf8f3 100%);
+  background: linear-gradient(180deg, var(--rd-paper) 0%, var(--rd-paper-2) 100%);
 }
 
 /* The page number has only the bottom margin to live in now (22px), so it sits
@@ -1011,13 +1191,13 @@ a {
   position: absolute;
   column-fill: auto;
   background: transparent;
-  color: #2c2f33;
+  color: var(--rd-text);
   overflow: hidden;
   will-change: transform;
 }
 
 .reader-paged .reader-content {
-  color: #2c2f33;
+  color: var(--rd-text);
   font-family: var(--font-serif);
   line-height: 1.95;
   word-wrap: break-word;
@@ -1055,7 +1235,7 @@ a {
   margin: 1.2em 0;
   padding: 4px 0 4px 16px;
   border-left: 3px solid var(--border-strong);
-  color: #4a4f57;
+  color: var(--rd-muted);
   break-inside: avoid;
 }
 .reader-paged .reader-content table {
@@ -1079,7 +1259,8 @@ a {
 .reader-content mark.hl-green { background: #bdf5c8; }
 .reader-content mark.hl-red { background: #ffc9c9; }
 
-/* chrome (on-demand bars) */
+/* chrome (on-demand bars) — theme-coloured via --chrome-* so a paper page is
+   never crowned with jet-black bars again */
 .reader-chrome {
   position: absolute;
   left: 0;
@@ -1089,11 +1270,19 @@ a {
   align-items: center;
   gap: 8px;
   padding: 9px 18px;
-  background: rgba(18, 20, 26, 0.94);
-  color: #e8eaed;
+  background: var(--chrome-bg);
+  color: var(--chrome-fg);
   backdrop-filter: blur(8px);
+  /* Always mounted on touch (see Reader): open/close is an opacity change, so
+     Android WebView never rebuilds its layer tree mid-gesture. */
+  transition: opacity 160ms ease-out;
 }
-.reader-chrome.top { top: 0; border-bottom: 1px solid rgba(255, 255, 255, 0.08); justify-content: space-between; }
+.reader-chrome.chrome-hidden {
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+}
+.reader-chrome.top { top: 0; border-bottom: 1px solid var(--chrome-border); justify-content: space-between; }
 .reader-chrome .chrome-left { display: flex; align-items: center; gap: 10px; min-width: 0; }
 .reader-chrome .chrome-center {
   flex: 1 1 auto;
@@ -1102,7 +1291,7 @@ a {
   text-align: center;
   font-size: 13px;
   font-weight: 550;
-  color: #fff;
+  color: var(--chrome-fg);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -1112,23 +1301,23 @@ a {
 .reader-chrome.bottom {
   bottom: 0;
   justify-content: space-between;
-  border-top: 1px solid rgba(255, 255, 255, 0.08);
+  border-top: 1px solid var(--chrome-border);
 }
 .reader-chrome .btn {
-  background: rgba(255, 255, 255, 0.08);
-  color: #e8eaed;
-  border-color: rgba(255, 255, 255, 0.18);
+  background: var(--chrome-btn-bg);
+  color: var(--chrome-btn-fg);
+  border-color: var(--chrome-btn-border);
 }
-.reader-chrome .btn:hover { background: rgba(255, 255, 255, 0.16); }
+.reader-chrome .btn:hover { background: var(--fill); }
 .reader-chrome .btn.primary {
   background: var(--accent);
   color: #fff;
   border-color: var(--accent);
 }
 .reader-chrome .btn:disabled { opacity: 0.4; cursor: default; }
-.reader-chrome .crumb { display: flex; align-items: center; gap: 6px; font-size: 13px; color: #e8eaed; }
-.reader-chrome .crumb strong { color: #fff; font-weight: 550; }
-.reader-chrome .muted { color: #aab1bd; }
+.reader-chrome .crumb { display: flex; align-items: center; gap: 6px; font-size: 13px; color: var(--chrome-muted); }
+.reader-chrome .crumb strong { color: var(--chrome-fg); font-weight: 550; }
+.reader-chrome .muted { color: var(--chrome-muted); }
 
 /* Narrow screens (phones). The top bar carries eight controls and ran straight
    off the right edge at 390px, where the last ones became untappable. Wrapping
@@ -1242,7 +1431,7 @@ a {
   line-height: 1.5;
   border-left: 2px solid transparent;
 }
-.drawer-item:hover { background: #f2f4f8; color: var(--text); }
+.drawer-item:hover { background: var(--fill-2); color: var(--text); }
 .drawer-item.active { background: var(--accent-soft); color: var(--accent); border-left-color: var(--accent); }
 .drawer-item .num { color: var(--text-3); margin-right: 6px; font-size: 11.5px; }
 .drawer-item.group { color: var(--text); font-weight: 600; }
@@ -1265,7 +1454,7 @@ a {
   border-radius: 6px;
   min-width: 0;
 }
-.drawer-row-main:hover { background: #f2f4f8; }
+.drawer-row-main:hover { background: var(--fill-2); }
 .drawer-row-title { font-size: 13px; display: flex; align-items: center; gap: 6px; }
 .drawer-row .btn.danger { align-self: center; }
 
@@ -1277,7 +1466,8 @@ a {
   display: flex;
   gap: 6px;
   padding: 6px;
-  background: rgba(18, 20, 26, 0.96);
+  background: var(--chrome-bg);
+  border: 1px solid var(--chrome-border);
   border-radius: 8px;
   box-shadow: 0 6px 18px rgba(0, 0, 0, 0.3);
 }
@@ -1467,7 +1657,7 @@ a {
 }
 
 .note-card-main:hover {
-  background: rgba(128, 128, 128, 0.06);
+  background: var(--fill);
 }
 
 .note-card-title {
@@ -1536,7 +1726,7 @@ a {
 }
 
 .chapter-row:hover {
-  background: #f4f6fa;
+  background: var(--fill-2);
 }
 
 .chapter-row.active {
@@ -1589,7 +1779,7 @@ a {
 }
 
 .icon-btn:hover {
-  background: #e6e9f0;
+  background: var(--fill);
   color: var(--text);
 }
 
@@ -1619,7 +1809,7 @@ a {
   overflow: hidden;
   cursor: pointer;
   aspect-ratio: 3/4;
-  background: #eef1f6;
+  background: var(--fill);
   padding: 0;
 }
 
@@ -1663,7 +1853,7 @@ a {
   border: 1px solid var(--border);
   border-radius: 8px;
   padding: 22px 26px;
-  background: #fff;
+  background: var(--panel);
   max-height: 60vh;
   overflow-y: auto;
 }
@@ -1738,7 +1928,7 @@ a {
   border-radius: 7px;
   overflow: hidden;
   cursor: pointer;
-  background: #eef1f6;
+  background: var(--fill);
   padding: 0;
   display: flex;
   flex-direction: column;
@@ -1757,7 +1947,7 @@ a {
 .split-cover-pick .thumb {
   aspect-ratio: 3 / 4;
   width: 100%;
-  background: #eef1f6;
+  background: var(--fill);
   display: block;
 }
 
@@ -1802,7 +1992,7 @@ a {
   height: 60px;
   border-radius: 6px;
   overflow: hidden;
-  background: #eef1f6;
+  background: var(--fill);
   flex: none;
   display: block;
 }
@@ -1862,7 +2052,7 @@ a {
   align-items: center;
   gap: 10px;
   padding: 7px 10px;
-  border-bottom: 1px solid #f0f2f6;
+  border-bottom: 1px solid var(--border);
 }
 
 .split-row:last-child {
@@ -1885,7 +2075,7 @@ a {
   padding: 3px 9px;
   border-radius: 20px;
   font-size: 12px;
-  background: #eef1f6;
+  background: var(--fill);
   color: var(--text-2);
 }
 
@@ -1943,7 +2133,7 @@ a {
   padding: 24px;
 }
 .modal {
-  background: #fff;
+  background: var(--panel);
   border-radius: 12px;
   box-shadow: 0 12px 48px rgba(16, 24, 40, 0.28);
   width: min(880px, 100%);
@@ -2121,7 +2311,7 @@ a {
   align-items: center;
   gap: 12px;
   padding: 9px 14px;
-  border-bottom: 1px solid #f0f2f6;
+  border-bottom: 1px solid var(--border);
 }
 
 .wd-row:last-child {
@@ -2133,7 +2323,7 @@ a {
 }
 
 .wd-row.dir:hover {
-  background: #f4f6fa;
+  background: var(--fill-2);
 }
 
 .wd-row.sel {
@@ -2162,7 +2352,7 @@ a {
 }
 
 .wd-badge.file {
-  background: #eef1f6;
+  background: var(--fill);
   color: var(--text-3);
 }
 
@@ -2272,7 +2462,7 @@ a {
   font-size: 11px;
   padding: 1px 7px;
   border-radius: 20px;
-  background: #eef1f6;
+  background: var(--fill);
   color: var(--text-3);
 }
 
@@ -2459,7 +2649,7 @@ a {
   gap: 8px;
   padding: 7px 18px;
   background: var(--accent-soft);
-  border-bottom: 1px solid #ccd9ff;
+  border-bottom: 1px solid var(--border-strong);
   font-size: 13px;
   color: var(--text-2);
   white-space: nowrap;
@@ -2490,10 +2680,10 @@ a {
   transform: translateX(-50%);
   z-index: 31;
   max-width: calc(100% - 40px);
-  border: 1px solid #ccd9ff;
+  border: 1px solid var(--border-strong);
   border-radius: 999px;
   padding: 8px 10px 8px 16px;
-  background: rgba(234, 240, 255, 0.97);
+  background: var(--chrome-bg);
   box-shadow: 0 6px 24px rgba(16, 24, 40, 0.14);
   backdrop-filter: blur(8px);
 }
@@ -2671,7 +2861,7 @@ a {
   height: 75px;
   border-radius: 6px;
   overflow: hidden;
-  background: linear-gradient(150deg, #eef1f7, #dde3ee);
+  background: linear-gradient(150deg, var(--fill-2), var(--fill));
   display: grid;
   place-items: center;
   font-family: var(--font-serif);
@@ -2873,7 +3063,7 @@ a {
   height: 38px;
   border: none;
   background: transparent;
-  color: #e8eaed;
+  color: var(--chrome-fg);
   border-radius: 50%;
   cursor: pointer;
   flex: none;
@@ -2881,7 +3071,7 @@ a {
   -webkit-tap-highlight-color: transparent;
 }
 .chrome-icon:active {
-  background: rgba(255, 255, 255, 0.14);
+  background: var(--chrome-btn-bg);
 }
 .chrome-icon:disabled {
   opacity: 0.35;
@@ -2891,8 +3081,8 @@ a {
   height: 30px;
   padding: 0 12px;
   border-radius: 15px;
-  background: rgba(255, 255, 255, 0.08);
-  color: #cfd4da;
+  background: var(--chrome-btn-bg);
+  color: var(--chrome-btn-fg);
   font-size: 12.5px;
   font-family: var(--font);
 }
@@ -2912,7 +3102,7 @@ a {
   text-align: center;
   font-size: 14px;
   font-weight: 550;
-  color: #fff;
+  color: var(--chrome-fg);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -2941,7 +3131,7 @@ a {
 .m-slider::-webkit-slider-runnable-track {
   height: 3px;
   border-radius: 2px;
-  background: rgba(255, 255, 255, 0.28);
+  background: var(--chrome-track);
 }
 .m-slider::-webkit-slider-thumb {
   -webkit-appearance: none;
@@ -2949,14 +3139,14 @@ a {
   width: 18px;
   height: 18px;
   border-radius: 50%;
-  background: #fff;
+  background: var(--chrome-thumb);
   box-shadow: 0 1px 4px rgba(0, 0, 0, 0.4);
 }
 .m-slider-pct {
   text-align: center;
   font-size: 11px;
   line-height: 1.2;
-  color: #aab1bd;
+  color: var(--chrome-muted);
   user-select: none;
 }
 .m-tabs {
@@ -2971,7 +3161,7 @@ a {
   padding: 7px 0 4px;
   border: none;
   background: none;
-  color: #cfd4da;
+  color: var(--chrome-muted);
   font-size: 11px;
   font-family: var(--font);
   cursor: pointer;
@@ -3081,84 +3271,54 @@ a {
   border-radius: 50%;
   border: 1px solid rgba(0, 0, 0, 0.15);
 }
-.rd-theme.t-paper .rd-theme-dot { background: linear-gradient(180deg, #fdfbf6, #f3efe5); }
+.rd-theme.t-light .rd-theme-dot { background: linear-gradient(180deg, #ffffff, #f0f2f5); }
+.rd-theme.t-sepia .rd-theme-dot { background: linear-gradient(180deg, #fdfbf6, #f3efe5); }
 .rd-theme.t-green .rd-theme-dot { background: #cde8cf; }
 .rd-theme.t-dark .rd-theme-dot { background: #16181c; }
+.rd-theme.t-midnight .rd-theme-dot { background: linear-gradient(180deg, #182031, #10151f); }
 .rd-theme.on .rd-theme-dot {
   outline: 2px solid var(--accent);
   outline-offset: 2px;
 }
 
-/* ------------------------------ reading themes ------------------------------
-   Pure CSS recolouring driven by `.reader.theme-*`. Text metrics change with
-   colours, but pagination re-measures on any relayout, so no JS involvement. */
+/* ------------------------------ reading surfaces ------------------------------
+   Colours come straight from the --rd-* variables (set per app theme on <html>),
+   so the reader recolours together with the rest of the app and there is no
+   per-element theme class to keep in sync. Text metrics change with colours,
+   but pagination re-measures on any relayout, so no JS involvement. */
 .reader {
   position: relative;
 }
-.reader.theme-green {
-  --rd-bg: #cde8cf;
-  --rd-paper: #cde8cf;
-  --rd-desk: #b8d6bb;
-  --rd-text: #24352a;
-  --rd-head: #16281c;
-  --rd-muted: #52705c;
-  --rd-border: rgba(0, 0, 0, 0.1);
-}
-.reader.theme-dark {
-  --rd-bg: #121417;
-  --rd-paper: #14161a;
-  --rd-desk: #0b0d0f;
-  --rd-text: #9aa3ad;
-  --rd-head: #ccd3da;
-  --rd-muted: #6b7480;
-  --rd-border: rgba(255, 255, 255, 0.08);
-}
-.reader[class*='theme-'] .reader-main {
-  background: var(--rd-bg);
-}
-.reader[class*='theme-'] .reader-paper {
-  background: var(--rd-paper);
-  border-color: var(--rd-border);
-  box-shadow: none;
-}
-.reader[class*='theme-'] .reader-paged,
-.reader[class*='theme-'].reader-paged {
-  background: var(--rd-desk);
-}
-.reader[class*='theme-'] .page-sheet,
-.reader[class*='theme-'] .page-sheet.left,
-.reader[class*='theme-'] .page-sheet.right {
-  background: var(--rd-paper);
-}
-.reader[class*='theme-'] .reader-content {
-  color: var(--rd-text);
-}
-.reader[class*='theme-'] .reader-content h1,
-.reader[class*='theme-'] .reader-content h2,
-.reader[class*='theme-'] .reader-content h3,
-.reader[class*='theme-'] .reader-content h4 {
-  color: var(--rd-head);
-}
-.reader[class*='theme-'] .reader-content blockquote {
-  color: var(--rd-muted);
-}
-.reader[class*='theme-'] .page-sheet .page-num {
-  color: var(--rd-muted);
-  opacity: 0.8;
-}
-.reader[class*='theme-'] .reader-toolbar {
-  background: var(--rd-bg);
-  border-bottom-color: var(--rd-border);
-}
-.reader[class*='theme-'] .toc {
+.reader .toc {
   border-right-color: var(--rd-border);
 }
-.reader[class*='theme-'] .toc-item,
-.reader[class*='theme-'] .toc-head {
+.reader .toc-item,
+.reader .toc-head {
   color: var(--rd-text);
 }
-.reader[class*='theme-'] .toc-item:hover {
-  background: rgba(127, 127, 127, 0.12);
+.reader .toc-item:hover {
+  background: var(--fill);
+}
+
+/* Touch: native long-press selection inside a CSS-column layout can select the
+   whole content box — a translucent overlay across the entire page (the
+   "整面变暗" bug). The reader owns the gesture instead: 450ms -> a single word
+   range -> its own selection toolbar. Scroll mode keeps native selection (no
+   columns there, so the browser selects words correctly).
+   Blink skips user-select:none content even for programmatic selections, so
+   the long-press flips .allow-sel on for the lifetime of the word selection
+   and every new touchstart takes it off again. */
+.touch-primary .reader-paged .reader-content,
+.touch-primary .reader-paged .reader-columns,
+.touch-primary .reader-paged .page-sheet {
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-touch-callout: none;
+}
+.touch-primary .reader-paged .reader-content.allow-sel,
+.touch-primary .reader-paged .reader-columns.allow-sel {
+  -webkit-user-select: text;
+  user-select: text;
 }
 
 /* Phone reader refinements: overlay clamping, touch targets, drawer side. */
@@ -3239,19 +3399,14 @@ a {
 
 /* ------------------------- reader chrome anti-flicker -------------------------
    On Android WebView, mounting an element with backdrop-filter forces the whole
-   backdrop to re-rasterize and visibly flashes the page. The phone chrome is
-   therefore an opaque bar with a short fade: it reads as an animation, not a
-   repaint glitch. Desktop (WebView2) keeps the blur. */
-@keyframes chrome-in {
-  from { opacity: 0; }
-  to { opacity: 1; }
-}
+   backdrop to re-rasterize and visibly flashes the page. Two defences: the
+   phone chrome drops the blur entirely (opaque --chrome-bg), and the bars stay
+   mounted while hidden (.chrome-hidden toggles opacity only). Desktop (WebView2)
+   keeps the blur. */
 @media (max-width: 640px) {
   .reader-chrome {
     backdrop-filter: none;
     -webkit-backdrop-filter: none;
-    background: #12141af8;
-    animation: chrome-in 150ms ease-out;
   }
 }
 
@@ -3316,7 +3471,7 @@ a {
   width: 21px;
   height: 21px;
   border-radius: 50%;
-  background: #fff;
+  background: var(--panel);
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);
   transition: transform 140ms ease;
 }

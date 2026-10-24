@@ -8,27 +8,21 @@ import { Anchor, EDGE_GAP, placeOverlay } from '../overlay';
 import { wordAt } from '../wordHit';
 import {
   MODE_KEY,
-  THEME_KEY,
   FONT_FAMILY_KEY,
   FONT_OVERRIDE_KEY,
+  APP_THEMES,
+  appTheme,
+  applyAppTheme,
   fontOverrideEnabled,
+  type AppTheme,
   type ReadMode,
-  type ReadTheme,
 } from '../readingPrefs';
+import { isTouchPrimary } from '../device';
 import FontPicker, { CUSTOM_FONT_FAMILY } from '../components/FontPicker';
 
 const FONT_KEY = 'epubmaker.fontSize';
 const TOC_DOCK_KEY = 'epubmaker.tocDocked';
 
-// Reading surface themes. Only the phone shows the settings panel today, but
-// the class applies to both hosts: the colours are plain CSS overrides on
-// `.reader.theme-*`, so pagination is untouched (text metrics change, but the
-// measure pass re-runs on any relayout anyway).
-const THEMES: Array<{ id: ReadTheme; label: string }> = [
-  { id: 'paper', label: '纸白' },
-  { id: 'green', label: '护眼' },
-  { id: 'dark', label: '夜间' },
-];
 // Width of the docked TOC sidebar (kept in sync with --toc-dock-w in styles.css
 // and the .toc sidebar width in scroll mode for visual consistency).
 const TOC_DOCK_W = 268;
@@ -36,19 +30,6 @@ const TOC_DOCK_W = 268;
 // Height of the top/bottom band that reveals (or, on touch, toggles) the reader
 // chrome. Same band for hover and tap so the affordance is in one place.
 const CHROME_EDGE = 64;
-
-// True on devices whose primary pointer cannot hover — phones and tablets.
-//
-// `(pointer: coarse)`/`(hover: none)` describe the *primary* pointer, so a
-// touchscreen laptop with a trackpad stays "desktop" and keeps the old hover
-// behaviour. `any-pointer: fine` is the guard for that case: a device with a
-// mouse attached is never treated as touch-primary, even though it also has a
-// touchscreen and therefore maxTouchPoints > 0.
-function isTouchPrimary(): boolean {
-  if (typeof window === 'undefined' || !window.matchMedia) return false;
-  if (window.matchMedia('(any-pointer: fine)').matches) return false;
-  return window.matchMedia('(pointer: coarse)').matches || window.matchMedia('(hover: none)').matches;
-}
 
 /** True while a field is focused — the case where a soft keyboard is (or is
  * about to be) covering part of the screen. */
@@ -482,7 +463,9 @@ export default function Reader() {
   const [fontSize, setFontSize] = useState(() => Number(localStorage.getItem(FONT_KEY)) || 17);
 
   const [mode, setMode] = useState<ReadMode>(() => (localStorage.getItem(MODE_KEY) as ReadMode) || 'paged');
-  const [theme, setTheme] = useState<ReadTheme>(() => (localStorage.getItem(THEME_KEY) as ReadTheme) || 'paper');
+  // Theme is app-wide (html[data-app-theme]); the Aa sheet only edits it. A
+  // local mirror keeps the picker's tick mark honest while the panel is open.
+  const [theme, setTheme] = useState<AppTheme>(() => appTheme());
 
   // Reading font: 'default' (system) or the file name of a downloaded font.
   // `fontEpoch` increments once the custom face has actually loaded, so the
@@ -710,7 +693,7 @@ export default function Reader() {
 
   useEffect(() => localStorage.setItem(FONT_KEY, String(fontSize)), [fontSize]);
   useEffect(() => localStorage.setItem(MODE_KEY, mode), [mode]);
-  useEffect(() => localStorage.setItem(THEME_KEY, theme), [theme]);
+  // Theme persists through applyAppTheme at pick time; nothing to save here.
   useEffect(() => localStorage.setItem(TOC_DOCK_KEY, tocDocked ? '1' : '0'), [tocDocked]);
   useEffect(() => localStorage.setItem(FONT_FAMILY_KEY, readFont), [readFont]);
   useEffect(() => localStorage.setItem(FONT_OVERRIDE_KEY, fontOverride ? '1' : '0'), [fontOverride]);
@@ -1504,10 +1487,18 @@ export default function Reader() {
     if (!host) return;
     const MIN_TRAVEL = 40; // px before a drag counts as a page turn
     const MIN_RATIO = 1.2; // horizontal travel must beat vertical by this much
+    const LP_MS = 450; // hold-to-select threshold, tuned like 微信读书
+    const LP_SLOP = 10; // finger drift that cancels the hold
     let startX = 0;
     let startY = 0;
     let active = false;
     let horizontal = false;
+    let lpTimer = 0;
+
+    const cancelLongPress = () => {
+      window.clearTimeout(lpTimer);
+      lpTimer = 0;
+    };
 
     const onStart = (e: TouchEvent) => {
       // Multi-touch is never a page turn (pinch, or a stray second finger).
@@ -1537,6 +1528,42 @@ export default function Reader() {
       horizontal = false;
       // The card points at a word on the page being left behind.
       cancelWordLookup();
+      // A new touch ends the previous word selection (there are no drag
+      // handles to refine it with), and with the flag off the native
+      // long-press cannot start its whole-page selection.
+      contentRef.current?.classList.remove('allow-sel');
+      const s = window.getSelection();
+      if (s && !s.isCollapsed) s.removeAllRanges();
+      // Own the long-press: native selection inside the column layout selects
+      // the whole content box (the "整面变暗" bug), so user-select is disabled
+      // and this timer builds a one-word selection instead.
+      cancelLongPress();
+      lpTimer = window.setTimeout(() => {
+        lpTimer = 0;
+        if (!active) return;
+        const hit = wordHitAt(startX, startY);
+        if (!hit) return;
+        // A tap on the word would have been a lookup; a hold is a selection.
+        try {
+          navigator.vibrate?.(15);
+        } catch {
+          /* no vibration on this device */
+        }
+        setLookupCard(null);
+        // Blink refuses selections inside user-select:none subtrees, so the
+        // word selection needs the flag on for its whole lifetime (until the
+        // next touchstart, above).
+        contentRef.current?.classList.add('allow-sel');
+        const s = window.getSelection();
+        if (s) {
+          s.removeAllRanges();
+          s.addRange(hit.range);
+        }
+        // Swallow the click that ends the gesture: with a live selection it
+        // would be a no-op anyway, but turning the timestamp also protects the
+        // no-hit case.
+        turnedAtRef.current = Date.now();
+      }, LP_MS);
     };
 
     const onMove = (e: TouchEvent) => {
@@ -1544,6 +1571,7 @@ export default function Reader() {
       const t = e.touches[0];
       const dx = t.clientX - startX;
       const dy = t.clientY - startY;
+      if (Math.hypot(dx, dy) > LP_SLOP) cancelLongPress();
       if (Math.abs(dx) > 12 && Math.abs(dx) > Math.abs(dy)) {
         horizontal = true;
         if (e.cancelable) e.preventDefault();
@@ -1551,6 +1579,7 @@ export default function Reader() {
     };
 
     const onEnd = (e: TouchEvent) => {
+      cancelLongPress();
       if (!active) return;
       active = false;
       const t = e.changedTouches[0];
@@ -1575,6 +1604,7 @@ export default function Reader() {
     };
 
     const onCancel = () => {
+      cancelLongPress();
       active = false;
       horizontal = false;
     };
@@ -1584,6 +1614,7 @@ export default function Reader() {
     host.addEventListener('touchend', onEnd, { passive: true });
     host.addEventListener('touchcancel', onCancel, { passive: true });
     return () => {
+      cancelLongPress();
       host.removeEventListener('touchstart', onStart);
       host.removeEventListener('touchmove', onMove);
       host.removeEventListener('touchend', onEnd);
@@ -1655,7 +1686,13 @@ export default function Reader() {
         // Overlays are checked innermost first.
         if (lookupCard) { setLookupCard(null); return; }
         if (popover) { setPopover(null); return; }
-        if (sel) { setSel(null); return; }
+        if (sel) {
+          setSel(null);
+          // Also drop the DOM selection (and the touch-selection flag with it).
+          window.getSelection()?.removeAllRanges();
+          contentRef.current?.classList.remove('allow-sel');
+          return;
+        }
         if (settingsOpen) { setSettingsOpen(false); return; }
         if (tocOpen) { setTocOpen(false); return; }
         if (bmOpen) { setBmOpen(false); return; }
@@ -1903,7 +1940,12 @@ export default function Reader() {
   // still resolves to the nearest caret. Without the box check below, the
   // lookup would eat nearly every middle-of-the-page tap and the chrome would
   // become unreachable on touch.
-  function wordHitAt(x: number, y: number): { word: string; offset: number; rect: DOMRect } | null {
+  function wordHitAt(x: number, y: number): {
+    word: string;
+    offset: number;
+    rect: DOMRect;
+    range: Range;
+  } | null {
     const root = contentRef.current;
     if (!root) return null;
     const doc = document as Document & {
@@ -1932,7 +1974,7 @@ export default function Reader() {
     ) {
       return null;
     }
-    return { word: span.word, offset: charOffset(root, node, span.start), rect };
+    return { word: span.word, offset: charOffset(root, node, span.start), rect, range };
   }
 
   function cancelWordLookup() {
@@ -2177,8 +2219,14 @@ export default function Reader() {
     </div>
   );
 
+  // The touch chrome is ALWAYS mounted; closed state is just .chrome-hidden
+  // (opacity/visibility). Mounting and unmounting fixed bars forces Android
+  // WebView to rebuild its layer tree, which flashed the whole page — the
+  // transition below reads as an animation instead of a repaint glitch.
+  const chromeCls = chromeOpen ? '' : ' chrome-hidden';
+
   const mTopBar = (
-    <div className="reader-chrome top m-top">
+    <div className={`reader-chrome top m-top${chromeCls}`}>
       <button className="chrome-icon" onClick={exitReading} aria-label={detour ? '返回生词本' : '返回书架'}>
         {iconBack}
       </button>
@@ -2197,7 +2245,7 @@ export default function Reader() {
   // jumps live on its two ends. Dragging only moves pageIndex, so the offset
   // map stays valid and no re-measure is needed.
   const mBottomPaged = (
-    <div className="reader-chrome bottom m-bottom">
+    <div className={`reader-chrome bottom m-bottom${chromeCls}`}>
       <div className="m-slider-row">
         <button
           className="chrome-icon text"
@@ -2236,7 +2284,7 @@ export default function Reader() {
   );
 
   const mBottomScroll = (
-    <div className="reader-chrome bottom m-bottom">{mTabsRow}</div>
+    <div className={`reader-chrome bottom m-bottom${chromeCls}`}>{mTabsRow}</div>
   );
 
 
@@ -2401,13 +2449,18 @@ export default function Reader() {
               </button>
             </div>
             <div className="rd-set-row last">
-              <span className="rd-set-label">背景</span>
+              <span className="rd-set-label">主题</span>
               <div className="rd-themes">
-                {THEMES.map((t) => (
+                {APP_THEMES.map((t) => (
                   <button
                     key={t.id}
                     className={`rd-theme t-${t.id}${theme === t.id ? ' on' : ''}`}
-                    onClick={() => setTheme(t.id)}
+                    onClick={() => {
+                      // One call re-themes every surface: it writes the key and
+                      // flips html[data-app-theme], which the CSS variables hang off.
+                      applyAppTheme(t.id);
+                      setTheme(t.id);
+                    }}
                   >
                     <span className="rd-theme-dot" />
                     <span>{t.label}</span>
@@ -2453,7 +2506,7 @@ export default function Reader() {
 
   if (mode === 'scroll') {
     return (
-      <div className={'reader' + (theme !== 'paper' ? ` theme-${theme}` : '')}>
+      <div className="reader">
         <aside className="toc">
           <div className="toc-head">
             目录 · {chapters.length} 章
@@ -2540,7 +2593,7 @@ export default function Reader() {
           </div>
         </div>
 
-        {touchPrimary && chromeOpen && (
+        {touchPrimary && (
           <>
             {mTopBar}
             {mBottomScroll}
@@ -2571,8 +2624,7 @@ export default function Reader() {
       className={
         'reader reader-paged' +
         (tocDocked ? ' toc-docked' : '') +
-        (fillLayout ? ' reader-fill' : '') +
-        (theme !== 'paper' ? ` theme-${theme}` : '')
+        (fillLayout ? ' reader-fill' : '')
       }
       ref={readerRef}
     >
@@ -2712,12 +2764,10 @@ export default function Reader() {
       {/* Phone gets its own bars (top: back/title/star; bottom: slider + tabs);
           desktop keeps the original single-row chrome with hover reveal. */}
       {touchPrimary ? (
-        chromeOpen && (
-          <>
-            {mTopBar}
-            {mBottomPaged}
-          </>
-        )
+        <>
+          {mTopBar}
+          {mBottomPaged}
+        </>
       ) : (
         (chromeOpen || chromeHover) && (
           <>
