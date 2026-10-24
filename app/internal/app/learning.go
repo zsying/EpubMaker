@@ -104,6 +104,12 @@ func (b *Backend) DictImportCSV(csvPath string) (map[string]any, error) {
 func (b *Backend) DictLookup(raw string) (*LookupResult, error) {
 	d, err := openDict()
 	if err != nil {
+		if errors.Is(err, dict.ErrNotInstalled) {
+			// No dictionary on this device (the phone ships without one).
+			// Return a clean miss so the lookup card can say so — an error
+			// here is swallowed by the frontend and the tap looks dead.
+			return &LookupResult{Found: false, Query: raw}, nil
+		}
 		return nil, err
 	}
 	res, err := d.Lookup(raw)
@@ -193,6 +199,11 @@ func isCommonWord(e *dict.Entry) bool {
 func (b *Backend) LookupWord(bookID, chapterID string, offset int, raw, context string) (*LookupResult, error) {
 	d, err := openDict()
 	if err != nil {
+		if errors.Is(err, dict.ErrNotInstalled) {
+			// Same graceful miss as DictLookup: the card must open and say
+			// "no dictionary" instead of the tap doing nothing at all.
+			return &LookupResult{Found: false, Query: raw}, nil
+		}
 		return nil, err
 	}
 	res, err := d.Lookup(raw)

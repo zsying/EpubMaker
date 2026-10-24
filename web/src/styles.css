@@ -1486,6 +1486,39 @@ a {
   box-shadow: 0 6px 18px rgba(0, 0, 0, 0.3);
 }
 
+/* Selection drag handles (touch + paged): a grip circle hanging under the
+   line with a stem pointing up at the text. Purely touch-driven, so they get
+   touch-action:none and the reader's page-turn gestures ignore them. */
+.sel-handle {
+  position: fixed;
+  z-index: 60;
+  width: 22px;
+  height: 28px;
+  touch-action: none;
+  pointer-events: auto;
+}
+.sel-handle::before {
+  content: '';
+  position: absolute;
+  left: 50%;
+  top: 0;
+  width: 2px;
+  height: 9px;
+  margin-left: -1px;
+  background: var(--accent);
+}
+.sel-handle::after {
+  content: '';
+  position: absolute;
+  left: 1px;
+  top: 9px;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: var(--accent);
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.35);
+}
+
 .sel-lookup {
   height: 22px;
   padding: 0 9px;
@@ -1598,6 +1631,11 @@ a {
 .dict-miss {
   padding-right: 18px;
   color: var(--text-2);
+}
+.dict-miss-hint {
+  margin-top: 4px;
+  font-size: 12px;
+  color: var(--text-3);
 }
 .swatch {
   width: 22px;

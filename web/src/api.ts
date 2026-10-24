@@ -546,6 +546,13 @@ export const api = {
   /** Builds the local dictionary from an ECDICT csv chosen on disk. Blocking. */
   dictImport: (csvPath: string) => call<{ entries: number; path: string }>('DictImportCSV', csvPath),
 
+  /** One in-app downloadable dictionary offered by the Me page. */
+  // eslint-disable-next-line @typescript-eslint/no-empty-object-type
+  dictSources: () => call<Array<{ id: string; name: string; desc: string; url: string; bytes: number }>>('DictSources'),
+
+  /** Downloads a catalog source and imports it. Blocking; minutes on a phone. */
+  downloadDict: (id: string) => call<{ entries: number; source: string }>('DownloadDict', id),
+
   lookupWord: (bookId: string, chapterId: string, offset: number, word: string, context: string) =>
     call<LookupResult>('LookupWord', bookId, chapterId, offset, word, context),
 

@@ -16,9 +16,24 @@ const ENTRIES = [
   { to: '/settings', title: '设置', desc: '字体、翻页模式等阅读偏好' },
 ];
 
+// Formats the advertised size of a downloadable dictionary ("约 18 MB").
+function fmtBytes(n: number): string {
+  if (n >= 1 << 20) return `约 ${Math.round(n / (1 << 20))} MB`;
+  if (n >= 1024) return `约 ${Math.round(n / 1024)} KB`;
+  return '';
+}
+
+// The downloadable catalog comes from the backend; the fallback keeps the
+// sheet usable against an older backend that predates DictSources.
+const FALLBACK_SOURCES = [{ id: 'ecdict-mini', name: 'ECDICT 精简词库', desc: '', bytes: 0 }];
+
 export default function Me() {
   const [dict, setDict] = useState<DictStatus | null>(null);
-  const [importing, setImporting] = useState(false);
+  const [sheetOpen, setSheetOpen] = useState(false);
+  const [sources, setSources] = useState(FALLBACK_SOURCES);
+  // Downloading and importing both block their binding call; the sheet stays
+  // up with a busy label until the backend answers.
+  const [busy, setBusy] = useState<null | { kind: 'download' | 'import'; label: string }>(null);
 
   useEffect(() => {
     let alive = true;
@@ -33,12 +48,52 @@ export default function Me() {
     };
   }, []);
 
-  // The dictionary row is a button, not a status line: tapping it opens the
-  // host's file picker (SAF on the phone) and builds the dictionary from the
-  // chosen ECDICT csv. Importing a full dictionary blocks the binding call for
-  // a while, so the row flips to a busy label until it lands.
-  async function importDict() {
-    if (importing) return;
+  // Load the catalog the first time the sheet opens; a failure (old backend,
+  // transient) falls back to the built-in default entry.
+  useEffect(() => {
+    if (!sheetOpen || sources !== FALLBACK_SOURCES) return;
+    let alive = true;
+    api
+      .dictSources()
+      .then((s) => {
+        if (alive && Array.isArray(s) && s.length > 0) setSources(s);
+      })
+      .catch(() => {});
+    return () => {
+      alive = false;
+    };
+  }, [sheetOpen, sources]);
+
+  async function refreshStatus() {
+    try {
+      setDict(await api.dictStatus());
+    } catch {
+      /* keep the old status */
+    }
+  }
+
+  // One-tap online download: the catalog source is fetched and imported by the
+  // backend in a single blocking call. First run downloads ~18 MB and builds
+  // the database; later runs reuse the cached CSV and only re-import.
+  async function downloadDict(id: string) {
+    if (busy) return;
+    setBusy({ kind: 'download', label: '正在下载词库，首次需要几分钟…' });
+    try {
+      const res = await api.downloadDict(id);
+      await refreshStatus();
+      toast(`词库安装完成 · ${res.entries} 条`, 'success');
+      setSheetOpen(false);
+    } catch (e) {
+      toastError(e);
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  // Local import from the host file picker (SAF on the phone) for users who
+  // already have the full ECDICT csv or a custom one.
+  async function importDictFile() {
+    if (busy) return;
     let path: string | null = null;
     try {
       path = await pickDictFile();
@@ -47,24 +102,24 @@ export default function Me() {
       return;
     }
     if (!path) return; // cancelled
-    setImporting(true);
+    setBusy({ kind: 'import', label: '正在导入词库…' });
     try {
       const res = await api.dictImport(path);
-      const fresh = await api.dictStatus();
-      setDict(fresh);
+      await refreshStatus();
       toast(`词库导入完成 · ${res.entries} 条`, 'success');
+      setSheetOpen(false);
     } catch (e) {
       toastError(e);
     } finally {
-      setImporting(false);
+      setBusy(null);
     }
   }
 
-  const dictDesc = importing
-    ? '正在导入，大词库可能需要一两分钟…'
+  const dictDesc = busy
+    ? busy.label
     : dict?.installed
-      ? `已安装 · ${dict.entries} 条 · 点击更换词库`
-      : '未安装 · 点击选择词库 CSV 文件导入';
+      ? `已安装 · ${dict.entries} 条 · 点击更换`
+      : '未安装 · 点击下载或导入';
 
   return (
     <div className="page me-page">
@@ -86,10 +141,30 @@ export default function Me() {
         ))}
       </div>
 
-      <button type="button" className="me-dict" disabled={importing} onClick={() => void importDict()}>
+      <button type="button" className="me-dict" disabled={!!busy} onClick={() => setSheetOpen(true)}>
         <span>查词词库</span>
-        <span className={dict?.installed || importing ? 'tag' : 'tag muted-tag'}>{dictDesc}</span>
+        <span className={dict?.installed || busy ? 'tag' : 'tag muted-tag'}>{dictDesc}</span>
       </button>
+
+      {sheetOpen && (
+        <div className="sheet-mask" onClick={() => !busy && setSheetOpen(false)}>
+          <div className="sheet" role="menu" onClick={(e) => e.stopPropagation()}>
+            <div className="sheet-title">查词词库</div>
+            {sources.map((s) => (
+              <button key={s.id} className="sheet-item" onClick={() => void downloadDict(s.id)}>
+                在线下载{s.name}
+                {s.bytes > 0 ? `（${fmtBytes(s.bytes)}）` : ''}
+              </button>
+            ))}
+            <button className="sheet-item" onClick={() => void importDictFile()}>
+              从本地文件导入（ECDICT CSV）
+            </button>
+            <button className="sheet-item cancel" disabled={!!busy} onClick={() => setSheetOpen(false)}>
+              取消
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

@@ -231,7 +231,19 @@ type PageIntent = { type: 'first' | 'last' | 'restore'; offset?: number } | null
 
 // `y`/`bottom` are the selection's viewport edges: overlays flip from one side
 // of the text to the other when there is no room in their preferred direction.
-type SelState = { x: number; y: number; bottom: number; start: number; end: number; text: string } | null;
+type SelState = {
+  x: number;
+  y: number;
+  bottom: number;
+  start: number;
+  end: number;
+  text: string;
+  // Viewport rects of the selection's first and last line fragments — the
+  // anchors the drag handles hang from. Plain numbers, not DOMRect, so a
+  // stale rect can never alias live layout.
+  firstRect?: { left: number; top: number; right: number; bottom: number };
+  lastRect?: { left: number; top: number; right: number; bottom: number };
+} | null;
 type PopoverState = { x: number; y: number; ann: Annotation } | null;
 // `offset`/`context` are captured at lookup time so a manual "add to notebook"
 // can still record where the word came from.
@@ -336,6 +348,18 @@ function getSelectionOffsets(root: HTMLElement, range: Range): { start: number; 
   const a = charOffset(root, range.startContainer, range.startOffset);
   const b = charOffset(root, range.endContainer, range.endOffset);
   return b < a ? { start: b, end: a } : { start: a, end: b };
+}
+
+// Snapshot of a client rect for React state.
+function snapRect(r: DOMRect): { left: number; top: number; right: number; bottom: number } {
+  return { left: r.left, top: r.top, right: r.right, bottom: r.bottom };
+}
+
+// First and last line fragment of a selection: where the two drag handles sit.
+function selectionEndRects(range: Range): { first: DOMRect; last: DOMRect } | null {
+  const list = range.getClientRects();
+  if (list.length === 0) return null;
+  return { first: list[0], last: list[list.length - 1] };
 }
 
 // The text node holding a character offset, with the offset inside it. Paged
@@ -524,6 +548,11 @@ export default function Reader() {
   const [bmOpen, setBmOpen] = useState(false);
   const [annOpen, setAnnOpen] = useState(false);
   const [sel, setSel] = useState<SelState>(null);
+  // The live DOM selection behind `sel`: the anchor the drag handles reshape.
+  const selRangeRef = useRef<Range | null>(null);
+  // While a handle is being dragged the toolbar hides (it would chase the
+  // thumb) and the handles follow every frame instead.
+  const [selDragging, setSelDragging] = useState(false);
   const [popover, setPopover] = useState<PopoverState>(null);
   const [noteDraft, setNoteDraft] = useState('');
 
@@ -533,9 +562,9 @@ export default function Reader() {
   // would change the page count and throw the reader off their page.
   const [lookupCard, setLookupCard] = useState<LookupCardState>(null);
   const [lookupBusy, setLookupBusy] = useState(false);
-  // Whether a dictionary is installed at all. A click on a word looks it up
-  // only when there is something to look it up in; otherwise every click would
-  // answer "not in the dictionary", which is noise rather than help.
+  // Whether a dictionary is installed at all. A tap on a word always opens
+  // the lookup card — without a dictionary it says so and points at the
+  // download in 我的 → 查词词库, which is far better than a dead tap.
   const [dictReady, setDictReady] = useState(false);
   // A jump from the notebook or an annotation list has to be visible, not just
   // correct: this is a transient highlight over the landed-on text.
@@ -1508,13 +1537,15 @@ export default function Reader() {
       }
       // Modal surfaces own their gestures: dragging inside the drawer's chapter
       // list, the settings sheet or the chrome bars (its slider is a horizontal
-      // drag!) must never turn pages underneath.
+      // drag!) must never turn pages underneath. Same for the selection drag
+      // handles — their touchstart must not clear the selection they reshape.
       const target = e.target as HTMLElement | null;
       if (
         target &&
         (target.closest('.drawer-mask') ||
           target.closest('.sheet-mask') ||
           target.closest('.reader-chrome') ||
+          target.closest('.sel-handle') ||
           target.closest('input') ||
           target.closest('textarea'))
       ) {
@@ -1528,9 +1559,9 @@ export default function Reader() {
       horizontal = false;
       // The card points at a word on the page being left behind.
       cancelWordLookup();
-      // A new touch ends the previous word selection (there are no drag
-      // handles to refine it with), and with the flag off the native
-      // long-press cannot start its whole-page selection.
+      // A new touch on the page ends the previous word selection (dragging a
+      // handle is exempt — see the ignore list above) and with the flag off
+      // the native long-press cannot start its whole-page selection.
       contentRef.current?.classList.remove('allow-sel');
       const s = window.getSelection();
       if (s && !s.isCollapsed) s.removeAllRanges();
@@ -1820,6 +1851,8 @@ export default function Reader() {
       return;
     }
     const rect = range.getBoundingClientRect();
+    const rects = selectionEndRects(range);
+    selRangeRef.current = range;
     setSel({
       x: rect.left + rect.width / 2,
       y: rect.top,
@@ -1827,7 +1860,104 @@ export default function Reader() {
       start: offs.start,
       end: offs.end,
       text: selection.toString(),
+      firstRect: rects ? snapRect(rects.first) : undefined,
+      lastRect: rects ? snapRect(rects.last) : undefined,
     });
+  }
+
+  // Re-applies a reshaped range: into the DOM selection (so the highlight
+  // follows the thumb) and into `sel` (so the handles and toolbar reposition).
+  function applySelRange(range: Range) {
+    const root = contentRef.current;
+    if (!root) return;
+    const offs = getSelectionOffsets(root, range);
+    if (!offs || offs.end <= offs.start) return;
+    const rects = selectionEndRects(range);
+    if (!rects) return;
+    selRangeRef.current = range;
+    setSel({
+      x: (rects.first.left + rects.last.right) / 2,
+      y: rects.first.top,
+      bottom: rects.last.bottom,
+      start: offs.start,
+      end: offs.end,
+      text: range.toString(),
+      firstRect: snapRect(rects.first),
+      lastRect: snapRect(rects.last),
+    });
+  }
+
+  // Dragging a handle reshapes the selection: the touched point (mapped back
+  // up onto the text line) becomes the new start/end caret, the opposite end
+  // stays pinned. The DOM selection is rebuilt on every frame so the native
+  // highlight tracks the handles, and the toolbar only returns on release.
+  function startHandleDrag(e: React.TouchEvent, which: 'start' | 'end') {
+    e.stopPropagation();
+    const root = contentRef.current;
+    if (!root || !sel) return;
+    const doc = document as Document & {
+      caretRangeFromPoint?: (x: number, y: number) => Range | null;
+    };
+    // Programmatic selections need a selectable subtree (see the long-press
+    // handler); the flag stays on until the next plain touch on the page.
+    root.classList.add('allow-sel');
+    setSelDragging(true);
+    let raf = 0;
+    let px = 0;
+    let py = 0;
+
+    const rebuild = () => {
+      raf = 0;
+      const base = selRangeRef.current;
+      if (!base) return;
+      // The handle hangs below the text line; aim ~20px above the finger so
+      // the caret lands on the line being adjusted.
+      const caret = doc.caretRangeFromPoint?.(px, py - 20);
+      if (!caret || caret.startContainer.nodeType !== Node.TEXT_NODE || !root.contains(caret.startContainer)) {
+        return;
+      }
+      const range = document.createRange();
+      try {
+        if (which === 'end') {
+          range.setStart(base.startContainer, base.startOffset);
+          range.setEnd(caret.startContainer, caret.startOffset);
+        } else {
+          range.setStart(caret.startContainer, caret.startOffset);
+          range.setEnd(base.endContainer, base.endOffset);
+        }
+      } catch {
+        return; // crossing containers the range cannot span
+      }
+      if (range.collapsed) return;
+      const s = window.getSelection();
+      if (s) {
+        s.removeAllRanges();
+        s.addRange(range);
+      }
+      applySelRange(range);
+    };
+    const onMove = (ev: TouchEvent) => {
+      const t = ev.touches[0];
+      if (!t) return;
+      px = t.clientX;
+      py = t.clientY;
+      if (ev.cancelable) ev.preventDefault();
+      if (!raf) raf = window.requestAnimationFrame(rebuild);
+    };
+    const onEnd = () => {
+      window.removeEventListener('touchmove', onMove, true);
+      window.removeEventListener('touchend', onEnd, true);
+      window.removeEventListener('touchcancel', onEnd, true);
+      if (raf) window.cancelAnimationFrame(raf);
+      setSelDragging(false);
+      // The gesture must not be read as a tap on the page underneath.
+      turnedAtRef.current = Date.now();
+    };
+    // Capture on window: the touch stays targeted at the handle element, but
+    // the page-turn listeners on the reader root must never see this drag.
+    window.addEventListener('touchmove', onMove, { capture: true, passive: false });
+    window.addEventListener('touchend', onEnd, true);
+    window.addEventListener('touchcancel', onEnd, true);
   }
 
   useEffect(() => {
@@ -1989,7 +2119,7 @@ export default function Reader() {
   // toggle). The deferral is what keeps selecting text clean: the mousedown of
   // a double-click cancels this, so highlighting a word never flashes the card.
   function scheduleWordLookup(x: number, y: number): boolean {
-    if (!dictReady || !current) return false;
+    if (!current) return false;
     const hit = wordHitAt(x, y);
     if (!hit) return false;
     cancelWordLookup();
@@ -2293,8 +2423,9 @@ export default function Reader() {
   // scrolling as well as while paging.
   const overlayLayer = (
     <>
-      {/* selection toolbar */}
-      {sel && (
+      {/* selection toolbar — hidden while a handle is being dragged, it would
+          only chase the thumb */}
+      {sel && !selDragging && (
         <div className="sel-toolbar" ref={selPos.ref} style={overlayStyle(selPos.pos)}>
           <button className="sel-lookup" title="查词" onClick={lookupSelection} disabled={lookupBusy}>
             {lookupBusy ? '查询中' : '查词'}
@@ -2308,6 +2439,27 @@ export default function Reader() {
         </div>
       )}
 
+      {/* Selection drag handles (touch, paged): hang below the first/last line
+          fragment; dragging one reshapes the selection word by word. Native
+          handles do not exist here — the paged content is user-select:none and
+          the selection is built programmatically. */}
+      {sel && touchPrimary && mode === 'paged' && sel.firstRect && sel.lastRect && (
+        <>
+          <span
+            className="sel-handle"
+            style={{ left: sel.firstRect.left - 8, top: sel.firstRect.bottom + 1 }}
+            onTouchStart={(e) => startHandleDrag(e, 'start')}
+            aria-hidden="true"
+          />
+          <span
+            className="sel-handle end"
+            style={{ left: sel.lastRect.right - 14, top: sel.lastRect.bottom + 1 }}
+            onTouchStart={(e) => startHandleDrag(e, 'end')}
+            aria-hidden="true"
+          />
+        </>
+      )}
+
       {/* dictionary card — fixed layer, never part of the page layout */}
       {lookupCard && (
         <div className="dict-card" ref={dictPos.ref} style={overlayStyle(dictPos.pos)}>
@@ -2316,7 +2468,16 @@ export default function Reader() {
           </button>
           {!lookupCard.res.found || !lookupCard.res.entry ? (
             <div className="dict-miss">
-              词库未收录 <b>{lookupCard.res.query}</b>
+              {!dictReady ? (
+                <>
+                  词库未安装
+                  <div className="dict-miss-hint">在「我的 → 查词词库」可在线下载</div>
+                </>
+              ) : (
+                <>
+                  词库未收录 <b>{lookupCard.res.query}</b>
+                </>
+              )}
             </div>
           ) : (
             <>
