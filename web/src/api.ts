@@ -119,6 +119,19 @@ export interface VocabStats {
   due: number;
 }
 
+/**
+ * One screenful of an unbounded list.
+ *
+ * `total` counts the whole filtered set, not the downloaded part, so the header
+ * can say how big the notebook is before any of it has arrived; `hasMore` is
+ * the Go side's own verdict and saves the client from guessing at the edges.
+ */
+export interface Page<T> {
+  items: T[];
+  total: number;
+  hasMore: boolean;
+}
+
 export interface DictStatus {
   installed: boolean;
   path: string;
@@ -628,7 +641,14 @@ export const api = {
     context: string
   ) => call<VocabEntry>('VocabAdd', term, surface, bookId, chapterId, offset, context),
 
-  listVocab: (status: string, keyword: string) => call<VocabItem[]>('ListVocab', status, keyword),
+  /**
+   * One screenful of the notebook, newest first. Both lists are unbounded —
+   * every word that survives the frequency rule, every word ever tapped — so
+   * neither is ever fetched whole: opening the page must not get slower the
+   * longer the reader reads.
+   */
+  listVocab: (status: string, keyword: string, offset: number, limit: number) =>
+    call<Page<VocabItem>>('ListVocab', status, keyword, offset, limit),
 
   /** The next review session: only words that have come due. */
   vocabQueue: (limit: number) => call<VocabItem[]>('VocabQueue', limit),
@@ -643,6 +663,8 @@ export const api = {
   /** Record one review outcome and reschedule the word; returns the new state. */
   gradeVocab: (vid: string, known: boolean) => call<VocabEntry>('GradeVocab', vid, known),
 
-  /** Every word ever looked up, newest first — the notebook's raw material. */
-  listLookupHistory: (keyword: string) => call<LookupHit[]>('ListLookupHistory', keyword)
+  /** One screenful of every word ever looked up, newest first — the notebook's
+   * raw material, and the longest list in the app. */
+  listLookupHistory: (keyword: string, offset: number, limit: number) =>
+    call<Page<LookupHit>>('ListLookupHistory', keyword, offset, limit)
 };

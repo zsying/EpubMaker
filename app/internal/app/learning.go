@@ -262,6 +262,34 @@ func (b *Backend) LookupWord(bookID, chapterID string, offset int, raw, context 
 
 /* ----------------------------- notebook ----------------------------- */
 
+// The word lists — the notebook and the lookup history — are unbounded: the
+// history records every tap, and the notebook keeps every word that survived
+// the frequency rule. Fetching either whole makes opening the page slower and
+// slower as the reader uses the app, and each row costs a dictionary lookup on
+// top of the query. So they are read one screenful at a time.
+//
+// listPageSize is also the latency budget: 40 rows is a few milliseconds, while
+// 2000 rows is a visible pause before anything appears.
+const (
+	listPageSize    = 40
+	listPageMaxSize = 200
+)
+
+// clampPage normalises a paging request. A zero limit asks for the default
+// screenful rather than "everything" — that is the whole point of the split.
+func clampPage(offset, limit int) (int, int) {
+	if offset < 0 {
+		offset = 0
+	}
+	if limit <= 0 {
+		limit = listPageSize
+	}
+	if limit > listPageMaxSize {
+		limit = listPageMaxSize
+	}
+	return offset, limit
+}
+
 // VocabAdd puts a word in the notebook unconditionally — this backs the manual
 // "add to notebook" action, which must work even for basic vocabulary.
 func (b *Backend) VocabAdd(term, surface, bookID, chapterID string, offset int, context string) (*vocab.Entry, error) {
@@ -282,15 +310,31 @@ type VocabItem struct {
 	Translation string `json:"translation"`
 }
 
-// ListVocab returns notebook entries, newest first, enriched with their
-// meaning. A missing dictionary is not an error — the notebook stays usable,
-// the rows just have no gloss.
-func (b *Backend) ListVocab(status, keyword string) ([]VocabItem, error) {
-	rows, err := vocab.List(vocab.ListOpts{Status: status, Keyword: keyword})
+// VocabPage is one screenful of the notebook. Total counts the same filter, so
+// the page can say how big the notebook is without having downloaded it, and
+// HasMore says whether asking for the next screenful will return anything.
+type VocabPage struct {
+	Items   []VocabItem `json:"items"`
+	Total   int         `json:"total"`
+	HasMore bool        `json:"hasMore"`
+}
+
+// ListVocab returns one screenful of notebook entries, newest first, enriched
+// with their meaning. A missing dictionary is not an error — the notebook stays
+// usable, the rows just have no gloss.
+func (b *Backend) ListVocab(status, keyword string, offset, limit int) (*VocabPage, error) {
+	offset, limit = clampPage(offset, limit)
+	opts := vocab.ListOpts{Status: status, Keyword: keyword, Limit: limit, Offset: offset}
+	rows, err := vocab.List(opts)
 	if err != nil {
 		return nil, err
 	}
-	return enrich(rows), nil
+	total, err := vocab.Count(opts)
+	if err != nil {
+		return nil, err
+	}
+	items := enrich(rows)
+	return &VocabPage{Items: items, Total: total, HasMore: offset+len(items) < total}, nil
 }
 
 // VocabQueue returns the next review session: not-yet-mastered words, still
@@ -338,11 +382,24 @@ type LookupHit struct {
 	Translation string `json:"translation"`
 }
 
-// ListLookupHistory returns every word the reader has looked up, newest first.
-// `keyword` filters on the word itself; a missing dictionary only costs the
-// glosses.
-func (b *Backend) ListLookupHistory(keyword string) ([]LookupHit, error) {
-	rows, err := vocab.ListLookups(keyword, 0)
+// LookupPage is one screenful of the lookup history, with the same shape and
+// the same reason as VocabPage: this is the longest list in the app.
+type LookupPage struct {
+	Items   []LookupHit `json:"items"`
+	Total   int         `json:"total"`
+	HasMore bool        `json:"hasMore"`
+}
+
+// ListLookupHistory returns one screenful of the words the reader has looked
+// up, newest first. `keyword` filters on the word itself; a missing dictionary
+// only costs the glosses.
+func (b *Backend) ListLookupHistory(keyword string, offset, limit int) (*LookupPage, error) {
+	offset, limit = clampPage(offset, limit)
+	rows, err := vocab.ListLookups(keyword, limit, offset)
+	if err != nil {
+		return nil, err
+	}
+	total, err := vocab.CountLookups(keyword)
 	if err != nil {
 		return nil, err
 	}
@@ -361,7 +418,7 @@ func (b *Backend) ListLookupHistory(keyword string) ([]LookupHit, error) {
 		}
 		out = append(out, hit)
 	}
-	return out, nil
+	return &LookupPage{Items: out, Total: total, HasMore: offset+len(out) < total}, nil
 }
 
 // SetVocabStatus moves a word between new / learning / known / ignored.

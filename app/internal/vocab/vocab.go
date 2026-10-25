@@ -70,10 +70,15 @@ type Entry struct {
 }
 
 // ListOpts filters List. Zero values mean "no filter".
+//
+// Limit/Offset page the result. A zero Limit still means "everything": the
+// review queue takes a whole pass at once, and callers that have no scrolling
+// (the exporter, the tests) should not have to invent a page size.
 type ListOpts struct {
 	Status  string
 	Keyword string
 	Limit   int
+	Offset  int
 }
 
 const columns = `id, term, surface, book_id, chapter_id, start_offset, context, status,
@@ -174,7 +179,7 @@ const listSelect = `SELECT v.id, v.term, v.surface, v.book_id, v.chapter_id, v.s
 	      LEFT JOIN books b ON b.id = v.book_id AND b.deleted_at IS NULL
 	      LEFT JOIN chapters c ON c.id = v.chapter_id`
 
-func queryList(where []string, args []any, order string, limit int) ([]ListItem, error) {
+func queryList(where []string, args []any, order string, limit, offset int) ([]ListItem, error) {
 	d, err := db.Open()
 	if err != nil {
 		return nil, err
@@ -187,6 +192,13 @@ func queryList(where []string, args []any, order string, limit int) ([]ListItem,
 	if limit > 0 {
 		q += ` LIMIT ?`
 		args = append(args, limit)
+	} else if offset > 0 {
+		// SQLite will not parse OFFSET without a LIMIT; -1 is its "no limit".
+		q += ` LIMIT -1`
+	}
+	if offset > 0 {
+		q += ` OFFSET ?`
+		args = append(args, offset)
 	}
 	rows, err := d.Query(q, args...)
 	if err != nil {
@@ -207,8 +219,10 @@ func queryList(where []string, args []any, order string, limit int) ([]ListItem,
 	return out, rows.Err()
 }
 
-// List returns notebook entries, newest first.
-func List(o ListOpts) ([]ListItem, error) {
+// listWhere builds the filter clause shared by List and Count. They must agree:
+// a header that says "48 words" while the list can only ever produce 40 is
+// worse than no number at all.
+func listWhere(o ListOpts) ([]string, []any) {
 	var where []string
 	var args []any
 	if o.Status != "" {
@@ -220,7 +234,37 @@ func List(o ListOpts) ([]ListItem, error) {
 		like := "%" + kw + "%"
 		args = append(args, like, like)
 	}
-	return queryList(where, args, `v.updated_at DESC`, o.Limit)
+	return where, args
+}
+
+// List returns notebook entries, newest first.
+//
+// The order carries a tie-breaker (`v.id`) because pages are read one screen at
+// a time: a batch import stamps hundreds of rows with the same updated_at, and
+// without a unique sort key the second page would repeat and skip rows at
+// random.
+func List(o ListOpts) ([]ListItem, error) {
+	where, args := listWhere(o)
+	return queryList(where, args, `v.updated_at DESC, v.id DESC`, o.Limit, o.Offset)
+}
+
+// Count returns how many entries the filter matches — the number behind "共 N
+// 词", and what tells the page whether another screenful exists.
+func Count(o ListOpts) (int, error) {
+	where, args := listWhere(o)
+	d, err := db.Open()
+	if err != nil {
+		return 0, err
+	}
+	q := `SELECT COUNT(*) FROM vocab v`
+	if len(where) > 0 {
+		q += ` WHERE ` + strings.Join(where, ` AND `)
+	}
+	var n int
+	if err := d.QueryRow(q, args...).Scan(&n); err != nil {
+		return 0, err
+	}
+	return n, nil
 }
 
 // Queue is the next review session: every word that has come due. Nothing is
@@ -235,8 +279,8 @@ func Queue(limit int) ([]ListItem, error) {
 	return queryList(
 		[]string{`v.status <> ?`, `(v.due_at = '' OR v.due_at <= ?)`},
 		[]any{StatusIgnored, dueIso(time.Now())},
-		`(v.due_at = '') DESC, v.due_at ASC, v.updated_at ASC`,
-		limit,
+		`(v.due_at = '') DESC, v.due_at ASC, v.updated_at ASC, v.id ASC`,
+		limit, 0,
 	)
 }
 
@@ -587,9 +631,13 @@ func RecordLookup(term string) error {
 }
 
 // ListLookups returns the history, most recently looked up first. An empty
-// keyword means "everything"; limit caps the list for callers that only want a
-// recent slice.
-func ListLookups(keyword string, limit int) ([]Lookup, error) {
+// keyword means "everything"; limit/offset take one screenful at a time.
+//
+// The history grows without bound — it records every tap, including the basic
+// vocabulary that never reaches the notebook — so it is the one list that must
+// never be fetched whole. `h.term` breaks the tie because a reading session
+// stamps many rows with the same last_at.
+func ListLookups(keyword string, limit, offset int) ([]Lookup, error) {
 	d, err := db.Open()
 	if err != nil {
 		return nil, err
@@ -602,10 +650,16 @@ func ListLookups(keyword string, limit int) ([]Lookup, error) {
 		q += ` WHERE h.term LIKE ?`
 		args = append(args, "%"+strings.ToLower(kw)+"%")
 	}
-	q += ` ORDER BY h.last_at DESC`
+	q += ` ORDER BY h.last_at DESC, h.term ASC`
 	if limit > 0 {
 		q += ` LIMIT ?`
 		args = append(args, limit)
+	} else if offset > 0 {
+		q += ` LIMIT -1`
+	}
+	if offset > 0 {
+		q += ` OFFSET ?`
+		args = append(args, offset)
 	}
 	rows, err := d.Query(q, args...)
 	if err != nil {
@@ -622,6 +676,27 @@ func ListLookups(keyword string, limit int) ([]Lookup, error) {
 		out = append(out, l)
 	}
 	return out, rows.Err()
+}
+
+// CountLookups returns how many words the history holds (matching the keyword),
+// so the page can say how much there is instead of how much it happens to have
+// downloaded.
+func CountLookups(keyword string) (int, error) {
+	d, err := db.Open()
+	if err != nil {
+		return 0, err
+	}
+	q := `SELECT COUNT(*) FROM lookup_history h`
+	var args []any
+	if kw := strings.TrimSpace(keyword); kw != "" {
+		q += ` WHERE h.term LIKE ?`
+		args = append(args, "%"+strings.ToLower(kw)+"%")
+	}
+	var n int
+	if err := d.QueryRow(q, args...).Scan(&n); err != nil {
+		return 0, err
+	}
+	return n, nil
 }
 
 func uid() string {

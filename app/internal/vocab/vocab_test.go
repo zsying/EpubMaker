@@ -198,7 +198,7 @@ func TestRecordLookupCountsAndKeepsTheFirstTime(t *testing.T) {
 			t.Fatalf("RecordLookup #%d: %v", i, err)
 		}
 	}
-	list, err := ListLookups("", 0)
+	list, err := ListLookups("", 0, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -241,7 +241,7 @@ func TestListLookupsJoinsNotebookState(t *testing.T) {
 	if _, err := Record("climb", "climbed", "b1", "c1", 3, "climbed the wall"); err != nil {
 		t.Fatal(err)
 	}
-	list, err := ListLookups("", 0)
+	list, err := ListLookups("", 0, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -268,21 +268,21 @@ func TestListLookupsFiltersAndOrdersByRecency(t *testing.T) {
 	if err := RecordLookup("zephyr"); err != nil {
 		t.Fatal(err)
 	}
-	all, err := ListLookups("", 0)
+	all, err := ListLookups("", 0, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(all) != 3 || all[0].Term != "zephyr" {
 		t.Fatalf("order = %+v, want zephyr first", all)
 	}
-	hit, err := ListLookups("cl", 0)
+	hit, err := ListLookups("cl", 0, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(hit) != 2 {
 		t.Fatalf("keyword filter = %+v, want 2 rows (climb, clatter)", hit)
 	}
-	one, err := ListLookups("", 1)
+	one, err := ListLookups("", 1, 0)
 	if err != nil {
 		t.Fatal(err)
 	}

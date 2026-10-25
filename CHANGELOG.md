@@ -5,6 +5,19 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+- **The word lists load a screenful at a time** — 生词本 and 查词历史 both fetched
+  every row at once, and each row costs a dictionary lookup on the Go side, so
+  opening either page got slower the longer the reader used the app. Both now
+  read 40 rows per request and pull the next page as the end of the list comes
+  into view, with a「加载更多 · 已显示 40/312」button as the fallback and as the
+  progress read-out. A failed page stops the automatic loading (otherwise a
+  failing request would retry on every scroll frame) and turns the button into
+  「重试」. `ListVocab`/`ListLookupHistory` now return `{items, total, hasMore}`;
+  `total` is counted under the same filter, so the history header says「共 N 词」
+  about the whole list rather than about the downloaded part. The ordering gained
+  a unique tie-breaker (`id` / `term`): pages are read one screen at a time, and
+  a batch import stamps hundreds of rows with the same timestamp, so without it
+  the second page repeated and skipped rows at random.
 - **Example sentences are cut at paragraphs, not line breaks** — a word that
   happened to begin a line in the source file was saved with nothing but itself
   as its example: EPUB text is hard-wrapped, and the extraction counted that

@@ -1689,6 +1689,24 @@ a {
 .dot.hl-red { background: #ff8a8a; }
 
 /* ---------- global bookmarks / annotations ---------- */
+/* The tail of a paged word list. Both lists arrive a screenful at a time, so
+   this row is the seam: it is where the next page is fetched from, and it says
+   how far into the list the reader is instead of leaving them guessing. */
+.list-foot {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  min-height: 44px;
+  padding: 12px 0 4px;
+  font-size: 12.5px;
+  color: var(--text-3);
+}
+
+.list-foot-busy,
+.list-foot-end {
+  letter-spacing: 0.2px;
+}
+
 .note-list {
   display: grid;
   /* minmax(0, 1fr), not the implicit `auto`: an auto column is sized by its
