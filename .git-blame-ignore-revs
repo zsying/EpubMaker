@@ -1,0 +1,13 @@
+# Commits that only changed formatting. `git blame` should look through them —
+# otherwise every line of the frontend points at the reformat instead of the
+# change that actually wrote it.
+#
+# Enable per clone (git >= 2.23) once:
+#   git config blame.ignoreRevsFile .git-blame-ignore-revs
+# One-off:
+#   git blame --ignore-revs-file .git-blame-ignore-revs <file>
+#
+# Append the hash of any future pure-formatting commit to this file.
+
+# style: format web/src to the pinned prettier baseline
+833c2d0a1d8fbabf5002a5bea9d073b237216e68
