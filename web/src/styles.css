@@ -24,6 +24,12 @@
   --fill: #eef1f6;
   --fill-2: #f2f4f8;
 
+  /* The rule that marks the headword inside its example sentence: a warm line,
+     dark enough to be read at 1.5px on paper, quiet enough not to compete with
+     the words around it. Per-theme, because a yellow block used to be the only
+     thing that had to work on every surface. */
+  --mark-line: #b8860b;
+
   /* Reading surface (defaults = the light theme; each app theme overrides). */
   --rd-bg: #f6f7f9;
   --rd-paper: #ffffff;
@@ -68,6 +74,7 @@ html[data-app-theme='sepia'] {
   --accent-soft: #f3e5cd;
   --fill: #ece2cc;
   --fill-2: #efe6d3;
+  --mark-line: #a8742a;
   --shadow: 0 1px 2px rgba(80, 62, 30, 0.05), 0 4px 16px rgba(80, 62, 30, 0.08);
   --rd-bg: #f3ecdd;
   --rd-paper: #f9f3e4;
@@ -102,6 +109,7 @@ html[data-app-theme='green'] {
   --accent-soft: #c8e6cd;
   --fill: #c2dcc5;
   --fill-2: #c8e2ca;
+  --mark-line: #2f7d4b;
   --shadow: 0 1px 2px rgba(24, 48, 30, 0.05), 0 4px 16px rgba(24, 48, 30, 0.08);
   --rd-bg: #cfe6d2;
   --rd-paper: #d9ecd9;
@@ -136,6 +144,7 @@ html[data-app-theme='dark'] {
   --accent-soft: #232c3f;
   --fill: #262a32;
   --fill-2: #22262d;
+  --mark-line: #c8a44f;
   --shadow: 0 1px 2px rgba(0, 0, 0, 0.3), 0 4px 16px rgba(0, 0, 0, 0.35);
   --rd-bg: #121417;
   --rd-paper: #16181d;
@@ -170,6 +179,7 @@ html[data-app-theme='midnight'] {
   --accent-soft: #1f2a42;
   --fill: #202b40;
   --fill-2: #1c2638;
+  --mark-line: #c8a44f;
   --shadow: 0 1px 2px rgba(0, 0, 0, 0.35), 0 4px 16px rgba(0, 0, 0, 0.4);
   --rd-bg: #10151f;
   --rd-paper: #151c2b;
@@ -2548,11 +2558,18 @@ a {
   white-space: pre-line;
 }
 
+/* The headword inside its example sentence is marked with a dotted rule under
+   the word rather than a filled block. The sentence is a quote to read, and a
+   yellow background turned every card into stripes: the eye went to the colour
+   instead of the word. A dotted underline points at the word without recolouring
+   the line it sits in. */
 .vocab-hit {
-  background: rgba(255, 214, 102, 0.5);
+  background: none;
   color: inherit;
-  border-radius: 2px;
-  padding: 0 1px;
+  padding: 0;
+  text-decoration: underline dotted var(--mark-line);
+  text-decoration-thickness: 2px;
+  text-underline-offset: 2px;
 }
 
 /* Metadata line: one row, never two. Where the word came from is the only part

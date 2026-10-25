@@ -5,6 +5,13 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+- **The headword is underlined, not highlighted** — inside an example sentence
+  the word was marked with a yellow block, which turned every card into stripes
+  and pulled the eye to the colour instead of the word. It is a dotted rule
+  under the word now (2px, the theme's warm mark colour), so the sentence still
+  reads as a sentence. Marking also works on text extracted with soft hyphens:
+  「in­tim­acy」 never matched「intimacy」with a plain `indexOf`, so the word went
+  unmarked on every card from a book that hyphenates.
 - **The review pass is a page of its own** — `/vocab/review` replaces the
   in-place mode switch. It is a second-level page, so it now behaves like one:
   a back chevron in a sticky header, no bottom tab bar, and every action in a
