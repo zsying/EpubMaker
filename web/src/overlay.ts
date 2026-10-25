@@ -35,7 +35,10 @@ export function placeOverlay(
   const minLeft = half + EDGE_GAP;
   // The inner max() keeps the result sane when the viewport is narrower than
   // the overlay itself: pin to the left edge rather than producing a negative.
-  const left = Math.min(Math.max(anchor.x, minLeft), Math.max(minLeft, viewport.width - half - EDGE_GAP));
+  const left = Math.min(
+    Math.max(anchor.x, minLeft),
+    Math.max(minLeft, viewport.width - half - EDGE_GAP),
+  );
 
   const below = anchor.bottom + gap;
   const above = anchor.top - gap - size.height;
@@ -48,7 +51,10 @@ export function placeOverlay(
   if (!preferredFits && otherFits) {
     top = prefer === 'below' ? above : below;
   }
-  top = Math.min(Math.max(top, EDGE_GAP), Math.max(EDGE_GAP, viewport.height - EDGE_GAP - size.height));
+  top = Math.min(
+    Math.max(top, EDGE_GAP),
+    Math.max(EDGE_GAP, viewport.height - EDGE_GAP - size.height),
+  );
 
   return { left, top };
 }

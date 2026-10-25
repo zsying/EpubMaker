@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { api, WebDavConn, WebDavEntry } from '../api';
 import { toast, toastError } from '../toast';
+import SubHeader from '../components/SubHeader';
 
 const LS_KEY = 'epubmaker.webdav.conn';
 
@@ -25,7 +26,12 @@ function fmtDate(s: string | null): string {
 }
 
 export default function WebDav() {
-  const [form, setForm] = useState<WebDavConn>({ baseUrl: '', username: '', password: '', insecure: false });
+  const [form, setForm] = useState<WebDavConn>({
+    baseUrl: '',
+    username: '',
+    password: '',
+    insecure: false,
+  });
   const [showPwd, setShowPwd] = useState(false);
   const [connected, setConnected] = useState(false);
   const [conn, setConn] = useState<WebDavConn | null>(null);
@@ -47,7 +53,7 @@ export default function WebDav() {
           baseUrl: c.baseUrl || '',
           username: c.username || '',
           password: c.password || '',
-          insecure: !!c.insecure
+          insecure: !!c.insecure,
         });
       }
     } catch {
@@ -62,10 +68,10 @@ export default function WebDav() {
       setError(null);
       setSelected(new Set());
       try {
-      const list = await api.webdavList(conn, p);
-      setEntries(list);
-      setPath(p);
-      setImportResult(null);
+        const list = await api.webdavList(conn, p);
+        setEntries(list);
+        setPath(p);
+        setImportResult(null);
       } catch (e) {
         setError(e instanceof Error ? e.message : String(e));
         setEntries([]);
@@ -73,7 +79,7 @@ export default function WebDav() {
         setLoading(false);
       }
     },
-    [conn]
+    [conn],
   );
 
   async function connect() {
@@ -152,9 +158,7 @@ export default function WebDav() {
   if (!connected || !conn) {
     return (
       <div className="page" style={{ maxWidth: 640 }}>
-        <div className="lib-head">
-          <h1>连接 WebDAV</h1>
-        </div>
+        <SubHeader title="连接 WebDAV" />
         <div className="card" style={{ padding: 20 }}>
           <div className="field">
             <label>服务器地址</label>
@@ -223,19 +227,14 @@ export default function WebDav() {
   /* ---------- 已连接：文件浏览器 ---------- */
   return (
     <div className="page">
-      <div className="lib-head">
-        <h1>WebDAV</h1>
-        <span className="tag" title={conn.baseUrl}>
-          {conn.baseUrl}
-        </span>
-        <span style={{ flex: 1 }} />
+      <SubHeader title="WebDAV" tag={conn.baseUrl}>
         <button className="btn ghost" disabled={loading} onClick={() => void loadList(path)}>
           刷新
         </button>
         <button className="btn" onClick={disconnect}>
           断开
         </button>
-      </div>
+      </SubHeader>
 
       <div className="wd-crumb">
         <span className="wd-crumb-root" onClick={() => void goTo('')}>

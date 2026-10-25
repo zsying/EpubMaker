@@ -92,6 +92,23 @@ export interface VocabItem extends VocabEntry {
   translation: string;
 }
 
+/**
+ * One row of the lookup history: a word the reader tapped, when that first and
+ * last happened, and the notebook's verdict on it. `inNotebook` false means the
+ * page should offer to add it.
+ */
+export interface LookupHit {
+  term: string;
+  lookups: number;
+  firstAt: string;
+  lastAt: string;
+  inNotebook: boolean;
+  /** Empty when the word is not in the notebook yet. */
+  status: '' | VocabEntry['status'];
+  phonetic: string;
+  translation: string;
+}
+
 export interface VocabStats {
   total: number;
   new: number;
@@ -102,10 +119,44 @@ export interface VocabStats {
   due: number;
 }
 
+/**
+ * One round of filling in the notebook's missing glosses. `notFound` and
+ * `failed` are different: the first means the dictionaries answered and neither
+ * knew the word (it will not be asked again), the second means the request
+ * itself did not get through (it stays queued).
+ */
+export interface GlossFillResult {
+  tried: number;
+  filled: number;
+  notFound: number;
+  failed: number;
+  /** Words still unexplained after this round. */
+  remaining: number;
+}
+
+/**
+ * One screenful of an unbounded list.
+ *
+ * `total` counts the whole filtered set, not the downloaded part, so the header
+ * can say how big the notebook is before any of it has arrived; `hasMore` is
+ * the Go side's own verdict and saves the client from guessing at the edges.
+ */
+export interface Page<T> {
+  items: T[];
+  total: number;
+  hasMore: boolean;
+}
+
 export interface DictStatus {
   installed: boolean;
   path: string;
   entries: number;
+}
+
+/** A reading font stored in the app data dir (see /fonts/<file> serving). */
+export interface FontInfo {
+  file: string;
+  size: number;
 }
 
 export interface Book {
@@ -121,8 +172,17 @@ export interface Book {
   coverUrl: string | null;
   sourceName: string | null;
   chapterCount: number;
+  /** User-managed tags; always an array (possibly empty). */
+  tags: string[];
   deletedAt: string | null;
   createdAt: string;
+  updatedAt: string;
+}
+
+/** Shelf-level reading progress for one book (0..1). */
+export interface BookProgress {
+  bookId: string;
+  percent: number;
   updatedAt: string;
 }
 
@@ -214,6 +274,17 @@ export interface AppPaths {
   dbFile: string;
 }
 
+export interface WifiShareStatus {
+  running: boolean;
+  port: number;
+  url: string;
+  ips?: string[];
+  imports: number;
+  duplicates: number;
+  failures: string[];
+  lastImportUnix?: number;
+}
+
 export interface WebDavConn {
   baseUrl: string;
   username?: string;
@@ -237,22 +308,165 @@ export interface WebDavTestResult {
   error?: string;
 }
 
+/**
+ * True when the page is hosted by the Wails v3 runtime (the Android build).
+ *
+ * v2 injects generated bindings on window.go, so its presence means "not v3".
+ * A v3 host serves its runtime at /wails/runtime.js, which the page must
+ * import itself; window._wails only exists after that import, so before it we
+ * fall back to recognizing the host by its origin. One bundle serves both
+ * hosts, and the transport is chosen per call.
+ */
+function hasV3Runtime(): boolean {
+  if (typeof window === 'undefined') return false;
+  if ('_wails' in window) return true;
+  if (typeof (window as any).go !== 'undefined') return false;
+  return window.location.host === 'wails.localhost';
+}
+
+/**
+ * Calls a v3 service method by name.
+ *
+ * The runtime is the host's own module at /wails/runtime.js, not the npm
+ * package: it carries the prelude that selects the right transport for this
+ * platform, and loading it also installs window._wails. @vite-ignore keeps
+ * vite from trying to resolve the path at build time.
+ */
+let v3Runtime: Promise<any> | null = null;
+function loadV3Runtime(): Promise<any> {
+  if (!v3Runtime) {
+    // A non-literal specifier keeps both vite (@vite-ignore) and tsc from
+    // trying to resolve the path at build time; the host serves it at runtime.
+    const specifier = '/wails/runtime.js';
+    v3Runtime = import(/* @vite-ignore */ specifier).catch((err) => {
+      v3Runtime = null;
+      throw err;
+    });
+  }
+  return v3Runtime;
+}
+
+/**
+ * The v3 binding name is fully qualified: <go module path>.<package>.<type>.<method>.
+ * Derived from the backend living in epubmaker-desktop/internal/app; see
+ * app/cmd/mobile/main.go. Keep in sync when the module path changes.
+ */
+const V3_BACKEND_FQN = 'epubmaker-desktop/internal/app.Backend';
+
+async function callV3<T>(method: string, args: unknown[]): Promise<T> {
+  const runtime = await loadV3Runtime();
+  return (await runtime.Call.ByName(`${V3_BACKEND_FQN}.${method}`, ...args)) as T;
+}
+
 /** Calls a bound backend method: window.go.app.Backend.<method>(...args). */
 async function call<T>(method: string, ...args: unknown[]): Promise<T> {
   const fn = (window as any).go?.app?.Backend?.[method];
-  if (typeof fn !== 'function') {
-    throw new Error('后端尚未就绪，请稍候重试');
+  if (typeof fn === 'function') {
+    return (await fn(...args)) as T;
   }
-  return (await fn(...args)) as T;
+  if (hasV3Runtime()) {
+    return await callV3<T>(method, args);
+  }
+  throw new Error('后端尚未就绪，请稍候重试');
 }
 
-/** Calls a bound App (native integration) method: window.go.app.App.<method>. */
-async function callApp<T>(method: string, ...args: unknown[]): Promise<T> {
-  const fn = (window as any).go?.app?.App?.[method];
-  if (typeof fn !== 'function') {
-    throw new Error('无法打开系统文件选择框，请通过 Wails 启动应用');
+/**
+ * Subscribes to the Android system-share import events. When a book is shared
+ * to EpubMaker from another app (WeChat, a browser, a file manager), the Java
+ * host copies the content URI into the cache and emits "common:sharedImport"
+ * with the copied file's path; this surfaces it to the frontend, which imports
+ * it like any other path. v3 hosts only — a no-op unsubscribe elsewhere.
+ */
+export async function onSharedImport(fn: (path: string) => void): Promise<() => void> {
+  if (!hasV3Runtime()) return () => {};
+  const runtime = await loadV3Runtime();
+  const off = runtime.Events?.On?.(
+    'common:sharedImport',
+    (payload: { name?: string; data?: { path?: string }; path?: string }) => {
+      // The v3 runtime hands the callback the whole {name, data} envelope, not
+      // the bare payload; accept both shapes anyway.
+      const data = payload?.data ?? payload;
+      const path = typeof data === 'string' ? data : data?.path;
+      if (typeof path === 'string' && path) fn(path);
+    },
+  );
+  return typeof off === 'function' ? off : () => {};
+}
+
+/**
+ * Whether this host can open a native file dialog, and therefore whether the
+ * UI may offer file-based import at all.
+ *
+ * The desktop host drives the v2 runtime (window.go bindings plus the native
+ * side's dialogs); the phone host drives v3, where only Backend is bound. A
+ * plain browser (vite dev, the acceptance harness) has neither, so it keeps the
+ * desktop shape and merely gets a clearer error.
+ */
+export function hasNativeDialogs(): boolean {
+  return !hasV3Runtime();
+}
+
+/**
+ * Opens the host's file picker and returns real filesystem paths.
+ *
+ * Desktop: the v2 App dialog (SelectEpubFiles). Phone (v3 host): the runtime's
+ * dialog module, which on Android routes to the SAF document picker and copies
+ * the picked documents into the app cache — the Go side then reads plain
+ * paths, exactly like the desktop flow.
+ */
+async function pickV3(multiple: boolean, title: string): Promise<string[]> {
+  const runtime = await loadV3Runtime();
+  const res = await runtime.Dialogs.OpenFile({
+    CanChooseFiles: true,
+    AllowsMultipleSelection: multiple,
+    Title: title,
+  });
+  if (!res) return [];
+  return Array.isArray(res) ? res : [res];
+}
+
+/** EPUB multi-select that works on both hosts. [] = cancelled. */
+export async function pickEpubFiles(): Promise<string[]> {
+  if (!hasV3Runtime()) {
+    const paths = await callApp<string[]>('SelectEpubFiles');
+    return paths ?? [];
   }
-  return (await fn(...args)) as T;
+  return pickV3(true, '选择 EPUB 文件');
+}
+
+/** Single image pick for the mobile cover editor. null = cancelled. */
+export async function pickImageFile(): Promise<string | null> {
+  if (!hasV3Runtime()) {
+    const p = await callApp<string>('SelectCoverFile');
+    return p || null;
+  }
+  const paths = await pickV3(false, '选择封面图片');
+  return paths[0] ?? null;
+}
+
+/** Single dictionary-file pick (ECDICT csv). null = cancelled. */
+export async function pickDictFile(): Promise<string | null> {
+  if (!hasV3Runtime()) {
+    const p = await callApp<string>('SelectDictFile');
+    return p || null;
+  }
+  const paths = await pickV3(false, '选择词库 CSV 文件');
+  return paths[0] ?? null;
+}
+
+/** Calls a bound App (native integration) method: window.go.app.App.<method>. */ async function callApp<
+  T,
+>(method: string, ...args: unknown[]): Promise<T> {
+  const fn = (window as any).go?.app?.App?.[method];
+  if (typeof fn === 'function') {
+    return (await fn(...args)) as T;
+  }
+  // Native dialogs are desktop-only: App is built on the v2 runtime, so the
+  // mobile host binds Backend alone. Say so instead of returning undefined.
+  if (hasV3Runtime()) {
+    throw new Error('此功能仅在桌面版提供');
+  }
+  throw new Error('无法打开系统文件选择框，请通过 Wails 启动应用');
 }
 
 /** Triggers a browser download from an inline data: URL. */
@@ -268,30 +482,39 @@ export function downloadDataUrl(filename: string, dataUrl: string): void {
 export const api = {
   paths: () => call<AppPaths>('Paths'),
 
+  /** Version string for the about page (Backend.AppVersion). */
+  appVersion: () => call<string>('AppVersion'),
+
+  /** Link timestamp for the about page; '' on dev builds (Backend.BuildTime). */
+  buildTime: () => call<string>('BuildTime'),
+
+  wifiShareStart: () => call<WifiShareStatus>('WifiShareStart'),
+  wifiShareStop: () => call<WifiShareStatus>('WifiShareStop'),
+  wifiShareStatus: () => call<WifiShareStatus>('WifiShareStatus'),
+
   listBooks: (keyword?: string) => call<Book[]>('ListBooks', keyword ?? ''),
 
   /** Opens the native EPUB multi-select dialog; returns [] when cancelled. */
   selectEpubFiles: () => callApp<string[]>('SelectEpubFiles'),
 
   /** Imports EPUB files from local paths. Both the dialog and an OS file drop end
-   * up here — a drop can only be turned into paths by the native side. */
+   * up here — a drop can only be turned into paths by the native side. Books
+   * already on the shelf come back as `duplicates`, never as failures. */
   importPaths: (paths: string[]) =>
-    call<{ books: Book[]; errors: string[] }>('ImportPaths', paths),
+    call<{ books: Book[]; errors: string[]; duplicates?: string[] }>('ImportPaths', paths),
 
   getBook: (id: string) => call<Book>('GetBook', id),
 
   updateBook: (id: string, patch: Partial<Book> & { coverHref?: string | null }) =>
     call<Book>('UpdateBook', id, patch),
 
-  deleteBook: (id: string) =>
-    call<{ deleted: boolean; movedToTrash: boolean }>('DeleteBook', id),
+  deleteBook: (id: string) => call<{ deleted: boolean; movedToTrash: boolean }>('DeleteBook', id),
 
   trash: () => call<TrashItem[]>('ListTrash'),
 
   restoreTrash: (id: string) => call<Book>('RestoreBook', id),
 
-  purgeTrash: (id: string) =>
-    call<{ purged: boolean; dataKept: boolean }>('PurgeBook', id),
+  purgeTrash: (id: string) => call<{ purged: boolean; dataKept: boolean }>('PurgeBook', id),
 
   listChapters: (bookId: string) => call<Chapter[]>('ListChapters', bookId),
 
@@ -309,7 +532,7 @@ export const api = {
 
   createChapter: (
     bookId: string,
-    body: { title?: string; html?: string; afterChapterId?: string | null }
+    body: { title?: string; html?: string; afterChapterId?: string | null },
   ) => call<Chapter>('CreateChapter', bookId, body),
 
   deleteChapter: (bookId: string, cid: string) =>
@@ -326,6 +549,9 @@ export const api = {
   /* ---------------- reading: progress / bookmarks / annotations ---------------- */
 
   getProgress: (bookId: string) => call<ReadingProgress | null>('GetProgress', bookId),
+
+  /** Shelf-level progress (0..1) for every book that has one. */
+  listBookProgress: () => call<BookProgress[]>('ListProgress'),
 
   saveProgress: (bookId: string, chapterId: string, positionOffset: number, pageCount: number) =>
     call<ReadingProgress>('SaveProgress', bookId, chapterId, positionOffset, pageCount),
@@ -347,8 +573,19 @@ export const api = {
     pageIndex: number,
     text: string,
     color: string,
-    note: string
-  ) => call<Annotation>('AddAnnotation', bookId, chapterId, startOffset, endOffset, pageIndex, text, color, note),
+    note: string,
+  ) =>
+    call<Annotation>(
+      'AddAnnotation',
+      bookId,
+      chapterId,
+      startOffset,
+      endOffset,
+      pageIndex,
+      text,
+      color,
+      note,
+    ),
 
   updateAnnotation: (id: string, color: string, note: string) =>
     call<Annotation>('UpdateAnnotation', id, color, note),
@@ -368,15 +605,18 @@ export const api = {
     });
   },
 
+  /** Uploads a cover from a path already on disk (mobile picker output). */
+  uploadCoverFromPath: (bookId: string, path: string) =>
+    call<{ href: string; url: string; mediaType: string }>('UploadCoverPath', bookId, path),
+
   split: (
     bookId: string,
     parts: { title: string; author?: string; chapterIds: string[]; coverHref?: string | null }[],
-    deleteSource: boolean
+    deleteSource: boolean,
   ) => call<Book[]>('SplitBook', bookId, parts, deleteSource),
 
   /** Builds the EPUB and returns it inline as { filename, dataUrl }. */
-  exportBook: (bookId: string) =>
-    call<{ filename: string; dataUrl: string }>('ExportBook', bookId),
+  exportBook: (bookId: string) => call<{ filename: string; dataUrl: string }>('ExportBook', bookId),
 
   /* ---------------- WebDAV ---------------- */
   webdavTest: (conn: WebDavConn) => call<WebDavTestResult>('WebdavTest', conn),
@@ -391,11 +631,32 @@ export const api = {
 
   dictStatus: () => call<DictStatus>('DictStatus'),
 
+  /* ---------------- reading fonts ---------------- */
+
+  /** Downloaded fonts stored under <dataDir>/fonts (served at /fonts/<file>). */
+  listFonts: () => call<FontInfo[]>('ListFonts'),
+
+  /** Downloads a font file into the data dir. Blocking; call again on failure. */
+  downloadFont: (file: string, url: string) => call<FontInfo>('DownloadFont', file, url),
+
+  deleteFont: (file: string) => call<boolean>('DeleteFont', file),
+
   /** Opens the native csv picker; returns '' when the user cancels. */
   selectDictFile: () => callApp<string>('SelectDictFile'),
 
   /** Builds the local dictionary from an ECDICT csv chosen on disk. Blocking. */
-  dictImport: (csvPath: string) => call<{ entries: number; path: string }>('DictImportCSV', csvPath),
+  dictImport: (csvPath: string) =>
+    call<{ entries: number; path: string }>('DictImportCSV', csvPath),
+
+  /** One in-app downloadable dictionary offered by the Me page. */
+  // eslint-disable-next-line @typescript-eslint/no-empty-object-type
+  dictSources: () =>
+    call<Array<{ id: string; name: string; desc: string; url: string; bytes: number }>>(
+      'DictSources',
+    ),
+
+  /** Downloads a catalog source and imports it. Blocking; minutes on a phone. */
+  downloadDict: (id: string) => call<{ entries: number; source: string }>('DownloadDict', id),
 
   lookupWord: (bookId: string, chapterId: string, offset: number, word: string, context: string) =>
     call<LookupResult>('LookupWord', bookId, chapterId, offset, word, context),
@@ -406,20 +667,47 @@ export const api = {
     bookId: string,
     chapterId: string,
     offset: number,
-    context: string
+    context: string,
   ) => call<VocabEntry>('VocabAdd', term, surface, bookId, chapterId, offset, context),
 
-  listVocab: (status: string, keyword: string) => call<VocabItem[]>('ListVocab', status, keyword),
+  /**
+   * One screenful of the notebook, newest first. Both lists are unbounded —
+   * every word that survives the frequency rule, every word ever tapped — so
+   * neither is ever fetched whole: opening the page must not get slower the
+   * longer the reader reads.
+   */
+  listVocab: (status: string, keyword: string, offset: number, limit: number) =>
+    call<Page<VocabItem>>('ListVocab', status, keyword, offset, limit),
 
   /** The next review session: only words that have come due. */
   vocabQueue: (limit: number) => call<VocabItem[]>('VocabQueue', limit),
 
   vocabStats: () => call<VocabStats>('VocabStats'),
 
+  /**
+   * How many notebook words nothing can explain — not the local dictionary,
+   * not a gloss fetched online before. Zero means the notebook reads normally
+   * and the「联网补全」action stays hidden.
+   */
+  vocabGlossGaps: () => call<number>('VocabGlossGaps'),
+
+  /**
+   * Look up to `limit` unexplained words on a public dictionary and store what
+   * comes back. This is the only call in the app that sends a word to a server,
+   * and it only runs when the reader asks for it.
+   */
+  fillVocabGlosses: (limit: number) => call<GlossFillResult>('FillVocabGlosses', limit),
+
   setVocabStatus: (vid: string, status: string) => call<boolean>('SetVocabStatus', vid, status),
+
+  /** Replace the example sentence kept with a word (the context is derived). */
+  setVocabContext: (vid: string, context: string) => call<boolean>('SetVocabContext', vid, context),
 
   /** Record one review outcome and reschedule the word; returns the new state. */
   gradeVocab: (vid: string, known: boolean) => call<VocabEntry>('GradeVocab', vid, known),
 
-  deleteVocab: (vid: string) => call<boolean>('DeleteVocab', vid)
+  /** One screenful of every word ever looked up, newest first — the notebook's
+   * raw material, and the longest list in the app. */
+  listLookupHistory: (keyword: string, offset: number, limit: number) =>
+    call<Page<LookupHit>>('ListLookupHistory', keyword, offset, limit),
 };

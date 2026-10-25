@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { api, BookmarkListItem } from '../api';
 import { toastError } from '../toast';
+import SubHeader from '../components/SubHeader';
 
 export default function Bookmarks() {
   const nav = useNavigate();
@@ -33,15 +34,22 @@ export default function Bookmarks() {
   }
 
   function jump(b: BookmarkListItem) {
-    nav(`/books/${b.bookId}/read/${b.chapterId}`, { state: { offset: b.anchor } });
+    // `preview` locks the visit: opens on the bookmark, never touches the
+    // reading position.
+    nav(`/books/${b.bookId}/read/${b.chapterId}`, {
+      state: {
+        preview: {
+          source: 'bookmark',
+          label: b.label || b.chapterTitle || b.bookTitle,
+          offset: b.anchor,
+        },
+      },
+    });
   }
 
   return (
     <div className="page">
-      <div className="lib-head">
-        <h1>书签</h1>
-        <span className="tag">{items.length} 条</span>
-      </div>
+      <SubHeader title="书签" tag={`${items.length} 条`} />
 
       {loading ? (
         <div className="loading">加载中…</div>

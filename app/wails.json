@@ -15,7 +15,7 @@
   "info": {
     "companyName": "EpubMaker",
     "productName": "EpubMaker",
-    "productVersion": "0.2.0",
+    "productVersion": "0.3.0",
     "copyright": "Copyright © 2026 john",
     "comments": "EPUB 电子书维护与生成工具（本地桌面应用）",
     "fileAssociations": [

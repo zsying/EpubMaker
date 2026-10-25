@@ -1,0 +1,20 @@
+# Line endings are LF in the repository and in the working tree, on every OS.
+# Without this the repo is at the mercy of each clone's core.autocrlf: on a
+# Windows checkout with autocrlf=true every file is CRLF on disk, and any tool
+# that writes LF (prettier, gofmt, an editor) makes git warn about the whole
+# file — noise that hides the real diff.
+* text=auto eol=lf
+
+# Windows shells still get CRLF; a .ps1 with lone LF runs, but the error
+# messages of a broken one point at the wrong line.
+*.ps1 text eol=crlf
+*.bat text eol=crlf
+*.cmd text eol=crlf
+
+# Binary: never touch.
+*.png binary
+*.jpg binary
+*.ico binary
+*.db binary
+*.epub binary
+*.exe binary

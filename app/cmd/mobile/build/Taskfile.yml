@@ -1,0 +1,34 @@
+# Tasks shared by the platform builds. Kept deliberately small: this project
+# has one frontend (web/) and one Go module (app/), so there is nothing to
+# scaffold — the Android build needs the web bundle staged under
+# cmd/mobile/frontend/dist so it can be embedded, and a tidy module.
+version: '3'
+
+tasks:
+  go:mod:tidy:
+    summary: Runs `go mod tidy` in the app module
+    internal: true
+    run: once
+    dir: ../../..
+    cmds:
+      - go mod tidy
+
+  frontend:compile:
+    summary: Builds the shared web frontend
+    internal: true
+    dir: ../../../../web
+    cmds:
+      - npm run build
+
+  build:frontend:
+    summary: Builds the frontend and stages it for embedding
+    internal: true
+    # go-task defaults to cmd.exe on Windows; rm/cp below are POSIX.
+    shell: bash
+    cmds:
+      - task: frontend:compile
+      # go:embed cannot reach outside the package directory, so the bundle has
+      # to be copied in rather than referenced.
+      - rm -rf ../frontend/dist
+      - mkdir -p ../frontend
+      - cp -r ../../../../web/dist ../frontend/dist

@@ -1,6 +1,6 @@
 {
   "name": "epubmaker",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "private": true,
   "description": "EPUB 电子书维护与生成工具（本地桌面应用，Go + Wails）",
   "workspaces": [
@@ -12,9 +12,18 @@
     "dev:app": "cd app && wails dev",
     "build:app": "cd app && wails build",
     "build:app:nsis": "cd app && wails build -nsis",
-    "test:e2e": "cd app && go test ./internal/api/... -run TestE2ELifecycle"
+    "test:e2e": "cd app && go test ./internal/api/... -run TestE2ELifecycle",
+    "format": "prettier --write web/src",
+    "format:check": "prettier --check web/src"
   },
   "engines": {
     "node": ">=20"
+  },
+  "dependencies": {
+    "qrcode": "^1.5.4"
+  },
+  "devDependencies": {
+    "@types/qrcode": "^1.5.6",
+    "prettier": "3.9.10"
   }
 }

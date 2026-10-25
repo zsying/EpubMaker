@@ -1,0 +1,20 @@
+# Only the frontend source is formatted. Everything else is either generated,
+# vendored, or prose whose wrapping is deliberate.
+node_modules/
+web/dist/
+web/node_modules/
+dist/
+app/build/
+app/frontend/dist/
+app/cmd/mobile/build/
+.workbuddy/
+
+# Prose: markdown is hand-wrapped, and the CHANGELOG's exact wording matters
+# more than its line breaks.
+*.md
+docs/
+
+# Generated — reformatting these would produce diffs no human wants to review.
+package-lock.json
+*.min.js
+*.min.css

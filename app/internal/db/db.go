@@ -54,7 +54,10 @@ CREATE TABLE IF NOT EXISTS books (
   source_name TEXT,
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL,
-  deleted_at TEXT
+  deleted_at TEXT,
+  toc TEXT,
+  tags TEXT,
+  file_hash TEXT
 );
 
 CREATE TABLE IF NOT EXISTS chapters (
@@ -153,6 +156,35 @@ CREATE TABLE IF NOT EXISTS vocab_seen (
   first_at TEXT NOT NULL,
   last_at TEXT NOT NULL
 );
+
+-- Lookup history: the plain log of "what have I looked up". It is deliberately
+-- wider than vocab_seen — which throws a term away once it is promoted — and
+-- narrower than vocab: it records only a term, when it was first and last
+-- looked up, and how often. No gloss, no book, no status: those are the
+-- dictionary's and the notebook's business, joined in at read time.
+CREATE TABLE IF NOT EXISTS lookup_history (
+  term TEXT PRIMARY KEY,
+  lookups INTEGER NOT NULL DEFAULT 1,
+  first_at TEXT NOT NULL,
+  last_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_lookup_history_last ON lookup_history(last_at);
+
+-- Glosses fetched from a public dictionary when the local one had nothing.
+--
+-- Deliberately in this database, not in dict.db: dict.db is rebuilt from an
+-- ECDICT csv import (ImportCSV replaces the whole file), and the telephone
+-- ships with a trimmed 150k-entry build of it. A gloss the reader had to go
+-- online for must survive both of those.
+CREATE TABLE IF NOT EXISTS dict_online (
+  term        TEXT PRIMARY KEY,
+  word        TEXT NOT NULL DEFAULT '',
+  phonetic    TEXT NOT NULL DEFAULT '',
+  translation TEXT NOT NULL DEFAULT '',
+  definition  TEXT NOT NULL DEFAULT '',
+  source      TEXT NOT NULL DEFAULT '',
+  fetched_at  TEXT NOT NULL DEFAULT ''
+);
 `
 
 func migrate(d *sql.DB) error {
@@ -167,6 +199,16 @@ func migrate(d *sql.DB) error {
 	_, _ = d.Exec(`ALTER TABLE reading_progress ADD COLUMN position_offset INTEGER NOT NULL DEFAULT 0`)
 	// Migration: older DBs may lack the hierarchical TOC column.
 	_, _ = d.Exec(`ALTER TABLE books ADD COLUMN toc TEXT`)
+	// Migration: user-managed tags live on the book row as a JSON array
+	// ("" for none). Appended after toc, so "SELECT *" column order stays
+	// stable across fresh and migrated databases alike.
+	_, _ = d.Exec(`ALTER TABLE books ADD COLUMN tags TEXT`)
+	_, _ = d.Exec(`UPDATE books SET tags = '' WHERE tags IS NULL`)
+	// Migration: sha256 of the imported EPUB file — the dedupe key that keeps
+	// the same file from landing on the shelf twice. Appended after tags.
+	// Older rows keep '' and fall back to the epub identifier on matching.
+	_, _ = d.Exec(`ALTER TABLE books ADD COLUMN file_hash TEXT`)
+	_, _ = d.Exec(`UPDATE books SET file_hash = '' WHERE file_hash IS NULL`)
 	// Backfill existing rows so the column is never NULL (Scan into sql.NullString
 	// also tolerates NULL, but an empty string keeps queries/JSON predictable).
 	_, _ = d.Exec(`UPDATE books SET toc = '' WHERE toc IS NULL`)
@@ -190,6 +232,15 @@ func migrate(d *sql.DB) error {
 	_, _ = d.Exec(`UPDATE vocab SET interval_days = 21, due_at = ?
 	                WHERE status = 'known' AND due_at = ''`,
 		time.Now().UTC().Add(21*24*time.Hour).Format("2006-01-02T15:04:05Z"))
+	// The lookup history arrived after both of those tables had been filling
+	// up, so seed it from what the older bookkeeping already knows: the
+	// pending-lookup counters and the notebook rows themselves. OR IGNORE makes
+	// this a no-op on every later start, and a promotion that consumed a
+	// vocab_seen row still leaves the term in the log where it belongs.
+	_, _ = d.Exec(`INSERT OR IGNORE INTO lookup_history (term, lookups, first_at, last_at)
+	                SELECT term, lookups, first_at, last_at FROM vocab_seen`)
+	_, _ = d.Exec(`INSERT OR IGNORE INTO lookup_history (term, lookups, first_at, last_at)
+	                SELECT term, lookups, created_at, updated_at FROM vocab`)
 	return nil
 }
 

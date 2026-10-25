@@ -71,7 +71,8 @@ export function buildTocItems(toc: TocEntry[], chapters: Chapter[]): TocRenderIt
   for (const f of all) {
     const desired = f.groups;
     let lcp = 0;
-    while (lcp < openKeys.length && lcp < desired.length && openKeys[lcp] === desired[lcp].key) lcp++;
+    while (lcp < openKeys.length && lcp < desired.length && openKeys[lcp] === desired[lcp].key)
+      lcp++;
     openKeys = openKeys.slice(0, lcp);
     for (let k = lcp; k < desired.length; k++) {
       out.push({ kind: 'group', key: desired[k].key, title: desired[k].title, level: k });
@@ -130,7 +131,9 @@ export function splitByHierarchy(
 
   // Chapters the user explicitly marked "不包含" stay out even when nested.
   const manualExcluded = new Set(
-    Object.entries(prevAssign).filter(([, v]) => v < 0).map(([id]) => id),
+    Object.entries(prevAssign)
+      .filter(([, v]) => v < 0)
+      .map(([id]) => id),
   );
 
   const assignSubtree = (e: TocEntry, p: number) => {

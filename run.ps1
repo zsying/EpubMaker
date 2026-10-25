@@ -7,23 +7,30 @@
   directory each command lives in.
 
   Modes:
-    help      Show this help (default when no mode is given).
-    clean     Remove build artifacts (web/dist, app/frontend/dist, app/build/bin).
-    build     Production build of the desktop exe (runs the frontend build first).
-    nsis      Production build + Windows NSIS installer.
-    dev       Desktop dev loop: vite watcher + Go rebuild + window hot reload.
-    web       Frontend only (vite on :7800). No Go backend, no window.go binding.
-    install   Install workspace dependencies.
-    test      Type-check the frontend, then vet + test the Go backend.
+    help           Show this help (default when no mode is given).
+    clean          Remove build artifacts (web/dist, frontend dist, exe, APK).
+    build          Production build of the desktop exe (runs the frontend build first).
+    nsis           Production build + Windows NSIS installer.
+    dev            Desktop dev loop: vite watcher + Go rebuild + window hot reload.
+    web            Frontend only (vite on :7800). No Go backend, no window.go binding.
+    mobile         Build the Android APK via app/cmd/mobile/build-android.ps1.
+    mobile-install Install the APK on a phone and pull diagnostics (screenshots/trace).
+    install        Install workspace dependencies.
+    test           Type-check the frontend, then vet + test the Go backend.
 
 .EXAMPLE
   .\run.ps1                 # same as .\run.ps1 help
   .\run.ps1 dev
   .\run.ps1 build -Verbose
   .\run.ps1 clean
+  .\run.ps1 mobile -Arch x86_64
+  .\run.ps1 mobile -SkipFrontend -ApkOnly
+  .\run.ps1 mobile-install
 
 .NOTES
-  Short flags: h/c/b/d/w/t/i. Long flags: --help/--clean/--build/--dev/...
+  Short flags: h/c/b/d/w/m/mi/t/i. Long flags: --help/--clean/--build/--dev/...
+  Mobile options: -Arch arm64|x86_64, -SkipFrontend, -ApkOnly,
+  and for mobile-install also -Serial <device> / -WaitSeconds <n>.
   Exit codes: 0 success, 1 failure or unknown mode.
 #>
 
@@ -150,16 +157,25 @@ function Show-Help {
   Write-Host '  nsis      Production build + NSIS installer' -ForegroundColor Gray
   Write-Host '  dev       Desktop dev loop (vite + Go + hot reload)' -ForegroundColor Gray
   Write-Host '  web       Frontend only, vite on http://localhost:7800' -ForegroundColor Gray
+  Write-Host '  mobile    Build the Android APK (arm64 default)' -ForegroundColor Gray
+  Write-Host '  mobile-install  Install the APK on a phone + pull diagnostics' -ForegroundColor Gray
   Write-Host '  install   Install workspace dependencies' -ForegroundColor Gray
   Write-Host '  test      Type-check frontend, then vet + test Go backend' -ForegroundColor Gray
   Write-Host ''
   Write-Host 'Options:' -ForegroundColor White
   Write-Host '  -Verbose  Stream sub-process output (build/dev/test)' -ForegroundColor Gray
+  Write-Host '  -Arch arm64|x86_64        mobile target ABI (default arm64)' -ForegroundColor Gray
+  Write-Host '  -SkipFrontend             mobile: reuse the staged web bundle' -ForegroundColor Gray
+  Write-Host '  -ApkOnly                  mobile: Gradle only, skip the Go build' -ForegroundColor Gray
+  Write-Host '  -Serial <device>          mobile-install: pick a specific device' -ForegroundColor Gray
+  Write-Host '  -WaitSeconds <n>          mobile-install: device wait timeout' -ForegroundColor Gray
   Write-Host ''
   Write-Host 'Examples:' -ForegroundColor White
   Write-Host '  .\run.ps1 dev' -ForegroundColor Gray
   Write-Host '  .\run.ps1 build -Verbose' -ForegroundColor Gray
   Write-Host '  .\run.ps1 web' -ForegroundColor Gray
+  Write-Host '  .\run.ps1 mobile -SkipFrontend' -ForegroundColor Gray
+  Write-Host '  .\run.ps1 mobile-install' -ForegroundColor Gray
   Write-Host ''
 }
 
@@ -169,7 +185,19 @@ function Invoke-Clean {
   $targets = @(
     @{ Path = 'web/dist'; Keep = @() },
     @{ Path = 'app/frontend/dist'; Keep = @('.gitkeep') },
-    @{ Path = 'app/build/bin'; Keep = @() }
+    @{ Path = 'app/build/bin'; Keep = @() },
+    # Android: build-android.ps1 regenerates all of these. cmd/mobile/build/
+    # itself stays — the gradle project and Java host in there are source.
+    @{ Path = 'app/build/mobile'; Keep = @() },
+    @{ Path = 'app/cmd/mobile/frontend/dist'; Keep = @() },
+    @{ Path = 'app/cmd/mobile/build/android/build'; Keep = @() },
+    @{ Path = 'app/cmd/mobile/build/android/.gradle'; Keep = @() },
+    @{ Path = 'app/cmd/mobile/build/android/app/build'; Keep = @() },
+    @{ Path = 'app/cmd/mobile/build/android/app/src/main/jniLibs'; Keep = @() },
+    @{ Path = 'app/cmd/mobile/build/android/app/src/main/assets'; Keep = @() },
+    @{ Path = 'app/cmd/mobile/build/android/gen'; Keep = @() },
+    @{ Path = 'app/cmd/mobile/build/android/overlay.json'; Keep = @() },
+    @{ Path = 'app/cmd/mobile/build/android/local.properties'; Keep = @() }
   )
 
   foreach ($target in $targets) {
@@ -232,10 +260,13 @@ function Invoke-Build {
   try {
     # wails build runs frontend:build (npm run build + sync-frontend-dist.js)
     # itself, so the frontend bundle is produced and embedded automatically.
+    # Plain unix seconds again: no spaces for the wails -> go flag chain.
+    $buildUnix = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
+    $ldflags = "-X epubmaker-desktop/internal/app.BuildTimeUnix=$buildUnix"
     if ($Installer) {
-      Invoke-Native 'wails' @('build', '-nsis')
+      Invoke-Native 'wails' @('build', '-nsis', '-ldflags', $ldflags)
     } else {
-      Invoke-Native 'wails' @('build')
+      Invoke-Native 'wails' @('build', '-ldflags', $ldflags)
     }
   } finally {
     Pop-Location
@@ -305,6 +336,66 @@ function Invoke-Test {
   return 0
 }
 
+# ----------------------------------------------------------------- mobile ---
+
+# Thin wrappers: the real logic (SDK/NDK/JDK probing, gradle, adb) lives in the
+# scripts under app/cmd/mobile. This only forwards parsed options so that
+# .\run.ps1 stays the single entry point.
+
+function Invoke-Mobile {
+  param(
+    [string]$Arch = 'arm64',
+    [switch]$SkipFrontend,
+    [switch]$ApkOnly
+  )
+
+  if (-not (Assert-Prereqs @('node', 'npm', 'go'))) { return 1 }
+  if (-not (Test-Workspace)) { return 1 }
+
+  $script = Join-Path $RepoRoot 'app/cmd/mobile/build-android.ps1'
+  if (-not (Test-Path $script)) {
+    Write-Fail "missing: $script"
+    return 1
+  }
+
+  $forward = @{ Arch = $Arch }
+  if ($SkipFrontend) { $forward.SkipFrontend = $true }
+  if ($ApkOnly) { $forward.ApkOnly = $true }
+
+  & $script @forward
+  if ($LASTEXITCODE -ne 0) { return 1 }
+
+  $abiDir = if ($Arch -eq 'x86_64') { 'x86_64' } else { 'arm64-v8a' }
+  $apk = Join-Path $RepoRoot "app/build/mobile/bin/EpubMaker-$abiDir.apk"
+  if (Test-Path $apk) {
+    Write-Step "built $apk"
+    Write-Note "install with: .\run.ps1 mobile-install  (or adb install -r `"$apk`")"
+  }
+  return 0
+}
+
+function Invoke-MobileInstall {
+  param(
+    [string]$Arch = 'arm64',
+    [string]$Serial = '',
+    [int]$WaitSeconds = 0
+  )
+
+  $script = Join-Path $RepoRoot 'app/cmd/mobile/install-and-check.ps1'
+  if (-not (Test-Path $script)) {
+    Write-Fail "missing: $script"
+    return 1
+  }
+
+  $forward = @{ Arch = $Arch }
+  if ($Serial) { $forward.Serial = $Serial }
+  if ($WaitSeconds -gt 0) { $forward.WaitSeconds = $WaitSeconds }
+
+  & $script @forward
+  if ($LASTEXITCODE -ne 0) { return 1 }
+  return 0
+}
+
 # ---------------------------------------------------------------- dispatch ---
 
 # No param block on purpose: $args lets short flags like -h reach the script
@@ -315,6 +406,38 @@ if ($args.Count -gt 0) { $requested = [string]$args[0] }
 $verbose = $false
 foreach ($arg in $args) {
   if ($arg -eq '-Verbose' -or $arg -eq '--verbose') { $verbose = $true }
+}
+
+# Mobile options (mobile / mobile-install). Unrecognised extras are reported
+# and ignored so a typo like -SkipFrotend fails loudly instead of silently
+# rebuilding the frontend.
+$mobileArch = 'arm64'
+$mobileSkipFrontend = $false
+$mobileApkOnly = $false
+$mobileSerial = ''
+$mobileWaitSeconds = 0
+for ($i = 1; $i -lt $args.Count; $i++) {
+  $a = [string]$args[$i]
+  if ($a -eq '-Verbose' -or $a -eq '--verbose') { continue }
+  if ($a -eq '-SkipFrontend' -or $a -eq '--skip-frontend') { $mobileSkipFrontend = $true; continue }
+  if ($a -eq '-ApkOnly' -or $a -eq '--apk-only') { $mobileApkOnly = $true; continue }
+  if ($a -eq '-Arch' -or $a -eq '--arch') {
+    $i++
+    if ($i -lt $args.Count) { $mobileArch = [string]$args[$i] }
+    continue
+  }
+  if ($a -eq '-Serial' -or $a -eq '--serial') {
+    $i++
+    if ($i -lt $args.Count) { $mobileSerial = [string]$args[$i] }
+    continue
+  }
+  if ($a -eq '-WaitSeconds' -or $a -eq '--wait-seconds') {
+    $i++
+    if ($i -lt $args.Count) { $mobileWaitSeconds = [int]$args[$i] }
+    continue
+  }
+  if ($a -match '^(arm64|x86_64)$') { $mobileArch = $a; continue }
+  Write-Warn "ignored extra argument: $a"
 }
 
 switch -Regex ($requested) {
@@ -328,6 +451,12 @@ switch -Regex ($requested) {
   }
   '^(dev|-d|--dev)$'              { exit (Invoke-Dev) }
   '^(web|-w|--web)$'              { exit (Invoke-Web) }
+  '^(mobile|-m|--mobile)$' {
+    exit (Invoke-Mobile -Arch $mobileArch -SkipFrontend:$mobileSkipFrontend -ApkOnly:$mobileApkOnly)
+  }
+  '^(mobile-install|-mi|--mobile-install)$' {
+    exit (Invoke-MobileInstall -Arch $mobileArch -Serial $mobileSerial -WaitSeconds $mobileWaitSeconds)
+  }
   '^(test|-t|--test)$'            { exit (Invoke-Test) }
   '^$'                             { Show-Help; exit 0 }
   default {

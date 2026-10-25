@@ -1,7 +1,11 @@
-import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { api, VocabItem, VocabStats } from '../api';
 import { toast, toastError } from '../toast';
+import { STATUS_HINT, STATUS_LABEL } from '../vocabLabels';
+import { emphasise } from '../highlight';
+import { repairContexts } from '../vocabRepair';
+import { useLoadMore } from '../useLoadMore';
 
 type Filter = '' | 'new' | 'learning' | 'known';
 
@@ -12,25 +16,14 @@ const FILTERS: { key: Filter; label: string }[] = [
   { key: 'known', label: '已掌握' },
 ];
 
-/** A pass has to be finishable; a queue you cannot reach the end of is one you
- * stop starting. The rest waits for the next pass. */
-const REVIEW_LIMIT = 30;
+/**
+ * Rows per request. The notebook grows for as long as the reader reads, and
+ * each row costs a dictionary lookup on the Go side, so the page opens on the
+ * first screenful and pulls the rest as it is scrolled to.
+ */
+const PAGE = 40;
 
-const STATUS_HINT: Record<VocabItem['status'], string> = {
-  new: '查词时自动收录，还没有复习过',
-  learning: '复习间隔还短，会频繁回来',
-  known: '连续答对，间隔已经拉长到三周以上',
-  ignored: '不再提示',
-};
-
-const STATUS_LABEL: Record<VocabItem['status'], string> = {
-  new: '待学',
-  learning: '学习中',
-  known: '已掌握',
-  ignored: '已忽略',
-};
-
-/** "When is this due again", said the way a person would say it. */
+/** 'When is this due again', said the way a person would say it. */
 function dueLabel(iso: string): string {
   if (!iso) return '待复习';
   const at = new Date(iso);
@@ -46,46 +39,10 @@ function dueLabel(iso: string): string {
   return `${at.getMonth() + 1}月${at.getDate()}日`;
 }
 
-/** The interval a grade just produced, for the review card's feedback line. */
-function intervalLabel(days: number): string {
-  if (days <= 0) return '稍后';
-  if (days < 1) return '10 分钟';
-  const d = Math.round(days);
-  return d === 1 ? '明天' : `${d} 天后`;
-}
-
 /** When the word is due, said the way a schedule would: a word that was never
- * scheduled has no date to show, and saying "今天到期" about it would be wrong. */
+ * scheduled has no date to show, and saying '今天到期' about it would be wrong. */
 function scheduleLine(dueAt: string): string {
   return dueAt ? `下次 ${dueLabel(dueAt)}` : '还没复习过';
-}
-
-/** Marks the word inside its example sentence, so the row reads as a quote
- * rather than an unexplained string. Falls back to the base form when the
- * stored surface text is inflected differently. */
-function emphasise(text: string, candidates: string[]): ReactNode {
-  const lower = text.toLowerCase();
-  for (const c of candidates) {
-    const needle = c.trim().toLowerCase();
-    if (!needle) continue;
-    const at = lower.indexOf(needle);
-    if (at < 0) continue;
-    return (
-      <>
-        {text.slice(0, at)}
-        <mark className="vocab-hit">{text.slice(at, at + needle.length)}</mark>
-        {text.slice(at + needle.length)}
-      </>
-    );
-  }
-  return text;
-}
-
-function shortDate(iso: string): string {
-  if (!iso) return '';
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return '';
-  return `${d.getMonth() + 1}月${d.getDate()}日`;
 }
 
 export default function Vocab() {
@@ -95,136 +52,184 @@ export default function Vocab() {
   const [filter, setFilter] = useState<Filter>('');
   const [keyword, setKeyword] = useState('');
   const [loading, setLoading] = useState(true);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [hasMore, setHasMore] = useState(false);
+  // Set when a page fetch failed. Automatic loading stops, because a fetch that
+  // keeps failing would otherwise retry on every scroll frame and bury the
+  // reader in toasts; the button is left for them to press deliberately.
+  const [stalled, setStalled] = useState(false);
+  // Matching rows in the database, not rows on screen — the only honest number
+  // to show once the list arrives a screenful at a time.
+  const [total, setTotal] = useState(0);
+  // Words neither the dictionary nor an earlier online lookup could explain.
+  // Zero hides the offer entirely: the page should not advertise a job when
+  // there is nothing to do.
+  const [gaps, setGaps] = useState(0);
+  const [filling, setFilling] = useState(false);
 
-  // Deleting a word is rare and irreversible, so it is behind a mode: the
-  // per-row button would otherwise sit one slip away from every row.
-  const [deleting, setDeleting] = useState(false);
-  const [picked, setPicked] = useState<Set<string>>(new Set());
+  // The list is read in pages, so 'how far in am I' has to be tracked
+  // separately from `items.length`: a row dropped as a duplicate must not shift
+  // the next request's offset and make the page skip a word.
+  const cursor = useRef(0);
+  // Bumped on every new query. A reply that lands for a previous filter is
+  // discarded instead of being appended to the wrong list.
+  const query = useRef(0);
 
-  const [reviewing, setReviewing] = useState(false);
-  const [queue, setQueue] = useState<VocabItem[]>([]);
-  const [preparing, setPreparing] = useState(false);
+  function mergeInto(fixed: Map<string, string>, seq: number) {
+    if (seq !== query.current || fixed.size === 0) return;
+    setItems((prev) =>
+      prev.map((it) => (fixed.has(it.id) ? { ...it, context: fixed.get(it.id) as string } : it)),
+    );
+  }
 
   // The notebook is searched on every keystroke; each row costs one dictionary
   // lookup on the Go side, so a short debounce keeps typing responsive.
   useEffect(() => {
     let alive = true;
+    const seq = ++query.current;
+    setLoading(true);
+    // A page that was still in flight when the filter changed belongs to the
+    // old list; its `finally` will not run for this query, so clear the flag
+    // here or the new list could never load a second screenful.
+    setLoadingMore(false);
+    setStalled(false);
     const timer = setTimeout(async () => {
       try {
-        const [list, st] = await Promise.all([api.listVocab(filter, keyword), api.vocabStats()]);
-        if (!alive) return;
-        setItems(list);
+        const [page, st] = await Promise.all([
+          api.listVocab(filter, keyword, 0, PAGE),
+          api.vocabStats(),
+        ]);
+        if (!alive || seq !== query.current) return;
+        const rows = page?.items ?? [];
+        cursor.current = rows.length;
+        setItems(rows);
+        setHasMore(Boolean(page?.hasMore));
+        setTotal(page?.total ?? rows.length);
         setStats(st);
+        // Off the critical path: the offer to go online is not what the reader
+        // came for, and the scan touches every word in the notebook.
+        void api
+          .vocabGlossGaps()
+          .then((n) => {
+            if (alive && seq === query.current) setGaps(n ?? 0);
+          })
+          .catch(() => undefined);
+        // Entries captured by an older sentence extraction can hold a fragment
+        // instead of the sentence; the chapter is still there to re-cut it from.
+        // Draw the list first, then let the repaired rows arrive in place.
+        void repairContexts(rows).then((fixed) => {
+          if (alive) mergeInto(fixed, seq);
+        });
       } catch (e) {
-        if (alive) toastError(e);
+        if (alive && seq === query.current) toastError(e);
       } finally {
-        if (alive) setLoading(false);
+        if (alive && seq === query.current) setLoading(false);
       }
     }, 180);
     return () => {
       alive = false;
       clearTimeout(timer);
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- mergeInto is pure over these deps
   }, [filter, keyword]);
 
-  // Selection is scoped to what is on screen: a hidden word must not be
-  // deleted by a confirmation that never showed it.
-  useEffect(() => {
-    setPicked(new Set());
-  }, [filter, keyword]);
-
-  async function reload() {
+  const loadMore = useCallback(async () => {
+    if (loading || loadingMore || !hasMore) return;
+    const seq = query.current;
+    const offset = cursor.current;
+    setLoadingMore(true);
     try {
-      const [list, st] = await Promise.all([api.listVocab(filter, keyword), api.vocabStats()]);
-      setItems(list);
-      setStats(st);
+      const page = await api.listVocab(filter, keyword, offset, PAGE);
+      if (seq !== query.current) return;
+      const more = page?.items ?? [];
+      cursor.current = offset + more.length;
+      setItems((prev) => {
+        const seen = new Set(prev.map((p) => p.id));
+        return [...prev, ...more.filter((p) => !seen.has(p.id))];
+      });
+      setHasMore(Boolean(page?.hasMore));
+      setTotal(page?.total ?? offset + more.length);
+      setStalled(false);
+      void repairContexts(more).then((fixed) => mergeInto(fixed, seq));
     } catch (e) {
       toastError(e);
+      if (seq === query.current) setStalled(true);
+    } finally {
+      if (seq === query.current) setLoadingMore(false);
     }
-  }
+    // mergeInto reads only refs plus setState, so it is stable enough here.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [filter, keyword, loading, loadingMore, hasMore]);
 
-  async function markKnown(it: VocabItem) {
-    try {
-      await api.setVocabStatus(it.id, 'known');
-      await reload();
-      toast(`已标记掌握：${it.term}`, 'success');
-    } catch (e) {
-      toastError(e);
-    }
-  }
-
-  function togglePick(id: string) {
-    setPicked((prev) => {
-      const next = new Set(prev);
-      if (next.has(id)) next.delete(id);
-      else next.add(id);
-      return next;
-    });
-  }
-
-  function leaveDeleteMode() {
-    setDeleting(false);
-    setPicked(new Set());
-  }
-
-  async function confirmDelete() {
-    const ids = [...picked];
-    if (ids.length === 0) return;
-    if (!confirm(`从生词本删除这 ${ids.length} 个词？此操作不可撤销。`)) return;
-    try {
-      await Promise.all(ids.map((id) => api.deleteVocab(id)));
-      toast(`已删除 ${ids.length} 个词`, 'success');
-      leaveDeleteMode();
-      await reload();
-    } catch (e) {
-      toastError(e);
-    }
-  }
+  // Reaching the bottom pulls the next screenful; the button below is the
+  // explicit fallback for when it does not.
+  const sentinel = useLoadMore(
+    !loading && !loadingMore && hasMore && !stalled,
+    () => void loadMore(),
+  );
 
   function jump(it: VocabItem) {
     if (!it.bookId || !it.chapterId) return;
     nav(`/books/${it.bookId}/read/${it.chapterId}`, {
       state: {
-        offset: it.offset,
-        // Marking the visit as a detour is what keeps it from overwriting the
+        // Marking the visit as a preview is what keeps it from overwriting the
         // reading position: the reader came here to see one word, not to read.
-        detour: { word: it.term, surface: it.surface || it.term, offset: it.offset },
+        preview: {
+          source: 'vocab',
+          label: it.term,
+          offset: it.offset,
+          word: it.term,
+          surface: it.surface || it.term,
+        },
       },
     });
   }
 
-  async function startReview() {
-    setPreparing(true);
+  // What is worth reviewing right now — not 'everything not yet mastered':
+  // a word scheduled for next week is not a word to be asked about today.
+  const due = stats?.due ?? 0;
+
+  // Ask a public dictionary about the words nothing here can explain. This is
+  // the one place the app sends a word to a server, so it only ever runs on a
+  // click — and every answer is stored, so the same word is never sent twice.
+  async function fillGlosses() {
+    if (filling) return;
+    setFilling(true);
+    let filled = 0;
+    let notFound = 0;
+    let failed = 0;
     try {
-      const q = await api.vocabQueue(REVIEW_LIMIT);
-      if (q.length === 0) {
-        toast('今天没有到期的词，明天再来', 'info');
-        return;
+      // A few rounds per click: one round is quick enough to keep the spinner
+      // honest, and a round that fills nothing ends the loop instead of
+      // hammering two free public APIs.
+      for (let round = 0; round < 5; round++) {
+        const r = await api.fillVocabGlosses(8);
+        filled += r.filled;
+        notFound += r.notFound;
+        failed += r.failed;
+        setGaps(r.remaining);
+        if (r.remaining === 0 || r.filled === 0) break;
       }
-      setQueue(q);
-      setReviewing(true);
+      // The glosses live in the backend now; redraw the rows already on screen
+      // so they stop saying「（词库无释义）」.
+      const want = Math.min(200, Math.max(PAGE, items.length));
+      const page = await api.listVocab(filter, keyword, 0, want);
+      if (page) {
+        const rows = page.items ?? [];
+        cursor.current = rows.length;
+        setItems(rows);
+        setHasMore(Boolean(page.hasMore));
+        setTotal(page.total ?? rows.length);
+      }
     } catch (e) {
       toastError(e);
     } finally {
-      setPreparing(false);
+      setFilling(false);
     }
-  }
-
-  // What is worth reviewing right now — not "everything not yet mastered":
-  // a word scheduled for next week is not a word to be asked about today.
-  const due = stats?.due ?? 0;
-  const allPicked = items.length > 0 && picked.size === items.length;
-
-  if (reviewing) {
-    return (
-      <Review
-        items={queue}
-        onExit={() => {
-          setReviewing(false);
-          void reload();
-        }}
-      />
-    );
+    const said = [`补全 ${filled} 个`];
+    if (notFound) said.push(`${notFound} 个词库也查不到`);
+    if (failed) said.push(`${failed} 个没连上，可以再试`);
+    toast(said.join('，'));
   }
 
   return (
@@ -238,43 +243,27 @@ export default function Vocab() {
         )}
         <span style={{ flex: 1 }} />
 
-        {deleting ? (
-          <>
-            <span className="muted">已选 {picked.size} 个</span>
-            <button
-              className="btn sm"
-              onClick={() => setPicked(allPicked ? new Set() : new Set(items.map((it) => it.id)))}
-            >
-              {allPicked ? '取消全选' : '全选'}
-            </button>
-            <button className="btn sm" onClick={leaveDeleteMode}>
-              取消
-            </button>
-            <button className="btn sm danger" disabled={picked.size === 0} onClick={() => void confirmDelete()}>
-              删除 {picked.size}
-            </button>
-          </>
-        ) : (
-          <>
-            <input
-              className="input vocab-search"
-              placeholder="搜索单词或例句…"
-              value={keyword}
-              onChange={(e) => setKeyword(e.target.value)}
-            />
-            <button className="btn sm" onClick={() => setDeleting(true)} disabled={items.length === 0} title="批量删除单词">
-              删除
-            </button>
-            <button
-              className="btn primary"
-              disabled={due === 0 || preparing}
-              title={due === 0 ? '今天没有到期的词' : '复习到期的词'}
-              onClick={() => void startReview()}
-            >
-              {preparing ? '准备中…' : `复习 ${due}`}
-            </button>
-          </>
-        )}
+        <input
+          className="input vocab-search"
+          placeholder="搜索单词或例句…"
+          value={keyword}
+          onChange={(e) => setKeyword(e.target.value)}
+        />
+        {/* The history is where the words the notebook declined live, so the
+            way in sits next to the notebook it feeds. */}
+        <button className="btn sm" onClick={() => nav('/vocab/history')} title="看都查过哪些词">
+          查词历史
+        </button>
+        {/* A pass gets its own page: it is a mode with its own back header and
+            no tab bar, and a route is the only way to give it both. */}
+        <button
+          className="btn primary"
+          disabled={due === 0}
+          title={due === 0 ? '今天没有到期的词' : '复习到期的词'}
+          onClick={() => nav('/vocab/review')}
+        >
+          复习 {due}
+        </button>
       </div>
 
       <div className="vocab-filters">
@@ -287,8 +276,23 @@ export default function Vocab() {
             {f.label}
           </button>
         ))}
-        {deleting && <span className="muted vocab-hint">正在删除：点击单词选中，可多选</span>}
       </div>
+
+      {/* The only network call the notebook makes, and it waits to be asked.
+          Hidden when there is nothing to explain, so it never becomes chrome. */}
+      {gaps > 0 && !loading && (
+        <div className="vocab-gap-bar">
+          <span className="vocab-gap-text">{gaps} 个词还没有释义</span>
+          <button
+            className="btn sm"
+            disabled={filling}
+            onClick={() => void fillGlosses()}
+            title="从有道词典取中文释义（查不到时用 Free Dictionary 的英文释义），查到后存入本地词库，以后不再联网"
+          >
+            {filling ? '联网查词中…' : '联网补全'}
+          </button>
+        </div>
+      )}
 
       {loading ? (
         <div className="loading">加载中…</div>
@@ -301,194 +305,89 @@ export default function Vocab() {
             : '生词本还是空的。阅读时划选单词查一次，同一个词查第二次就会自动收录。'}
         </div>
       ) : (
-        <div className="note-list">
-          {items.map((it) => (
-            <div className={`note-card${picked.has(it.id) ? ' picked' : ''}`} key={it.id}>
-              {deleting && (
-                <span className={`vocab-check${picked.has(it.id) ? ' on' : ''}`} aria-hidden>
-                  {picked.has(it.id) ? '✓' : ''}
-                </span>
-              )}
+        <>
+          <div className="note-list">
+            {items.map((it) => {
+              const origin = it.bookTitle
+                ? `${it.bookTitle} · ${it.chapterTitle || '未知章节'}`
+                : '原书已删除';
+              // Two things share one line, and only one of them can give way. The
+              // study line is the reason the page exists, so it stays whole and
+              // short — the schedule, not a tally; the provenance truncates. The
+              // counters still exist, in the row's tooltip.
+              const learn = it.status === 'ignored' ? '' : scheduleLine(it.dueAt);
+              const counts = [
+                it.lookups > 1 ? `查过 ${it.lookups} 次` : '',
+                it.reviews > 0 ? `复习 ${it.reviews} 次` : '',
+                it.lapses > 0 ? `忘过 ${it.lapses} 次` : '',
+              ]
+                .filter(Boolean)
+                .join(' · ');
+              const detail = [origin, counts, learn].filter(Boolean).join(' · ');
+
+              return (
+                <div className="note-card" key={it.id}>
+                  <button
+                    className="note-card-main"
+                    onClick={() => jump(it)}
+                    disabled={!it.bookId || !it.chapterId}
+                    title={it.bookTitle ? '回到原文' : '原书已删除'}
+                  >
+                    <div className="vocab-wordline">
+                      <span className="vocab-word">{it.term}</span>
+                      {it.phonetic && <span className="dict-phon">/{it.phonetic}/</span>}
+                    </div>
+                    <div className="vocab-trans">{it.translation || '（词库无释义）'}</div>
+                    {it.context && (
+                      <div className="note-card-text">
+                        {emphasise(it.context, [it.surface, it.term])}
+                      </div>
+                    )}
+                    {/* One line, always. A long book title used to fold this row in
+                      two and break '还没复习过' in the middle of a word, so the
+                      provenance truncates with an ellipsis instead and the study
+                      line beside it never wraps. Status is the last thing on the
+                      line — a label, not a column of its own — and `new` is the
+                      default, so only a word that has moved on wears a tag. */}
+                    <div className="note-card-meta vocab-meta" title={detail}>
+                      <span className="vocab-origin">{origin}</span>
+                      {learn && <span className="vocab-learn">{learn}</span>}
+                      {it.status !== 'new' && (
+                        <span
+                          className={`vocab-status s-${it.status}`}
+                          title={STATUS_HINT[it.status]}
+                        >
+                          {STATUS_LABEL[it.status]}
+                        </span>
+                      )}
+                    </div>
+                  </button>
+                </div>
+              );
+            })}
+          </div>
+          {/* The list arrives a screenful at a time. Scrolling to this point
+              pulls the next one; the button is what the reader can press when
+              the observer does not fire, and what says how much is left. */}
+          <div className="list-foot" ref={sentinel}>
+            {loadingMore ? (
+              <span className="list-foot-busy">加载更多…</span>
+            ) : hasMore ? (
               <button
-                className="note-card-main"
-                onClick={() => (deleting ? togglePick(it.id) : jump(it))}
-                disabled={!deleting && (!it.bookId || !it.chapterId)}
-                title={deleting ? '选中' : it.bookTitle ? '回到原文' : '原书已删除'}
+                className="btn sm"
+                onClick={() => {
+                  setStalled(false);
+                  void loadMore();
+                }}
               >
-                <div className="vocab-wordline">
-                  <span className="vocab-word">{it.term}</span>
-                  {it.phonetic && <span className="dict-phon">/{it.phonetic}/</span>}
-                  <span className={`vocab-status s-${it.status}`} title={STATUS_HINT[it.status]}>
-                    {STATUS_LABEL[it.status]}
-                  </span>
-                </div>
-                <div className="vocab-trans">{it.translation || '（词库无释义）'}</div>
-                {it.context && (
-                  <div className="note-card-text">{emphasise(it.context, [it.surface, it.term])}</div>
-                )}
-                <div className="note-card-meta">
-                  {it.bookTitle ? `${it.bookTitle} · ${it.chapterTitle || '未知章节'}` : '原书已删除'}
-                  {it.lookups > 1 && ` · 查过 ${it.lookups} 次`}
-                  {it.reviews > 0 && ` · 复习 ${it.reviews} 次（${shortDate(it.lastReviewedAt)}）`}
-                  {it.lapses > 0 && ` · 忘过 ${it.lapses} 次`}
-                  {it.status !== 'ignored' && ` · ${scheduleLine(it.dueAt)}`}
-                </div>
+                {stalled ? '重试' : '加载更多'} · 已显示 {items.length}/{total}
               </button>
-              {!deleting && (
-                <div className="vocab-actions">
-                  {it.status !== 'known' && (
-                    <button className="btn sm" onClick={() => void markKnown(it)}>
-                      已掌握
-                    </button>
-                  )}
-                </div>
-              )}
-            </div>
-          ))}
-        </div>
+            ) : total > PAGE ? (
+              <span className="list-foot-end">已显示全部 {total} 个词</span>
+            ) : null}
+          </div>
+        </>
       )}
-    </div>
-  );
-}
-
-/* ------------------------------ review pass ------------------------------ */
-
-type ReviewStats = { hit: number; miss: number; skipped: number };
-
-/**
- * One pass over the words that are due. Each grade reschedules the word with
- * SM-2: a hit walks 1 day → 6 days → interval × ease, a miss drops back to a
- * ten-minute step. The header keeps a one-line receipt of what the last grade
- * just did, because a schedule nobody can see is indistinguishable from no
- * schedule at all.
- *
- * The card shows the word first and the meaning only after a click, because
- * reading the gloss straight away is what makes a card feel productive while
- * teaching nothing.
- */
-function Review({ items, onExit }: { items: VocabItem[]; onExit: () => void }) {
-  const [list] = useState(items);
-  const [index, setIndex] = useState(0);
-  const [revealed, setRevealed] = useState(false);
-  const [tally, setTally] = useState<ReviewStats>({ hit: 0, miss: 0, skipped: 0 });
-  const [lastGrade, setLastGrade] = useState('');
-  const busy = useRef(false);
-
-  const cur = list[index];
-
-  function speak(text: string) {
-    try {
-      const u = new SpeechSynthesisUtterance(text);
-      u.lang = 'en-US';
-      u.rate = 0.9;
-      window.speechSynthesis.cancel();
-      window.speechSynthesis.speak(u);
-    } catch {
-      /* speech synthesis unavailable in this WebView */
-    }
-  }
-
-  async function grade(didKnow: boolean) {
-    if (!cur || busy.current) return;
-    busy.current = true;
-    try {
-      // The Go side reschedules the word and hands the new state back, so the
-      // card can say what happens next instead of just disappearing.
-      const next = await api.gradeVocab(cur.id, didKnow);
-      setLastGrade(
-        didKnow
-          ? `${cur.term}：认识，下次 ${intervalLabel(next.intervalDays)}`
-          : `${cur.term}：不记得，10 分钟后再看`,
-      );
-      setTally((t) => (didKnow ? { ...t, hit: t.hit + 1 } : { ...t, miss: t.miss + 1 }));
-    } catch (e) {
-      toastError(e);
-    } finally {
-      busy.current = false;
-      setRevealed(false);
-      setIndex((i) => i + 1);
-    }
-  }
-
-  function skip() {
-    setTally((t) => ({ ...t, skipped: t.skipped + 1 }));
-    setRevealed(false);
-    setIndex((i) => i + 1);
-  }
-
-  if (!cur) {
-    return (
-      <div className="page">
-        <div className="lib-head">
-          <h1>本轮复习完成</h1>
-        </div>
-        <div className="empty">
-          <p style={{ marginBottom: 6 }}>
-            认识 {tally.hit} 个，还不认识 {tally.miss} 个
-            {tally.skipped > 0 && `，跳过 ${tally.skipped} 个`}。
-          </p>
-          <p className="muted">
-            {tally.miss > 0
-              ? '答错的词十分钟后会回到队列里；答对的按 1 天、6 天、再按熟练度翻倍往后排。'
-              : '这些词的间隔都往后推了，短期内不会再打扰你。'}
-          </p>
-          {lastGrade && <p className="muted">最后一个：{lastGrade}</p>}
-        </div>
-        <div style={{ display: 'flex', gap: 8, justifyContent: 'center' }}>
-          <button className="btn primary" onClick={onExit}>
-            返回生词本
-          </button>
-        </div>
-      </div>
-    );
-  }
-
-  return (
-    <div className="page">
-      <div className="lib-head">
-        <h1>复习</h1>
-        <span className="tag">
-          {index + 1} / {list.length}
-        </span>
-        {lastGrade && <span className="muted vocab-hint">{lastGrade}</span>}
-        <span style={{ flex: 1 }} />
-        <button className="btn sm" onClick={skip}>
-          跳过
-        </button>
-        <button className="btn" onClick={onExit}>
-          结束本轮
-        </button>
-      </div>
-
-      <div className="review-card">
-        <div className="review-word">{cur.term}</div>
-        {cur.phonetic && <div className="review-phon">/{cur.phonetic}/</div>}
-        <button className="btn sm" onClick={() => speak(cur.term)}>
-          发音
-        </button>
-
-        {revealed ? (
-          <>
-            <div className="review-trans">{cur.translation || '（词库无释义）'}</div>
-            {cur.context && (
-              <div className="review-context">{emphasise(cur.context, [cur.surface, cur.term])}</div>
-            )}
-          </>
-        ) : (
-          <button className="review-reveal" onClick={() => setRevealed(true)}>
-            想好了，显示释义
-          </button>
-        )}
-
-        <div className="review-actions">
-          <button className="btn" disabled={!revealed} onClick={() => void grade(false)}>
-            不记得
-          </button>
-          <button className="btn primary" disabled={!revealed} onClick={() => void grade(true)}>
-            认识
-          </button>
-        </div>
-      </div>
     </div>
   );
 }

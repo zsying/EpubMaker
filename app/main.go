@@ -84,6 +84,21 @@ func spaHandler(assets fs.FS) http.Handler {
 			return
 		}
 
+		// Downloaded reading fonts live on disk (outside the embed). The name
+		// is validated by the same rule the downloader used, so the join below
+		// cannot be walked out of.
+		if strings.HasPrefix(clean, "/fonts/") {
+			name := path.Base(clean)
+			if !app.IsFontFileName(name) {
+				http.NotFound(w, r)
+				return
+			}
+			fp := filepath.Join(app.FontsDir(), name)
+			w.Header().Set("Cache-Control", "no-store")
+			http.ServeFile(w, r, fp)
+			return
+		}
+
 		// fs.FS paths have no leading slash.
 		fp := strings.TrimPrefix(clean, "/")
 		if hasTraversal(fp) {

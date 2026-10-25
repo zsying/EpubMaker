@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { api, AnnotationListItem } from '../api';
 import { toastError } from '../toast';
+import SubHeader from '../components/SubHeader';
 
 export default function Annotations() {
   const nav = useNavigate();
@@ -33,15 +34,24 @@ export default function Annotations() {
   }
 
   function jump(a: AnnotationListItem) {
-    nav(`/books/${a.bookId}/read/${a.chapterId}`, { state: { offset: a.startOffset } });
+    // `preview` puts the reader in its locked visit mode: the page opens on the
+    // highlighted range (selected, toolbar up) and the reading position stays
+    // untouched.
+    nav(`/books/${a.bookId}/read/${a.chapterId}`, {
+      state: {
+        preview: {
+          source: 'annotation',
+          label: a.text,
+          offset: a.startOffset,
+          end: a.endOffset,
+        },
+      },
+    });
   }
 
   return (
     <div className="page">
-      <div className="lib-head">
-        <h1>划线 / 批注</h1>
-        <span className="tag">{items.length} 条</span>
-      </div>
+      <SubHeader title="划线 / 批注" tag={`${items.length} 条`} />
 
       {loading ? (
         <div className="loading">加载中…</div>

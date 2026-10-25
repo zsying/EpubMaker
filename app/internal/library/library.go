@@ -40,6 +40,7 @@ type BookDTO struct {
 	SourceName   *string `json:"sourceName"`
 	ChapterCount int     `json:"chapterCount"`
 	DeletedAt    *string `json:"deletedAt"`
+	Tags         []string `json:"tags"`
 	CreatedAt    string  `json:"createdAt"`
 	UpdatedAt    string  `json:"updatedAt"`
 }
@@ -69,6 +70,11 @@ type BookRow struct {
 	// TOC is the hierarchical table-of-contents tree serialized as JSON.
 	// NULL (empty) for books imported before hierarchical TOC support.
 	TOC sql.NullString
+	// Tags is the user-managed tag list serialized as JSON ("" for none).
+	Tags sql.NullString
+	// FileHash is the sha256 of the imported EPUB ("" for legacy rows);
+	// the dedupe key that stops the same file landing on the shelf twice.
+	FileHash sql.NullString
 }
 
 type ChapterRow struct {
@@ -119,6 +125,7 @@ type BookPatch struct {
 	Description *string `json:"description"`
 	Identifier  *string `json:"identifier"`
 	CoverHref   *string `json:"coverHref"`
+	Tags        *[]string `json:"tags"`
 }
 
 type ChapterPatch struct {
@@ -180,7 +187,7 @@ func scanBook(s scanner) (BookRow, error) {
 	var b BookRow
 	err := s.Scan(&b.ID, &b.Title, &b.Author, &b.Language, &b.Publisher,
 		&b.Description, &b.Identifier, &b.CoverHref, &b.SourceName,
-		&b.CreatedAt, &b.UpdatedAt, &b.DeletedAt, &b.TOC)
+		&b.CreatedAt, &b.UpdatedAt, &b.DeletedAt, &b.TOC, &b.Tags, &b.FileHash)
 	return b, err
 }
 
@@ -227,9 +234,26 @@ func toBookDTO(r BookRow, chapterCount int) BookDTO {
 		SourceName:   nullStr(r.SourceName),
 		ChapterCount: chapterCount,
 		DeletedAt:    nullStr(r.DeletedAt),
+		Tags:         parseTags(r.Tags),
 		CreatedAt:    r.CreatedAt,
 		UpdatedAt:    r.UpdatedAt,
 	}
+}
+
+// parseTags decodes the stored JSON tag array; an empty/invalid value reads
+// back as an empty slice (never nil) so JSON consumers can map over it.
+func parseTags(raw sql.NullString) []string {
+	if !raw.Valid || strings.TrimSpace(raw.String) == "" {
+		return []string{}
+	}
+	var tags []string
+	if err := json.Unmarshal([]byte(raw.String), &tags); err != nil {
+		return []string{}
+	}
+	if tags == nil {
+		return []string{}
+	}
+	return tags
 }
 
 func toChapterDTO(c ChapterRow) ChapterDTO {
@@ -491,6 +515,17 @@ func UpdateBook(id string, patch BookPatch) (*BookDTO, error) {
 			next.CoverHref = sql.NullString{String: *patch.CoverHref, Valid: true}
 		}
 	}
+	// Tags live in their own column and are only touched when the patch
+	// carries them (nil = leave the stored list alone).
+	if patch.Tags != nil {
+		if len(*patch.Tags) == 0 {
+			next.Tags = sql.NullString{String: "", Valid: true}
+		} else {
+			if enc, err := json.Marshal(*patch.Tags); err == nil {
+				next.Tags = sql.NullString{String: string(enc), Valid: true}
+			}
+		}
+	}
 	d, err := db.Open()
 	if err != nil {
 		return nil, err
@@ -500,6 +535,11 @@ func UpdateBook(id string, patch BookPatch) (*BookDTO, error) {
 		next.Title, next.Author, next.Language, next.Publisher, next.Description,
 		next.Identifier, next.CoverHref, next.UpdatedAt, id); err != nil {
 		return nil, err
+	}
+	if patch.Tags != nil {
+		if _, err = d.Exec(`UPDATE books SET tags=? WHERE id=?`, next.Tags, id); err != nil {
+			return nil, err
+		}
 	}
 	return GetBook(id)
 }

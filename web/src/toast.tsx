@@ -25,7 +25,8 @@ export function toast(msg: string, type: ToastType = 'info', ms = 3200) {
   }, ms);
 }
 
-export const toastError = (e: unknown) => toast(e instanceof Error ? e.message : String(e), 'error', 5000);
+export const toastError = (e: unknown) =>
+  toast(e instanceof Error ? e.message : String(e), 'error', 5000);
 
 export function Toaster() {
   const [list, setList] = useState<Item[]>([]);

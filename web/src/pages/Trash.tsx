@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { api, TrashItem } from '../api';
 import { toast, toastError } from '../toast';
+import SubHeader from '../components/SubHeader';
 
 function fmt(iso: string | null) {
   if (!iso) return '—';
@@ -43,11 +44,7 @@ export default function Trash() {
   }
 
   async function purge(it: TrashItem) {
-    if (
-      !confirm(
-        `确定彻底删除《${it.title}》？此操作不可恢复（数据库记录与磁盘文件都会被删除）。`
-      )
-    )
+    if (!confirm(`确定彻底删除《${it.title}》？此操作不可恢复（数据库记录与磁盘文件都会被删除）。`))
       return;
     setBusyId(it.id);
     try {
@@ -63,14 +60,11 @@ export default function Trash() {
 
   return (
     <div className="page">
-      <div className="lib-head">
-        <h1>回收站</h1>
-        <span className="tag">{items.length} 项</span>
-        <span style={{ flex: 1 }} />
+      <SubHeader title="回收站" tag={`${items.length} 项`}>
         <Link className="btn" to="/">
           返回书架
         </Link>
-      </div>
+      </SubHeader>
 
       {loading ? (
         <div className="loading">加载中…</div>
@@ -95,13 +89,21 @@ export default function Trash() {
               <div style={{ flex: 1, minWidth: 0 }}>
                 <div
                   className="name"
-                  style={{ fontSize: 13.5, fontWeight: 550, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
+                  style={{
+                    fontSize: 13.5,
+                    fontWeight: 550,
+                    overflow: 'hidden',
+                    textOverflow: 'ellipsis',
+                    whiteSpace: 'nowrap',
+                  }}
                   title={it.title}
                 >
                   {it.title}
                 </div>
                 <div className="muted" style={{ fontSize: 12, marginTop: 2 }}>
-                  {it.recoverable ? `${it.author || '未知作者'} · 删除于 ${fmt(it.deletedAt)}` : '该条目的原数据库记录已丢失，无法恢复，只能彻底删除'}
+                  {it.recoverable
+                    ? `${it.author || '未知作者'} · 删除于 ${fmt(it.deletedAt)}`
+                    : '该条目的原数据库记录已丢失，无法恢复，只能彻底删除'}
                 </div>
               </div>
               <button
