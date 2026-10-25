@@ -98,8 +98,10 @@
 - **首选入口 `.\run.ps1`**（无参数打印帮助）：`dev` / `build` / `nsis` / `test` / `clean` / `web` / `install`。
   底层是 `wails dev`、`wails build`，`web` 模式**没有 Go 后端**（`window.go` 不存在），只能调样式。
 - 改后端必须过：`cd app && go build ./... && go vet ./... && go test ./...`；
-  改前端必须过 `cd web && npx tsc --noEmit`。改了前端还要 `npm run build` +
-  `node scripts/sync-frontend-dist.js` 才会进入二进制（`//go:embed all:frontend/dist`）。
+  改前端必须过 `cd web && npx tsc --noEmit`。改了前端还要 `cd web && npm run build &&
+  node ../scripts/sync-frontend-dist.js` 才会进入二进制（`//go:embed all:frontend/dist`）——
+  这个脚本按 `path.resolve('dist')` 找产物，**必须在 `web/` 下跑**，在仓库根直接跑会报
+  `frontend dist not found`。
 - **格式化前端只用 `npm run format`**（= `prettier --write web/src`，配置在仓库根的
   `.prettierrc.json`：单引号、`printWidth: 100`、LF）。它已经对齐过基线，是幂等的：
   跑完只会改动你手写的那几行，`npm run format:check` 永远应该全绿。
