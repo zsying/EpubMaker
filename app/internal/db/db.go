@@ -156,6 +156,19 @@ CREATE TABLE IF NOT EXISTS vocab_seen (
   first_at TEXT NOT NULL,
   last_at TEXT NOT NULL
 );
+
+-- Lookup history: the plain log of "what have I looked up". It is deliberately
+-- wider than vocab_seen — which throws a term away once it is promoted — and
+-- narrower than vocab: it records only a term, when it was first and last
+-- looked up, and how often. No gloss, no book, no status: those are the
+-- dictionary's and the notebook's business, joined in at read time.
+CREATE TABLE IF NOT EXISTS lookup_history (
+  term TEXT PRIMARY KEY,
+  lookups INTEGER NOT NULL DEFAULT 1,
+  first_at TEXT NOT NULL,
+  last_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_lookup_history_last ON lookup_history(last_at);
 `
 
 func migrate(d *sql.DB) error {
@@ -203,6 +216,15 @@ func migrate(d *sql.DB) error {
 	_, _ = d.Exec(`UPDATE vocab SET interval_days = 21, due_at = ?
 	                WHERE status = 'known' AND due_at = ''`,
 		time.Now().UTC().Add(21*24*time.Hour).Format("2006-01-02T15:04:05Z"))
+	// The lookup history arrived after both of those tables had been filling
+	// up, so seed it from what the older bookkeeping already knows: the
+	// pending-lookup counters and the notebook rows themselves. OR IGNORE makes
+	// this a no-op on every later start, and a promotion that consumed a
+	// vocab_seen row still leaves the term in the log where it belongs.
+	_, _ = d.Exec(`INSERT OR IGNORE INTO lookup_history (term, lookups, first_at, last_at)
+	                SELECT term, lookups, first_at, last_at FROM vocab_seen`)
+	_, _ = d.Exec(`INSERT OR IGNORE INTO lookup_history (term, lookups, first_at, last_at)
+	                SELECT term, lookups, created_at, updated_at FROM vocab`)
 	return nil
 }
 

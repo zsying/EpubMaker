@@ -92,8 +92,24 @@ export interface VocabItem extends VocabEntry {
   translation: string;
 }
 
-export interface VocabStats {
-  total: number;
+/**
+ * One row of the lookup history: a word the reader tapped, when that first and
+ * last happened, and the notebook's verdict on it. `inNotebook` false means the
+ * page should offer to add it.
+ */
+export interface LookupHit {
+  term: string;
+  lookups: number;
+  firstAt: string;
+  lastAt: string;
+  inNotebook: boolean;
+  /** Empty when the word is not in the notebook yet. */
+  status: '' | VocabEntry['status'];
+  phonetic: string;
+  translation: string;
+}
+
+export interface VocabStats {  total: number;
   new: number;
   learning: number;
   known: number;
@@ -623,5 +639,6 @@ export const api = {
   /** Record one review outcome and reschedule the word; returns the new state. */
   gradeVocab: (vid: string, known: boolean) => call<VocabEntry>('GradeVocab', vid, known),
 
-  deleteVocab: (vid: string) => call<boolean>('DeleteVocab', vid)
+  /** Every word ever looked up, newest first — the notebook's raw material. */
+  listLookupHistory: (keyword: string) => call<LookupHit[]>('ListLookupHistory', keyword)
 };

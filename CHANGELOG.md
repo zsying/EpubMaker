@@ -5,6 +5,26 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+- **Lookup history** — a new「查词历史」second-level page under 生词本 lists every
+  word ever looked up — including the ones the notebook's automatic rule
+  declined (basic vocabulary, one-off curiosities) — with its gloss, how many
+  times it was looked up and when it was last seen. Words outside the notebook
+  carry a「加入生词本」button; the ones already in it show their state instead.
+  Backed by a new `lookup_history` table (written on every successful lookup and
+  seeded from `vocab_seen`/`vocab` on first run) and a
+  `Backend.ListLookupHistory` binding.
+- **The notebook is read-only** — the per-row「已掌握」button and the batch
+  delete are gone. The button was the real bug behind "words I just added are
+  marked mastered": it was an action, but it read as a state and sat in a column
+  of its own, squeezing every row. Status is now a small label on the metadata
+  line, and only appears once a word has moved on (`待学` is the default and
+  says nothing). Deleting is gone too — from the UI, the `DeleteVocab` binding
+  and `vocab.Delete`: a word retires through the review schedule, not by
+  hand. `STATUS_LABEL`/`STATUS_HINT` moved to `web/src/vocabLabels.ts` so the
+  notebook and the history cannot name a state differently.
+- **No more sideways scroll on the notebook** — a long headword plus its
+  phonetic now wraps inside the card (`flex-wrap` + `overflow-wrap: anywhere`)
+  instead of widening the page.
 - **Wi-Fi 传书** — a new「我的」entry starts a tiny LAN upload server on the
   phone; a computer on the same Wi-Fi opens the shown URL (or scans the QR
   code) and drops EPUB files straight into the shelf, with per-file progress

@@ -32,6 +32,9 @@ func reset(t *testing.T) {
 	if _, err := d.Exec(`DELETE FROM vocab_seen`); err != nil {
 		t.Fatalf("reset vocab_seen: %v", err)
 	}
+	if _, err := d.Exec(`DELETE FROM lookup_history`); err != nil {
+		t.Fatalf("reset lookup_history: %v", err)
+	}
 }
 
 func TestRecordCreatesNewEntry(t *testing.T) {
@@ -184,21 +187,114 @@ func TestUpdateStatusValidates(t *testing.T) {
 	}
 }
 
-func TestDelete(t *testing.T) {
+/* ---------------------------- lookup history ----------------------------- */
+
+// The history is a log, not a set: the same word looked up three times is one
+// row whose counter says 3 and whose first_at never moves.
+func TestRecordLookupCountsAndKeepsTheFirstTime(t *testing.T) {
 	reset(t)
-	v, err := Record("climb", "", "", "", 0, "")
+	for i := 1; i <= 3; i++ {
+		if err := RecordLookup("  Blorp "); err != nil {
+			t.Fatalf("RecordLookup #%d: %v", i, err)
+		}
+	}
+	list, err := ListLookups("", 0)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := Delete(v.ID); err != nil {
+	if len(list) != 1 {
+		t.Fatalf("history = %+v", list)
+	}
+	if list[0].Term != "blorp" {
+		t.Errorf("term = %q, want the normalized form", list[0].Term)
+	}
+	if list[0].Lookups != 3 {
+		t.Errorf("lookups = %d, want 3", list[0].Lookups)
+	}
+	if list[0].FirstAt == "" || list[0].LastAt == "" {
+		t.Errorf("timestamps missing: %+v", list[0])
+	}
+	first, errFirst := time.Parse(time.RFC3339Nano, list[0].FirstAt)
+	last, errLast := time.Parse(time.RFC3339Nano, list[0].LastAt)
+	if errFirst != nil || errLast != nil {
+		t.Fatalf("timestamps are not RFC3339: %+v", list[0])
+	}
+	if last.Before(first) {
+		t.Errorf("last_at %v is before first_at %v", last, first)
+	}
+	// A logged lookup does not put the word in the notebook by itself.
+	if list[0].InNotebook || list[0].Status != "" {
+		t.Errorf("history promoted the word: %+v", list[0])
+	}
+}
+
+// The page needs to know, per row, whether the word still has a button to
+// press; that state lives in the notebook, not in the log.
+func TestListLookupsJoinsNotebookState(t *testing.T) {
+	reset(t)
+	if err := RecordLookup("blorp"); err != nil {
 		t.Fatal(err)
 	}
-	got, err := Get("climb")
+	if err := RecordLookup("climb"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Record("climb", "climbed", "b1", "c1", 3, "climbed the wall"); err != nil {
+		t.Fatal(err)
+	}
+	list, err := ListLookups("", 0)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got != nil {
-		t.Fatalf("entry survived delete: %+v", got)
+	byTerm := map[string]Lookup{}
+	for _, l := range list {
+		byTerm[l.Term] = l
+	}
+	if l := byTerm["climb"]; !l.InNotebook || l.Status != StatusNew {
+		t.Errorf("climb = %+v, want inNotebook/new", l)
+	}
+	if l := byTerm["blorp"]; l.InNotebook || l.Status != "" {
+		t.Errorf("blorp = %+v, want not in notebook", l)
+	}
+}
+
+func TestListLookupsFiltersAndOrdersByRecency(t *testing.T) {
+	reset(t)
+	for _, term := range []string{"climb", "clatter", "zephyr"} {
+		if err := RecordLookup(term); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// Bump one term so it sorts to the front regardless of insertion order.
+	if err := RecordLookup("zephyr"); err != nil {
+		t.Fatal(err)
+	}
+	all, err := ListLookups("", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(all) != 3 || all[0].Term != "zephyr" {
+		t.Fatalf("order = %+v, want zephyr first", all)
+	}
+	hit, err := ListLookups("cl", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(hit) != 2 {
+		t.Fatalf("keyword filter = %+v, want 2 rows (climb, clatter)", hit)
+	}
+	one, err := ListLookups("", 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(one) != 1 {
+		t.Fatalf("limit ignored: %+v", one)
+	}
+}
+
+func TestRecordLookupRejectsEmptyTerm(t *testing.T) {
+	reset(t)
+	if err := RecordLookup("   "); err == nil {
+		t.Fatal("expected an error for an empty term")
 	}
 }
 

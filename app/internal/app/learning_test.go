@@ -47,7 +47,7 @@ func resetPolicy(t *testing.T) {
 	if err != nil {
 		t.Fatalf("db.Open: %v", err)
 	}
-	for _, table := range []string{"vocab", "vocab_seen", "annotations", "bookmarks", "reading_progress", "chapters", "books"} {
+	for _, table := range []string{"lookup_history", "vocab", "vocab_seen", "annotations", "bookmarks", "reading_progress", "chapters", "books"} {
 		if _, err := d.Exec(`DELETE FROM ` + table); err != nil {
 			t.Fatalf("reset %s: %v", table, err)
 		}
@@ -222,12 +222,6 @@ func TestVocabAddOverridesPolicy(t *testing.T) {
 	if len(known) != 1 {
 		t.Fatalf("status filter failed: %+v", known)
 	}
-	if err := b.DeleteVocab(v.ID); err != nil {
-		t.Fatal(err)
-	}
-	if list, err := b.ListVocab("", ""); err != nil || len(list) != 0 {
-		t.Fatalf("delete failed: %v / %v", list, err)
-	}
 }
 
 // An inflected form must come back with its base form so the popover can show
@@ -351,11 +345,88 @@ func TestVocabStatsCountsByStatus(t *testing.T) {
 	}
 }
 
+// The history logs what the notebook refuses as well: basic vocabulary never
+// gets a row in the notebook, but the reader did look the word up and expects
+// to find it in the history — with its gloss, since that is what makes the list
+// readable.
+func TestLookupHistoryLogsBasicVocabulary(t *testing.T) {
+	resetPolicy(t)
+	b := &Backend{}
+	for i := 0; i < 2; i++ {
+		if _, err := b.LookupWord("b1", "c1", 0, "the", "the house"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	list, err := b.ListLookupHistory("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(list) != 1 {
+		t.Fatalf("history = %+v, want one row", list)
+	}
+	hit := list[0]
+	if hit.Term != "the" || hit.Lookups != 2 {
+		t.Errorf("row = %+v, want the ×2", hit)
+	}
+	if hit.InNotebook || hit.Status != "" {
+		t.Errorf("basic vocabulary entered the notebook: %+v", hit)
+	}
+	if hit.Translation != "art. 这" {
+		t.Errorf("translation = %q", hit.Translation)
+	}
+}
+
+// A word that is already in the notebook stays in the history, carrying the
+// notebook's state, so the page can say "已在生词本" instead of offering the
+// button again.
+func TestLookupHistoryMarksNotebookWords(t *testing.T) {
+	resetPolicy(t)
+	b := &Backend{}
+	if _, err := b.VocabAdd("blorp", "blorp", "", "", 0, ""); err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 2; i++ {
+		if _, err := b.LookupWord("b1", "c1", 0, "blorp", "a blorp appeared"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	list, err := b.ListLookupHistory("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(list) != 1 {
+		t.Fatalf("history = %+v", list)
+	}
+	if !list[0].InNotebook || list[0].Status != "new" {
+		t.Errorf("row = %+v, want inNotebook/new", list[0])
+	}
+	// The manual add itself is not a lookup: the two taps above are.
+	if list[0].Lookups != 2 {
+		t.Errorf("lookups = %d, want 2", list[0].Lookups)
+	}
+}
+
+// A word the dictionary does not know never reaches the history: a log entry
+// with no gloss is a dead end for the page.
+func TestLookupHistoryIgnoresUnknownWords(t *testing.T) {
+	resetPolicy(t)
+	b := &Backend{}
+	if _, err := b.LookupWord("b1", "c1", 0, "zzzznotaword", ""); err != nil {
+		t.Fatal(err)
+	}
+	list, err := b.ListLookupHistory("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(list) != 0 {
+		t.Fatalf("history = %+v, want empty", list)
+	}
+}
+
 // The review session is built from the schedule, not from whatever the notebook
 // page happened to have loaded: a word graded a moment ago is not due again yet,
 // and graded words keep their meaning attached when it does come back.
-func TestVocabQueueIsTheReviewSession(t *testing.T) {
-	resetPolicy(t)
+func TestVocabQueueIsTheReviewSession(t *testing.T) {	resetPolicy(t)
 	b := &Backend{}
 	missed, err := b.VocabAdd("blorp", "blorp", "", "", 0, "a blorp appeared")
 	if err != nil {

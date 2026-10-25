@@ -218,6 +218,14 @@ func (b *Backend) LookupWord(bookID, chapterID string, offset int, raw, context 
 	term := out.Entry.Word
 	surface := strings.TrimSpace(raw)
 
+	// The history records the lookup itself, before any policy runs: "what did
+	// I tap on" is a fact about the reader, not about the notebook. Recording
+	// it here is also what keeps basic vocabulary (never promoted) and words
+	// already in the notebook visible in the history page.
+	if err := vocab.RecordLookup(term); err != nil {
+		return nil, err
+	}
+
 	if existing, err := vocab.Get(term); err != nil {
 		return nil, err
 	} else if existing != nil {
@@ -321,6 +329,41 @@ func (b *Backend) VocabStats() (*vocab.Stats, error) {
 	return vocab.CountByStatus()
 }
 
+// LookupHit is one row of the lookup history as the page renders it: the log
+// row plus the dictionary gloss, so the list reads without opening a card per
+// word — the same shape ListVocab gives the notebook.
+type LookupHit struct {
+	vocab.Lookup
+	Phonetic    string `json:"phonetic"`
+	Translation string `json:"translation"`
+}
+
+// ListLookupHistory returns every word the reader has looked up, newest first.
+// `keyword` filters on the word itself; a missing dictionary only costs the
+// glosses.
+func (b *Backend) ListLookupHistory(keyword string) ([]LookupHit, error) {
+	rows, err := vocab.ListLookups(keyword, 0)
+	if err != nil {
+		return nil, err
+	}
+	d, dictErr := openDict()
+	out := make([]LookupHit, 0, len(rows))
+	for _, row := range rows {
+		hit := LookupHit{Lookup: row}
+		if dictErr == nil {
+			if res, err := d.Lookup(row.Term); err == nil && res.Found && res.Entry != nil {
+				hit.Phonetic = res.Entry.Phonetic
+				hit.Translation = res.Entry.Translation
+				if hit.Translation == "" {
+					hit.Translation = res.Entry.Definition
+				}
+			}
+		}
+		out = append(out, hit)
+	}
+	return out, nil
+}
+
 // SetVocabStatus moves a word between new / learning / known / ignored.
 func (b *Backend) SetVocabStatus(id, status string) error {
 	return vocab.UpdateStatus(id, status)
@@ -330,9 +373,4 @@ func (b *Backend) SetVocabStatus(id, status string) error {
 // review card can move on without refetching the whole notebook.
 func (b *Backend) GradeVocab(id string, known bool) (*vocab.Entry, error) {
 	return vocab.Grade(id, known)
-}
-
-// DeleteVocab removes a word from the notebook.
-func (b *Backend) DeleteVocab(id string) error {
-	return vocab.Delete(id)
 }

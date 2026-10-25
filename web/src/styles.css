@@ -2501,12 +2501,19 @@ a {
   align-items: baseline;
   gap: 8px;
   margin-bottom: 4px;
+  /* A long headword plus its phonetic must wrap inside the card; without this
+     the row outgrows the card and drags the whole page sideways on a phone. */
+  flex-wrap: wrap;
+  min-width: 0;
 }
 
 .vocab-word {
   font-size: 17px;
   font-weight: 650;
   letter-spacing: 0.2px;
+  /* No single word can widen the card, however long it is. */
+  overflow-wrap: anywhere;
+  min-width: 0;
 }
 
 /* Status is a quiet label, not a badge to collect: the list is read, not scored. */
@@ -2516,6 +2523,7 @@ a {
   border-radius: 20px;
   background: var(--fill);
   color: var(--text-3);
+  flex: none;
 }
 
 .vocab-status.s-learning {
@@ -2542,12 +2550,66 @@ a {
   padding: 0 1px;
 }
 
-.vocab-actions {
+/* Metadata line: the provenance text takes the room that is left, the status
+   label trails it and drops to a second line rather than squeezing the text. */
+.vocab-meta {
   display: flex;
-  flex-direction: column;
-  gap: 6px;
-  justify-content: center;
-  padding-right: 8px;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.vocab-meta-text {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+/* ------------------------------ lookup history ------------------------------ */
+
+.hist-toolbar {
+  margin-bottom: 14px;
+}
+
+.hist-search {
+  width: 100%;
+  max-width: 320px;
+  height: 34px;
+}
+
+/* The history row is not a link — there is nowhere to jump to — so it borrows
+   the notebook card's look without its button affordance. */
+.note-card-body {
+  flex: 1;
+  min-width: 0;
+  padding: 10px 12px;
+}
+
+.hist-meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-bottom: 0;
+}
+
+.hist-when {
+  color: var(--text-3);
+  font-size: 12px;
+  min-width: 0;
+}
+
+/* The add button belongs at the end of the line, but it is what pushes the row
+   wide, so it wraps instead of shrinking the word. */
+.hist-meta .btn {
+  margin-left: auto;
+  flex: none;
+}
+
+.hist-in {
+  margin-left: auto;
+  font-size: 12px;
+  color: var(--text-3);
+  white-space: nowrap;
 }
 
 /* Review pass */
@@ -2643,35 +2705,6 @@ a {
   100% {
     opacity: 0;
   }
-}
-
-/* Delete mode: the destructive action is behind a mode, so the row only gets a
-   checkbox once you have asked for one. */
-.note-card.picked {
-  border-color: var(--accent);
-  background: var(--accent-soft);
-}
-
-.vocab-check {
-  flex: none;
-  width: 16px;
-  height: 16px;
-  align-self: center;
-  margin: 0 2px 0 8px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  border-radius: 4px;
-  border: 1.5px solid var(--border-strong);
-  background: var(--panel);
-  color: #fff;
-  font-size: 11px;
-  line-height: 1;
-}
-
-.vocab-check.on {
-  border-color: var(--accent);
-  background: var(--accent);
 }
 
 .vocab-hint {
@@ -3394,6 +3427,14 @@ button.me-dict:disabled {
   .vocab-filters .btn {
     flex: 0 0 auto;
     white-space: nowrap;
+  }
+
+  /* A 220px search box plus its buttons cannot share a phone-width row: the
+     search takes a line of its own and the buttons sit under it, instead of
+     leaving one button stranded on a third row. */
+  .vocab-search {
+    flex: 1 1 100%;
+    width: 100%;
   }
 }
 

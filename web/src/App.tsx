@@ -9,6 +9,7 @@ import WebDav from './pages/WebDav';
 import Bookmarks from './pages/Bookmarks';
 import Annotations from './pages/Annotations';
 import Vocab from './pages/Vocab';
+import LookupHistory from './pages/LookupHistory';
 import Me from './pages/Me';
 import About from './pages/About';
 import WifiShare from './pages/WifiShare';
@@ -112,6 +113,7 @@ export default function App() {
             <Route path="/bookmarks" element={<Bookmarks />} />
             <Route path="/annotations" element={<Annotations />} />
             <Route path="/vocab" element={<Vocab />} />
+            <Route path="/vocab/history" element={<LookupHistory />} />
             <Route path="/trash" element={<Trash />} />
             <Route path="/webdav" element={<WebDav />} />
             <Route path="/me" element={<Me />} />
