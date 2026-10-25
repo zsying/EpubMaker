@@ -27,6 +27,11 @@
    （`../images/x.png`）因此永远有效。禁止扁平化命名。
 2. **没有 HTTP、没有端口**。前端只用 `window.go.app.Backend.*` 进程内绑定；二进制（封面/图片/渲染章节/导出）
    一律内联 base64。禁止引入 `/api` 路由、TCP 监听、multipart 上传。
+   **出站请求是另一回事**：`internal/webdav` 和 `internal/dict/online.go` 确实会主动 GET 外部服务。
+   新加出站请求必须同时满足三条——(a) 由用户的显式动作触发，不在打开页面时偷偷发；(b) 有超时，
+   且失败不阻塞 UI；(c) 结果落到本地（`dictcache` 那张表），同一个词不重复问。生词本的
+   「联网补全」是现成模板，`FillVocabGlosses` 的墓碑逻辑（查过了没有 → 记一笔空结果）也别漏掉，
+   否则按钮会永远提示还有 N 个词没解决。
 3. **SQLite 层只用位置参数 `?`**，事务手写 `BEGIN`/`COMMIT`，`SetMaxOpenConns(1)`。别用命名参数或驱动特有的封装。
 4. **正文渲染后必须 DOMPurify 净化**，且只经 `library.RenderChapter` 改写资源链接。
 5. **分页阅读器翻页不做动画**：章内翻页是一次 `setPageIndex` + `translate3d`，禁止 3D 翻页/卷曲/投影；
