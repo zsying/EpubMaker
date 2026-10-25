@@ -25,9 +25,11 @@ import { toast, toastError } from '../toast';
 import { Anchor, EDGE_GAP, placeOverlay } from '../overlay';
 import { wordAt, isCJK } from '../wordHit';
 import {
+  blockOf,
   charOffset,
   getSelectionOffsets,
   CHAPTER_PURIFY,
+  lineBreakBetween,
   sentenceAt,
   textNodeAt,
 } from '../sentence';
@@ -572,8 +574,10 @@ export default function Reader() {
   // touch-gesture boundaries; without this flag every such hiccup tore the
   // toolbar away mid-interaction, so a reshaped selection could never be used.
   const selLockRef = useRef(false);
-  // While a handle is being dragged the toolbar hides (it would chase the
-  // thumb) and the handles follow every frame instead.
+  // True while a drag handle is being moved. The menu stays on screen (hiding
+  // it mid-gesture read as "the menu is gone"), but it stops taking hits: the
+  // finger's target is the text above the handle, and a menu sitting over that
+  // line would swallow the caret lookup.
   const [selDragging, setSelDragging] = useState(false);
   const [popover, setPopover] = useState<PopoverState>(null);
   const [noteDraft, setNoteDraft] = useState('');
@@ -1370,6 +1374,27 @@ export default function Reader() {
     const ch = byHref.get(docKey(href));
     return ch?.id;
   };
+  // A converted EPUB often ships a nav with a single entry ("Start") while the
+  // spine holds the real chapters — 28 of them, as the header counts. Drawing
+  // that one node is worse than useless: the header promises 28 chapters and
+  // the list behind it offers one, with nothing to say where the rest went. The
+  // chapter list is complete by construction, so it takes over whenever the
+  // outline can reach at most one chapter of a multi-chapter book.
+  const tocChapterCount = useMemo(() => {
+    const ids = new Set<string>();
+    const walk = (es: TocEntry[]) => {
+      for (const e of es) {
+        if (e.href) {
+          const cid = byHref.get(docKey(e.href))?.id;
+          if (cid) ids.add(cid);
+        }
+        if (e.children?.length) walk(e.children);
+      }
+    };
+    walk(toc);
+    return ids.size;
+  }, [toc, byHref]);
+  const useTocTree = toc.length > 0 && (chapters.length <= 1 || tocChapterCount > 1);
   const currentChapter = current ? (chapters.find((c) => c.id === current) ?? null) : null;
   const activeDoc = currentChapter?.href ?? null;
   // Active highlight for the hierarchical TOC (no-op for flat-legacy books).
@@ -2441,6 +2466,12 @@ export default function Reader() {
     // Words split across inline boundaries (a mark, an <em>) expand only to
     // the edge of this text node. When the expansion touches that edge, redo
     // it on the chapter's full text stream, where the pieces join up.
+    //
+    // That stream is `textContent`, which has no block boundaries in it: a
+    // heading「Dedication」and the paragraph「This book is…」under it are
+    // adjacent characters there, so the retry would happily return
+    // "DedicationThis" for a tap on either. Only accept the wider span when
+    // both of its ends live in the block the finger is in.
     if (span.start === 0 || span.end >= text.length) {
       const nodeStart = charOffset(root, node, 0);
       const rootText = root.textContent || '';
@@ -2450,7 +2481,18 @@ export default function Reader() {
         if (rspan && rspan.end - rspan.start > span.end - span.start) {
           const s = textNodeAt(root, rspan.start);
           const e = textNodeAt(root, Math.max(rspan.start, rspan.end - 1));
-          if (s && e) {
+          const block = blockOf(root, node);
+          // Both ends inside the block the finger is in, and no forced line
+          // break between them: those are exactly the places where the flat
+          // text stream claims a word that the page does not show.
+          if (
+            s &&
+            e &&
+            block &&
+            blockOf(root, s.node) === block &&
+            blockOf(root, e.node) === block &&
+            !lineBreakBetween(block, s.node, e.node)
+          ) {
             const r2 = document.createRange();
             r2.setStart(s.node, Math.min(s.offset, (s.node.textContent || '').length));
             r2.setEnd(e.node, Math.min(e.offset + 1, (e.node.textContent || '').length));
@@ -2857,10 +2899,16 @@ export default function Reader() {
   // scrolling as well as while paging.
   const overlayLayer = (
     <>
-      {/* selection toolbar — hidden while a handle is being dragged, it would
-          only chase the thumb */}
-      {sel && !selDragging && (
-        <div className="sel-toolbar" ref={selPos.ref} style={overlayStyle(selPos.pos)}>
+      {/* selection toolbar — stays up while a handle is dragged: the drag is
+          how you make the selection you are about to look up, and hiding the
+          menu mid-gesture read as "the menu is gone" (it only came back once
+          the finger was lifted). */}
+      {sel && (
+        <div
+          className={`sel-toolbar${selDragging ? ' dragging' : ''}`}
+          ref={selPos.ref}
+          style={overlayStyle(selPos.pos)}
+        >
           <button
             className="sel-lookup"
             title="查词"
@@ -3142,7 +3190,7 @@ export default function Reader() {
               </svg>
             </button>
           </div>
-          {toc.length > 0 ? (
+          {useTocTree ? (
             <TocTree
               entries={toc}
               itemClass="toc-item"
@@ -3295,7 +3343,7 @@ export default function Reader() {
             </button>
           </div>
           <div className="toc-dock-body">
-            {toc.length > 0 ? (
+            {useTocTree ? (
               <TocTree
                 entries={toc}
                 itemClass="toc-item"
@@ -3535,7 +3583,7 @@ export default function Reader() {
               </button>
             </div>
             <div className="drawer-body">
-              {toc.length > 0 ? (
+              {useTocTree ? (
                 <TocTree
                   entries={toc}
                   itemClass="drawer-item"

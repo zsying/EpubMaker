@@ -100,9 +100,7 @@ export default function App() {
       {/* The phone navigates from the bottom (tabbar); the desktop keeps the
           top bar. CSS picks which one is visible per breakpoint. The reader is
           its own fullscreen surface and never shows tabs. */}
-      {!isReader && showTabs && <MobileTabs />}
-
-      <main className={isReader ? 'main' : showTabs ? 'main with-tabs' : 'main'}>
+      <main className="main">
         {isReader ? (
           <Routes>
             <Route path="/books/:id/read" element={<Reader />} />
@@ -128,6 +126,8 @@ export default function App() {
           </Routes>
         )}
       </main>
+
+      {!isReader && showTabs && <MobileTabs />}
 
       <Toaster />
     </div>

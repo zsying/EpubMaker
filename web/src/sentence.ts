@@ -108,6 +108,46 @@ const BLOCK_TAGS = new Set([
   'BODY',
 ]);
 
+/**
+ * The innermost block element holding `node` — the box that breaks the text
+ * flow. `textContent` has no notion of it: a heading and the paragraph under it
+ * are adjacent characters in the flat stream, so anything that expands a range
+ * of characters ("the word at this caret") has to ask which block it may not
+ * leave.
+ */
+export function blockOf(root: HTMLElement, node: Node): Element | null {
+  let el: Element | null = node.parentElement;
+  while (el && el !== root) {
+    if (BLOCK_TAGS.has(el.tagName)) return el;
+    el = el.parentElement;
+  }
+  return null;
+}
+
+/**
+ * True when a `<br/>` sits between the two text nodes inside `block`. A forced
+ * line break is a break in the text the reader sees but not in `textContent`,
+ * so "the word at this caret" would otherwise run from the end of one line into
+ * the start of the next. A word cannot be spelled across a line like that.
+ */
+export function lineBreakBetween(block: Element, a: Node, b: Node): boolean {
+  const walker = document.createTreeWalker(block, NodeFilter.SHOW_ELEMENT | NodeFilter.SHOW_TEXT);
+  const order: Node[] = [];
+  let n: Node | null;
+  while ((n = walker.nextNode())) order.push(n);
+  const ia = order.indexOf(a);
+  const ib = order.indexOf(b);
+  // Not both inside this block: refuse to join rather than guess.
+  if (ia < 0 || ib < 0) return true;
+  const lo = Math.min(ia, ib);
+  const hi = Math.max(ia, ib);
+  for (let i = lo + 1; i < hi; i++) {
+    const el = order[i];
+    if (el.nodeType === Node.ELEMENT_NODE && (el as Element).tagName === 'BR') return true;
+  }
+  return false;
+}
+
 /** The text range of the innermost block element holding `offset`. */
 function blockBounds(root: HTMLElement, offset: number): { from: number; to: number } {
   const total = (root.textContent || '').length;

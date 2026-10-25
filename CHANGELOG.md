@@ -5,6 +5,30 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+- **A word never reaches into the block below it** — tapping the heading
+  「Dedication」 looked up `dedicationthis`. Word expansion falls back to the
+  chapter's flat text when a word touches the edge of its text node, and that
+  stream has no block boundaries in it: the heading and the paragraph under it
+  are adjacent characters, so a heading at the end of its own block swallowed
+  the first word of the next one. The wider span is now only accepted when both
+  of its ends sit in the same block, and a `<br/>` between them counts as a
+  boundary too. Long-press selection had the same defect (it selected
+  "Dedication…This") and is fixed with it.
+- **The selection menu stays up while a drag handle is moved** — it used to be
+  hidden for the whole gesture, which read as "the menu is gone"; it only came
+  back after the finger was lifted. It now stays on screen and stops taking
+  hits while dragging, so the caret under the thumb still resolves to the text
+  instead of to the menu's own label.
+- **No more bare strip above the tab bar on the shelf** — the bar was a fixed
+  overlay reserving a hand-tuned 76px of padding, while the bar itself is 53px
+  tall; the 23px in between showed the page background, which looked like a
+  band laid over the last row of covers. The bar is now a row of the app's
+  column, so the scroll pane always ends exactly where the bar begins.
+- **A one-entry table of contents no longer hides the chapters** — converted
+  EPUBs often ship a nav with a single「Start」entry while the spine holds the
+  real chapters. The drawer said「目录 · 28 章」and listed one row. When the
+  outline can reach at most one chapter of a multi-chapter book, the complete
+  chapter list is shown instead.
 - **A notebook word now shows its base form's meaning** — `disrupts`,
   `primitives`, `violates` used to sit in 生词本 as「（词库无释义）」while the
   whole answer was one row away: ECDICT ships inflected forms as their own

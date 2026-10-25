@@ -1579,6 +1579,15 @@ a {
   box-shadow: 0 6px 18px rgba(0, 0, 0, 0.3);
 }
 
+/* While a handle is dragged the menu is still shown — it just must not be in
+   the way of the finger's target (the text line the handle points at). Without
+   this, the caret lookup under the finger resolved to the menu's own label and
+   the drag did nothing. */
+.sel-toolbar.dragging {
+  pointer-events: none;
+  opacity: 0.85;
+}
+
 /* Selection drag handles (touch + paged): a grip circle hanging under the
    line with a stem pointing up at the text. Purely touch-driven, so they get
    touch-action:none and the reader's page-turn gestures ignore them. */
@@ -3598,18 +3607,14 @@ button.me-dict:disabled {
     display: none;
   }
 
-  /* Reserve room for the tab bar; the reader route (no tabs) keeps its
-     full-height layout untouched. */
-  .main.with-tabs {
-    padding-bottom: 76px;
-  }
-
+  /* The tab bar is a row of .app's column, not a fixed overlay. A fixed bar
+     has to be reserved for with a hand-tuned `padding-bottom`, and when the two
+     numbers disagree the leftover strip shows the page background above the
+     bar — a band that looked like it was covering the last row of books. In
+     flow its height is whatever it is, and the scroll pane always ends exactly
+     where it starts. */
   .tabbar {
-    position: fixed;
-    left: 0;
-    right: 0;
-    bottom: 0;
-    z-index: 50;
+    flex: none;
     display: flex;
     background: var(--panel);
     border-top: 1px solid var(--border);
