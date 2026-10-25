@@ -5,6 +5,14 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+- **Example sentences are cut at paragraphs, not line breaks** — a word that
+  happened to begin a line in the source file was saved with nothing but itself
+  as its example: EPUB text is hard-wrapped, and the extraction counted that
+  wrap as the end of a sentence, so a card read `compensation.` instead of the
+  sentence it sits in. The sentence is now bounded by the paragraph the word is
+  in, and the notebook re-cuts entries written before this — from the chapter
+  itself, only the ones that need it, and only where the stored position still
+  lands on the word.
 - **The headword is underlined, not highlighted** — inside an example sentence
   the word was marked with a yellow block, which turned every card into stripes
   and pulled the eye to the colour instead of the word. It is a dotted rule

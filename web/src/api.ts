@@ -637,6 +637,9 @@ export const api = {
 
   setVocabStatus: (vid: string, status: string) => call<boolean>('SetVocabStatus', vid, status),
 
+  /** Replace the example sentence kept with a word (the context is derived). */
+  setVocabContext: (vid: string, context: string) => call<boolean>('SetVocabContext', vid, context),
+
   /** Record one review outcome and reschedule the word; returns the new state. */
   gradeVocab: (vid: string, known: boolean) => call<VocabEntry>('GradeVocab', vid, known),
 

@@ -369,6 +369,13 @@ func (b *Backend) SetVocabStatus(id, status string) error {
 	return vocab.UpdateStatus(id, status)
 }
 
+// SetVocabContext rewrites the example sentence kept with a word. The notebook
+// page calls it when a stored context turns out to be a fragment — a word that
+// sat at a source line wrap used to be cut out of its own sentence.
+func (b *Backend) SetVocabContext(id, context string) error {
+	return vocab.SetContext(id, context)
+}
+
 // GradeVocab records one review outcome and returns the updated row, so the
 // review card can move on without refetching the whole notebook.
 func (b *Backend) GradeVocab(id string, known bool) (*vocab.Entry, error) {

@@ -6,6 +6,7 @@ import { Caret } from '../Caret';
 import { toast, toastError } from '../toast';
 import { Anchor, EDGE_GAP, placeOverlay } from '../overlay';
 import { wordAt, isCJK } from '../wordHit';
+import { charOffset, getSelectionOffsets, CHAPTER_PURIFY, sentenceAt, textNodeAt } from '../sentence';
 import { speakWord } from '../speech';
 import {
   MODE_KEY,
@@ -355,23 +356,6 @@ const COLORS = ['yellow', 'green', 'red'] as const;
 
 /* ----------------------------- text-offset helpers ----------------------------- */
 
-function charOffset(root: Node, node: Node, offset: number): number {
-  const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
-  let count = 0;
-  let n: Node | null;
-  while ((n = walker.nextNode())) {
-    if (n === node) return count + offset;
-    count += (n.textContent || '').length;
-  }
-  return count;
-}
-
-function getSelectionOffsets(root: HTMLElement, range: Range): { start: number; end: number } | null {
-  const a = charOffset(root, range.startContainer, range.startOffset);
-  const b = charOffset(root, range.endContainer, range.endOffset);
-  return b < a ? { start: b, end: a } : { start: a, end: b };
-}
-
 // Snapshot of a client rect for React state.
 function snapRect(r: DOMRect): { left: number; top: number; right: number; bottom: number } {
   return { left: r.left, top: r.top, right: r.right, bottom: r.bottom };
@@ -382,38 +366,6 @@ function selectionEndRects(range: Range): { first: DOMRect; last: DOMRect } | nu
   const list = range.getClientRects();
   if (list.length === 0) return null;
   return { first: list[0], last: list[list.length - 1] };
-}
-
-// The text node holding a character offset, with the offset inside it. Paged
-// mode never needs this — it maps offsets to pages during measurement — but
-// scrolling mode has no page map, so "jump back to the sentence" has to walk
-// the rendered text directly.
-function textNodeAt(root: HTMLElement, offset: number): { node: Text; offset: number } | null {
-  const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
-  let seen = 0;
-  let n: Node | null;
-  while ((n = walker.nextNode())) {
-    const len = (n.textContent || '').length;
-    if (seen + len > offset) return { node: n as Text, offset: offset - seen };
-    seen += len;
-  }
-  return null;
-}
-
-// The sentence surrounding [start,end) in the rendered chapter text, capped so
-// a paragraph-long sentence cannot bloat a notebook entry. Used as the example
-// context saved alongside a looked-up word.
-function sentenceAt(root: HTMLElement, start: number, end: number): string {
-  const text = root.textContent || '';
-  const isBreak = (c: string) => c === '.' || c === '!' || c === '?' || c === '\n';
-  let s = start;
-  while (s > 0 && start - s < 220 && !isBreak(text[s - 1])) s--;
-  let e = end;
-  while (e < text.length && e - end < 220 && !isBreak(text[e])) e++;
-  return text
-    .slice(s, e + 1)
-    .replace(/\s+/g, ' ')
-    .trim();
 }
 
 // The word a notebook jump points at. Offsets are stored as "where the
@@ -825,10 +777,7 @@ export default function Reader() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tocDocked, mode]);
 
-  const safeHtml = useMemo(
-    () => DOMPurify.sanitize(html, { ADD_ATTR: ['target'], FORBID_TAGS: ['script', 'style', 'link'] }),
-    [html]
-  );
+  const safeHtml = useMemo(() => DOMPurify.sanitize(html, CHAPTER_PURIFY), [html]);
 
   const annotationsForChapter = useMemo(
     () => annotations.filter((a) => a.chapterId === current),

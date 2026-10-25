@@ -461,6 +461,25 @@ func GetByID(id string) (*Entry, error) {
 // in it is a word that was met in a book. Removing one is not an action the
 // reader needs; what retires a word is the review schedule.
 
+// SetContext replaces the example sentence kept with an entry. The context is
+// derived — a slice of the chapter around the word — so re-cutting it is always
+// safe, and it is how entries captured by an older extraction get repaired.
+//
+// `updated_at` is left alone on purpose: the notebook is ordered by it, and
+// repairing a sentence is not the reader touching the word.
+func SetContext(id, context string) error {
+	context = strings.TrimSpace(context)
+	if context == "" {
+		return errors.New("vocab: empty context")
+	}
+	d, err := db.Open()
+	if err != nil {
+		return err
+	}
+	_, err = d.Exec(`UPDATE vocab SET context = ? WHERE id = ?`, context, id)
+	return err
+}
+
 /* ----------------------------- lookup signals ----------------------------- */
 
 // NoteSeen counts one lookup of a term and returns the running total. This is

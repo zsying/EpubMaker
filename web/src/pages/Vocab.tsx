@@ -4,6 +4,7 @@ import { api, VocabItem, VocabStats } from '../api';
 import { toastError } from '../toast';
 import { STATUS_HINT, STATUS_LABEL } from '../vocabLabels';
 import { emphasise } from '../highlight';
+import { repairContexts } from '../vocabRepair';
 
 type Filter = '' | 'new' | 'learning' | 'known';
 
@@ -54,6 +55,15 @@ export default function Vocab() {
         if (!alive) return;
         setItems(list ?? []);
         setStats(st);
+        // Entries captured by an older sentence extraction can hold a fragment
+        // instead of the sentence; the chapter is still there to re-cut it from.
+        // Draw the list first, then let the repaired rows arrive in place.
+        void repairContexts(list ?? []).then((fixed) => {
+          if (!alive || fixed.size === 0) return;
+          setItems((prev) =>
+            prev.map((it) => (fixed.has(it.id) ? { ...it, context: fixed.get(it.id) as string } : it)),
+          );
+        });
       } catch (e) {
         if (alive) toastError(e);
       } finally {

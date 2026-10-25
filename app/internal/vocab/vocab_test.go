@@ -601,3 +601,37 @@ func TestUpdateStatusKnownSchedulesACheck(t *testing.T) {
 		t.Errorf("due = %d, want 0 for a word scheduled three weeks out", st.Due)
 	}
 }
+
+// The example sentence is derived data: re-cutting it from the chapter must
+// stick, and must not look like the reader touched the word (the notebook is
+// ordered by updated_at, so a repair would otherwise jump the row to the top).
+func TestSetContextRewritesTheSentenceOnly(t *testing.T) {
+	reset(t)
+	v, err := Record("compensation", "compensation", "b1", "c1", 479, "compensation.")
+	if err != nil {
+		t.Fatal(err)
+	}
+	before := v.UpdatedAt
+
+	want := "JJ Argus started writing for Star Books more than two decades ago, " +
+		"spinning out 3 novelettes a month for minimal compensation."
+	if err := SetContext(v.ID, "  "+want+"  "); err != nil {
+		t.Fatal(err)
+	}
+	got, err := Get("compensation")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Context != want {
+		t.Errorf("context = %q, want %q", got.Context, want)
+	}
+	if got.UpdatedAt != before {
+		t.Errorf("updated_at moved: %q -> %q", before, got.UpdatedAt)
+	}
+	if got.Offset != 479 {
+		t.Errorf("offset = %d, want 479", got.Offset)
+	}
+	if err := SetContext(v.ID, "   "); err == nil {
+		t.Error("an empty context must be refused")
+	}
+}
