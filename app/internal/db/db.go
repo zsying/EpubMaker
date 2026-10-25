@@ -185,6 +185,19 @@ CREATE TABLE IF NOT EXISTS dict_online (
   source      TEXT NOT NULL DEFAULT '',
   fetched_at  TEXT NOT NULL DEFAULT ''
 );
+
+-- AI answers, cached per capability + input hash. The key is composed by the
+-- aicache package (kind + sha256 of the exact prompt input); response is the
+-- capability's own JSON result. An empty response is a tombstone: the
+-- provider answered "nothing to say", and the question is not asked again.
+-- Network and HTTP failures never reach this table — only valid answers do,
+-- so a flaky provider stays retryable and a changed key stays re-askable.
+CREATE TABLE IF NOT EXISTS ai_cache (
+  key        TEXT PRIMARY KEY,
+  kind       TEXT NOT NULL DEFAULT '',
+  response   TEXT NOT NULL DEFAULT '',
+  created_at TEXT NOT NULL DEFAULT ''
+);
 `
 
 func migrate(d *sql.DB) error {
