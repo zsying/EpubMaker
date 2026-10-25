@@ -5,6 +5,58 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+AI comes to the phone — three capabilities, each hanging off data the app
+already has. A word is explained against the dictionary senses it actually
+has, a sentence is broken down where it was selected, and a chapter gets a
+guide before you commit to reading it. Keys are yours (BYOK): nothing is
+proxied, nothing is phoned home, and without a key every existing feature
+works exactly as before.
+
+### Added
+
+- **Contextual gloss「✦ AI 释义」** — a new button on the word card asks the
+  model which of the word's *own* dictionary senses the sentence uses, plus a
+  one-line Chinese note. The model only ever picks from the numbered senses
+  ECDICT already returned for that word: no invented definitions, no second
+  source of truth. Hidden when the word has no senses to choose from.
+- **Sentence parse「✦ AI 拆句」** — the selection toolbar's ✦ AI opens one
+  merged view: the translation on top, then the sentence sliced into segments
+  with their roles and glosses, then grammar notes. The original sentence is
+  echoed above it, so the answer reads against the text it came from.
+- **Chapter guide「✦ AI 导读」** — a chip at the head of every chapter (paged:
+  the first page; scroll: the top of the pane) offers a summary, the key
+  points and a few words worth remembering. Because the chapter text is about
+  to leave the device, every send asks first: the dialog names the model and
+  the size, and 取消 sends nothing. Long chapters are cut to the prompt
+  budget and the panel says so.
+- **BYOK AI settings** —「我的 → 设置」gains an AI section: endpoint, model and
+  key, with six presets (OpenAI / DeepSeek / Moonshot / 智谱 / 通义 / Ollama
+  本地) and a 测试连接 button. The key lives in `<AppHome>/ai.json` at 0600 —
+  never in `config.json`, never in the frontend, which only ever sees whether
+  one is stored and its last four characters. A local provider (Ollama) needs
+  no key at all.
+- **One bottom panel for every answer** — the three capabilities share a
+  single sheet (asking / failed / answered / cached), because splitting them
+  would triplicate the state machine for no gain. Failure is a soft state
+  with 重试 and 去设置; the answer lands above the word card and the selection
+  toolbar, and a drag inside the panel scrolls the panel — never the page
+  behind it (the swipe exemption list learned two new surfaces).
+- **An answer cache that cannot lie** — completed answers are cached in
+  SQLite (`ai_cache`), keyed by the hash of the *exact prompt*, so improving a
+  prompt retires its old answers instead of serving stale ones. Empty
+  answers, network failures and HTTP errors are never cached, which is what
+  keeps 重试 honest. Calls are serialised, so a double tap cannot double-bill.
+
+### Changed
+
+- The reader's gesture exemption list covers the AI panel and the privacy
+  dialog: a touch that starts inside either scrolls it, and a horizontal drag
+  there can no longer turn the page behind the answer.
+- The chapter-head guide chip is a fixed chip, not an injection into the
+  text: this reader paginates by measuring the content, and anything joining
+  the flow would shift every character offset after it — progress,
+  highlights and lookups all count text nodes.
+
 ## [0.3.0] — 2026-10-25
 
 EpubMaker runs on a phone. A second entry point (Wails v3) binds the same

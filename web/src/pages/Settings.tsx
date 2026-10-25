@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import AISettings from '../components/AISettings';
 import FontPicker from '../components/FontPicker';
 import SubHeader from '../components/SubHeader';
 import {
@@ -99,6 +100,10 @@ export default function Settings() {
             <span className="rd-switch-knob" />
           </button>
         </div>
+      </div>
+
+      <div style={{ marginTop: 16 }}>
+        <AISettings />
       </div>
 
       <p className="settings-hint">

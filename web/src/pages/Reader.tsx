@@ -16,8 +16,11 @@ import {
   Book,
   Bookmark,
   Chapter,
+  ExplainResult,
   LookupResult,
+  ParseResult,
   ReadingProgress,
+  SummaryResult,
   TocEntry,
 } from '../api';
 import { Caret } from '../Caret';
@@ -48,6 +51,7 @@ import {
 import { isTouchPrimary } from '../device';
 import { useBackClose } from '../backNav';
 import FontPicker, { CUSTOM_FONT_FAMILY } from '../components/FontPicker';
+import AIPanel from '../components/AIPanel';
 
 const FONT_KEY = 'epubmaker.fontSize';
 const TOC_DOCK_KEY = 'epubmaker.tocDocked';
@@ -289,6 +293,47 @@ type LookupCardState = {
   offset: number;
   context: string;
 } | null;
+
+// The AI panel is one surface with three callers (0.4, C 方案): the word card's
+// contextual gloss, the selection's sentence parse, the chapter guide. Each
+// carries exactly the grounded inputs its Backend call needs — the model never
+// invents a word, a sentence or a chapter, it only re-reads what is on screen.
+type AIPanelState =
+  | { kind: 'explain'; word: string; sentence: string; senses: string[] }
+  | { kind: 'parse'; sentence: string }
+  | { kind: 'summary' }
+  | null;
+
+// The dictionary's own translation lines, numbered — the only senses the model
+// is allowed to choose from. Entry first, then the base form, capped so a word
+// with forty senses cannot blow up the prompt budget.
+function sensesOf(res: LookupResult): string[] {
+  const out: string[] = [];
+  for (const d of [res.entry, res.base]) {
+    if (!d) continue;
+    for (const line of (d.translation || '').split('\n')) {
+      const t = line.trim();
+      if (t) out.push(t);
+    }
+  }
+  return out.slice(0, 12);
+}
+
+// Echoes the sentence the word came from with the word itself marked. The
+// sentence is plain text lifted off the page, so the only markup in it is the
+// one this function adds.
+function highlightWord(sentence: string, word: string) {
+  if (!word) return sentence;
+  const i = sentence.toLowerCase().indexOf(word.toLowerCase());
+  if (i < 0) return sentence;
+  return (
+    <>
+      {sentence.slice(0, i)}
+      <b className="ai-hl">{sentence.slice(i, i + word.length)}</b>
+      {sentence.slice(i + word.length)}
+    </>
+  );
+}
 
 // A visit opened from one of the notebook pages (生词本 / 划线 / 书签): "show me
 // this entry in the book". It is a detour, not reading — the position it opens
@@ -593,6 +638,14 @@ export default function Reader() {
   // download in 我的 → 查词词库, which is far better than a dead tap.
   const [dictReady, setDictReady] = useState(false);
 
+  // The AI panel (0.4). Null means no ask is in flight or on screen; every
+  // entry point sets a payload and lets <AIPanel> own the rest.
+  const [aiPanel, setAIPanel] = useState<AIPanelState>(null);
+  // The chapter-guide privacy confirmation, asked on every send (the chapter
+  // text leaves the device). Kept apart from the panel so a cancel leaves no
+  // trace of the ask at all.
+  const [guideAsk, setGuideAsk] = useState<{ model: string; chars: number } | null>(null);
+
   // Hardware back closes one overlay per press (newest first), never the page
   // underneath. The keyboard Escape path below peels the same layers on
   // desktop; this is the phone counterpart.
@@ -603,6 +656,8 @@ export default function Reader() {
   useBackClose(tocOpen, () => setTocOpen(false));
   useBackClose(bmOpen, () => setBmOpen(false));
   useBackClose(annOpen, () => setAnnOpen(false));
+  useBackClose(!!aiPanel, () => setAIPanel(null));
+  useBackClose(!!guideAsk, () => setGuideAsk(null));
   // A jump from the notebook or an annotation list has to be visible, not just
   // correct: this is a transient highlight over the landed-on text.
   const [flash, setFlash] = useState<{
@@ -1356,6 +1411,22 @@ export default function Reader() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [mode, current, id, preview, safeHtml]);
 
+  /* ---- chapter-head tracking (where the AI guide chip lives) ---- */
+  // paged mode puts the chip on the chapter's first page; scroll mode keeps it
+  // while the pane is still at the top. Derived from where the reader actually
+  // is, so the chip can never disagree with the page on screen. A chapter jump
+  // resets the pane (openChapter scrolls to top), which fires the event.
+  const [scrollHead, setScrollHead] = useState(true);
+  useEffect(() => {
+    if (mode !== 'scroll') return;
+    const scroller = mainRef.current;
+    if (!scroller) return;
+    const onScroll = () => setScrollHead(scroller.scrollTop < 72);
+    onScroll();
+    scroller.addEventListener('scroll', onScroll, { passive: true });
+    return () => scroller.removeEventListener('scroll', onScroll);
+  }, [mode, safeHtml]);
+
   const idx = chapters.findIndex((c) => c.id === current);
   const prev = idx > 0 ? chapters[idx - 1] : null;
   const next = idx >= 0 && idx < chapters.length - 1 ? chapters[idx + 1] : null;
@@ -1723,12 +1794,16 @@ export default function Reader() {
     // need real click events, and a drag inside them must never turn pages.
     // The floating cards are deliberately NOT listed: everything interactive
     // inside them is a button/input (matched below), and a swipe that starts
-    // on the word card must still turn the page.
+    // on the word card must still turn the page. The AI surfaces ARE listed:
+    // a bottom panel scrolled with a thumb, or a privacy dialog being read,
+    // has nothing to do with page turning.
     const isNativeTarget = (t: EventTarget | null): boolean =>
       !!(
         t instanceof Element &&
         (t.closest('.drawer-mask') ||
           t.closest('.sheet-mask') ||
+          t.closest('.ai-sheet') ||
+          t.closest('.modal-backdrop') ||
           t.closest('.reader-chrome') ||
           t.closest('.sel-handle') ||
           t.closest('button') ||
@@ -2908,6 +2983,34 @@ export default function Reader() {
   // Overlays live outside both reading layouts: they are viewport-anchored, and
   // keeping one copy is what makes "select a word, look it up" work while
   // scrolling as well as while paging.
+  // The dictionary senses the word card can offer AI: computed once here so the
+  // button's visibility and its payload can never disagree.
+  const dictSenses = lookupCard ? sensesOf(lookupCard.res) : [];
+  // The chapter-head guide chip: paged mode shows it on the chapter's first
+  // page, scroll mode while the pane is still at the top. It hides behind the
+  // chrome, the drawers and the docked TOC so it never floats over another
+  // surface — and it is a fixed chip rather than an injection into the text
+  // flow because this reader paginates by measuring the content (see below).
+  const guideVisible =
+    (mode === 'paged' ? pageIndex === 0 : scrollHead) &&
+    !chromeOpen &&
+    !tocOpen &&
+    !bmOpen &&
+    !annOpen &&
+    !tocDocked;
+  const guideChipPos: CSSProperties = touchPrimary
+    ? { top: 62, left: 12 }
+    : mode === 'paged'
+      ? { top: 18, left: 12 }
+      : // scroll: below the sticky head, centred between its two button groups
+        { top: 64, left: '50%', transform: 'translateX(-50%)' };
+  // A failed AI ask is very often a settings problem, so the error state offers
+  // a way there — which first has to close the panel, or it would cover the
+  // settings page it just navigated to.
+  const goAISettings = () => {
+    setAIPanel(null);
+    nav('/settings');
+  };
   const overlayLayer = (
     <>
       {/* selection toolbar — stays up while a handle is dragged: the drag is
@@ -2927,6 +3030,16 @@ export default function Reader() {
             disabled={lookupBusy}
           >
             {lookupBusy ? '查询中' : '查词'}
+          </button>
+          {/* Translation and breakdown share one view (0.4 裁决): the sentence
+              is already on screen, so the panel echoes it and adds meaning
+              around it rather than opening a second page. */}
+          <button
+            className="ai-chip"
+            title="AI 翻译并拆解这个句子"
+            onClick={() => setAIPanel({ kind: 'parse', sentence: sel.text })}
+          >
+            ✦ AI
           </button>
           {/* Highlights are painted by the paginated view only, so offering
               colours while scrolling would promise something invisible. */}
@@ -3028,6 +3141,25 @@ export default function Reader() {
                       加入生词本
                     </button>
                   </>
+                )}
+                {/* Hidden without senses: with nothing to choose from the model
+                    would only be guessing, which is exactly what the grounding
+                    rule forbids. */}
+                {dictSenses.length > 0 && (
+                  <button
+                    className="ai-chip"
+                    title="结合当前句子，让 AI 挑出贴合语境的释义"
+                    onClick={() =>
+                      setAIPanel({
+                        kind: 'explain',
+                        word: lookupCard.res.entry?.word || lookupCard.res.query,
+                        sentence: lookupCard.context,
+                        senses: dictSenses,
+                      })
+                    }
+                  >
+                    ✦ AI
+                  </button>
                 )}
               </div>
             </>
@@ -3136,6 +3268,177 @@ export default function Reader() {
             </div>
           </div>
         </div>
+      )}
+
+      {/* Chapter-head guide chip. Fixed to the viewport and NOT injected into
+          the text flow: this reader paginates by measuring the content, so
+          anything that joined the flow would change the page count and shift
+          every character offset after it — progress, highlights and lookups
+          all count text nodes. */}
+      {guideVisible && (
+        <button
+          className="ai-guide-chip"
+          style={guideChipPos}
+          title="让 AI 读一遍本章，生成导读"
+          onClick={() => {
+            api
+              .aiConfig()
+              .then((cfg) =>
+                setGuideAsk({
+                  model: cfg.model,
+                  chars: contentRef.current?.textContent?.length ?? 0,
+                }),
+              )
+              .catch(() => toastError('读取 AI 设置失败'));
+          }}
+        >
+          ✦ AI 导读
+        </button>
+      )}
+
+      {/* Per-send privacy confirmation (0.4 裁决：每次问). The chapter text is
+          about to leave the device, so this says exactly what goes where before
+          anything is sent — and 6000 mirrors the backend's prompt budget. */}
+      {guideAsk && (
+        <div className="modal-backdrop" onClick={() => setGuideAsk(null)}>
+          <div className="modal ai-confirm" onClick={(e) => e.stopPropagation()}>
+            <div className="modal-body">
+              <p>
+                本章导读由 AI 生成：需要把本章正文（约 <b>{guideAsk.chars.toLocaleString()}</b> 字
+                {guideAsk.chars > 6000 ? '，较长章节仅发送开头部分' : ''}）发送到「
+                {guideAsk.model || 'AI 服务'}」。
+              </p>
+              <p>回答由模型生成，可能不准确，请以原文为准。</p>
+            </div>
+            <div className="ai-confirm-actions">
+              <button className="btn sm" onClick={() => setGuideAsk(null)}>
+                取消
+              </button>
+              <button
+                className="btn sm primary"
+                onClick={() => {
+                  setGuideAsk(null);
+                  setAIPanel({ kind: 'summary' });
+                }}
+              >
+                生成导读
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* The AI panel: one surface, three callers. Each `run` is the grounded
+          ask — the word card's word + sentence + dictionary senses, the
+          selection's sentence, the chapter behind the reader. */}
+      {aiPanel?.kind === 'explain' && (
+        <AIPanel<ExplainResult>
+          title="✦ AI 释义"
+          run={() => api.explainInContext(aiPanel.word, aiPanel.sentence, aiPanel.senses)}
+          render={(r) => (
+            <>
+              {r.cached && <span className="ai-cache-badge">缓存结果</span>}
+              <p className="ai-sentence">{highlightWord(aiPanel.sentence, aiPanel.word)}</p>
+              {aiPanel.senses.length > 0 && (
+                <>
+                  <div className="ai-label">词典义项</div>
+                  <ol className="ai-senses">
+                    {aiPanel.senses.map((s, i) => (
+                      <li key={i} className={r.sense === i + 1 ? 'on' : ''}>
+                        <b>{i + 1}.</b> {s}
+                      </li>
+                    ))}
+                  </ol>
+                </>
+              )}
+              {r.sense < 0 && <p className="ai-note">AI 认为这些义项都不贴合这个句子。</p>}
+              {r.note && <p className="ai-note">{r.note}</p>}
+            </>
+          )}
+          onClose={() => setAIPanel(null)}
+          onGoSettings={goAISettings}
+        />
+      )}
+
+      {aiPanel?.kind === 'parse' && (
+        <AIPanel<ParseResult>
+          title="✦ AI 拆句"
+          run={() => api.parseSentence(aiPanel.sentence)}
+          render={(r) => (
+            <>
+              {r.cached && <span className="ai-cache-badge">缓存结果</span>}
+              <p className="ai-sentence">{aiPanel.sentence}</p>
+              {r.translation && <p className="ai-trans">{r.translation}</p>}
+              {r.segments.length > 0 && (
+                <>
+                  <div className="ai-label">句子拆解</div>
+                  {r.segments.map((s, i) => (
+                    <div className="ai-seg" key={i}>
+                      <span className="ai-seg-text">{s.text}</span>
+                      <span className="ai-seg-role">{s.role}</span>
+                      <span className="ai-seg-gloss">{s.gloss}</span>
+                    </div>
+                  ))}
+                </>
+              )}
+              {r.notes.length > 0 && (
+                <>
+                  <div className="ai-label">语法注释</div>
+                  <div className="ai-notes">
+                    <ul>
+                      {r.notes.map((n, i) => (
+                        <li key={i}>{n}</li>
+                      ))}
+                    </ul>
+                  </div>
+                </>
+              )}
+            </>
+          )}
+          onClose={() => setAIPanel(null)}
+          onGoSettings={goAISettings}
+        />
+      )}
+
+      {aiPanel?.kind === 'summary' && current && (
+        <AIPanel<SummaryResult>
+          title="✦ AI 导读"
+          run={() => api.summarizeChapter(id, current)}
+          render={(r) => (
+            <>
+              {r.cached && <span className="ai-cache-badge">缓存结果</span>}
+              {r.truncated && <p className="ai-trunc">本章较长，导读基于开头部分生成。</p>}
+              <p className="ai-summary">{r.summary}</p>
+              {r.points.length > 0 && (
+                <>
+                  <div className="ai-label">本章要点</div>
+                  <div className="ai-points">
+                    <ul>
+                      {r.points.map((p, i) => (
+                        <li key={i}>{p}</li>
+                      ))}
+                    </ul>
+                  </div>
+                </>
+              )}
+              {r.terms.length > 0 && (
+                <>
+                  <div className="ai-label">值得记住的词</div>
+                  <div className="ai-term-row">
+                    {r.terms.map((t, i) => (
+                      <span className="ai-term" key={i}>
+                        <b>{t.term}</b>
+                        <em>{t.gloss}</em>
+                      </span>
+                    ))}
+                  </div>
+                </>
+              )}
+            </>
+          )}
+          onClose={() => setAIPanel(null)}
+          onGoSettings={goAISettings}
+        />
       )}
     </>
   );

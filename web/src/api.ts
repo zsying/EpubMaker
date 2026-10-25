@@ -119,6 +119,73 @@ export interface VocabStats {
   due: number;
 }
 
+/* ------------------------------- AI (0.4) ------------------------------- */
+
+/** An endpoint the settings page offers in its dropdown. */
+export interface AIPreset {
+  name: string;
+  baseUrl: string;
+  model: string;
+  /** e.g. "本地运行，密钥可留空" */
+  note?: string;
+}
+
+/**
+ * The AI settings as the settings page sees them. The key is never sent to
+ * the frontend — only whether one is stored and its last four characters.
+ */
+export interface AIConfigView {
+  baseUrl: string;
+  model: string;
+  keySet: boolean;
+  /** Last four characters of the stored key, e.g. "…9f2a". */
+  keyHint: string;
+  presets: AIPreset[];
+}
+
+/**
+ * The contextual gloss for one word: which of the dictionary's own senses the
+ * sentence uses, plus a one-line Chinese explanation. `sense` is 1-based,
+ * matching the numbered list the model was shown; -1 means none fit.
+ */
+export interface ExplainResult {
+  word: string;
+  sense: number;
+  senseText: string;
+  note: string;
+  cached: boolean;
+}
+
+/** One slice of a sentence with its grammatical role. */
+export interface Segment {
+  text: string;
+  role: string;
+  gloss: string;
+}
+
+/** The merged sentence view: translation and breakdown in one result. */
+export interface ParseResult {
+  translation: string;
+  segments: Segment[];
+  notes: string[];
+  cached: boolean;
+}
+
+/** A word worth remembering from a chapter. */
+export interface SummaryTerm {
+  term: string;
+  gloss: string;
+}
+
+/** The chapter guide. `truncated` says the chapter was cut to the prompt budget. */
+export interface SummaryResult {
+  summary: string;
+  points: string[];
+  terms: SummaryTerm[];
+  truncated: boolean;
+  cached: boolean;
+}
+
 /**
  * One round of filling in the notebook's missing glosses. `notFound` and
  * `failed` are different: the first means the dictionaries answered and neither
@@ -710,4 +777,27 @@ export const api = {
    * raw material, and the longest list in the app. */
   listLookupHistory: (keyword: string, offset: number, limit: number) =>
     call<Page<LookupHit>>('ListLookupHistory', keyword, offset, limit),
+
+  /* ---------------- AI (0.4): BYOK provider, three grounded abilities ---------------- */
+
+  /** The AI settings with the key masked. Throws when the settings file is unreadable. */
+  aiConfig: () => call<AIConfigView>('GetAIConfig'),
+
+  /** Stores the settings. A blank key keeps the stored one (model-only change). */
+  saveAIConfig: (baseUrl: string, apiKey: string, model: string) =>
+    call<boolean>('SaveAIConfig', baseUrl, apiKey, model),
+
+  /** One tiny real call against the stored settings; reports, never throws. */
+  aiTestConnection: () => call<{ ok: boolean; reply?: string; error?: string }>('AITestConnection'),
+
+  /** Picks the sense a word carries in its sentence, from the dictionary's own senses. */
+  explainInContext: (word: string, sentence: string, senses: string[]) =>
+    call<ExplainResult>('ExplainInContext', word, sentence, senses),
+
+  /** Translation + breakdown of one sentence, in a single result. */
+  parseSentence: (sentence: string) => call<ParseResult>('ParseSentence', sentence),
+
+  /** A short guide for one chapter, from the chapter's own text. */
+  summarizeChapter: (bookId: string, chapterId: string) =>
+    call<SummaryResult>('SummarizeChapter', bookId, chapterId),
 };
