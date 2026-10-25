@@ -583,6 +583,10 @@ a {
   overflow: hidden;
   display: flex;
   flex-direction: column;
+  /* The whole card opens the book, so the whole card is a target. */
+  cursor: pointer;
+  /* Taps must not wait on the double-tap-to-zoom window. */
+  touch-action: manipulation;
   transition:
     transform 0.16s,
     box-shadow 0.16s;
@@ -591,6 +595,19 @@ a {
 .book-card:hover {
   transform: translateY(-2px);
   box-shadow: var(--shadow);
+}
+
+/* Press-in frame, held by state for PRESS_MS before the reader opens. It comes
+   after :hover so it wins on the shelf's touch devices, where a tap leaves
+   :hover stuck on the card. */
+.book-card.pressing {
+  transform: scale(0.972);
+  box-shadow: none;
+  background: var(--fill);
+  transition:
+    transform 0.09s,
+    box-shadow 0.09s,
+    background 0.09s;
 }
 
 .cover {

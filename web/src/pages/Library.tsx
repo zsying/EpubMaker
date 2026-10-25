@@ -55,6 +55,15 @@ const SORT_OPTIONS: Array<{ id: ShelfSort; label: string }> = [
 // phone should not pay it up front.
 const PAGE_SIZE = 12;
 
+// How long the card stays pressed before the reader opens. Short enough to read
+// as an acknowledgement of the tap rather than as lag; long enough for the
+// press-in transition to actually be painted.
+const PRESS_MS = 130;
+
+// A sheet opened by a hold is still under the thumb when the hold ends: the
+// release's click has to be ignored for this long, or the menu closes itself.
+const LATE_CLICK_MS = 400;
+
 // Same rule as the reader: a device whose primary pointer cannot hover is a
 // touch device, and a touchscreen laptop with a mouse stays "desktop".
 function isTouchPrimary(): boolean {
@@ -63,6 +72,12 @@ function isTouchPrimary(): boolean {
   return (
     window.matchMedia('(pointer: coarse)').matches || window.matchMedia('(hover: none)').matches
   );
+}
+
+// The press animation is only worth its delay when the reader can see it.
+function prefersReducedMotion(): boolean {
+  if (typeof window === 'undefined' || !window.matchMedia) return false;
+  return window.matchMedia('(prefers-reduced-motion: reduce)').matches;
 }
 
 export default function Library() {
@@ -156,13 +171,18 @@ export default function Library() {
   }, [keyword, sort, books, loading, touch]);
 
   /* ---- long-press: the phone's per-book menu ----
-     A 500ms hold on the cover opens the sheet; any movement cancels it (it is
-     a scroll, not a hold), and the click that ends the gesture is swallowed so
-     the sheet does not immediately open the reader. */
+     A 500ms hold anywhere on the card opens the sheet; any movement cancels it
+     (it is a scroll, not a hold), and the click that ends the gesture is
+     swallowed so the sheet does not immediately open the reader. */
   const longPressRef = useRef<{ timer: number | null; fired: boolean }>({
     timer: null,
     fired: false,
   });
+  // When the hold opens the sheet, the finger is still down and the sheet-mask
+  // ends up underneath it. Releasing then sends a `click` to the mask, which
+  // would close the sheet the same gesture just opened — so the mask ignores
+  // clicks that arrive within a moment of opening.
+  const menuOpenedAt = useRef(0);
 
   function startLongPress(b: Book) {
     if (!isTouchPrimary()) return;
@@ -171,6 +191,7 @@ export default function Library() {
     longPressRef.current.timer = window.setTimeout(() => {
       longPressRef.current.timer = null;
       longPressRef.current.fired = true;
+      menuOpenedAt.current = Date.now();
       setMenuBook(b);
       try {
         navigator.vibrate?.(10);
@@ -188,17 +209,9 @@ export default function Library() {
     }
   }
 
-  function coverClick(b: Book) {
-    if (longPressRef.current.fired) {
-      longPressRef.current.fired = false;
-      return;
-    }
-    nav(`/books/${b.id}/read`);
-  }
-
   // The long-press gesture belongs to the whole card face, not just the cover:
-  // a thumb lands on the title or the author line just as often. Both areas
-  // share these handlers; the cover additionally keeps its tap-to-open.
+  // a thumb lands on the title or the author line just as often. The card root
+  // carries these handlers; the action buttons inside it are excluded.
   function holdProps(b: Book) {
     return {
       onTouchStart: () => startLongPress(b),
@@ -212,6 +225,48 @@ export default function Library() {
       },
     };
   }
+
+  /* ---- tap to open: the whole card, with a press before the page swaps ----
+     Opening used to live on the cover alone, so a thumb aimed at the title or
+     the author line hit dead space and the card merely hovered. Every pixel of
+     the card is the open target now. The press is a "button down" frame held
+     for PRESS_MS: navigation tears the card down, so without it the tap gets no
+     visible answer at all. */
+  const [pressedBook, setPressedBook] = useState<string | null>(null);
+  const [reducedMotion] = useState(prefersReducedMotion);
+  const pressRef = useRef<number | null>(null);
+
+  function openBook(b: Book) {
+    // The click that ends a long-press belongs to the sheet it already opened.
+    if (longPressRef.current.fired) {
+      longPressRef.current.fired = false;
+      return;
+    }
+    // One press, one navigation: a double tap must not push two history
+    // entries for the same book.
+    if (pressRef.current !== null) return;
+    const finish = () => {
+      pressRef.current = null;
+      // The pressed state is deliberately not cleared here — the unmount is
+      // the release, so the card never snaps back to full size on its way out.
+      nav(`/books/${b.id}/read`);
+    };
+    if (reducedMotion) {
+      finish();
+      return;
+    }
+    setPressedBook(b.id);
+    pressRef.current = window.setTimeout(finish, PRESS_MS);
+  }
+
+  // A card can be unmounted mid-press (the shelf reloads, the reader opens from
+  // another entry point); the pending navigation must not fire into a dead page.
+  useEffect(
+    () => () => {
+      if (pressRef.current !== null) window.clearTimeout(pressRef.current);
+    },
+    [],
+  );
 
   const load = useCallback(async (kw?: string) => {
     try {
@@ -570,20 +625,22 @@ export default function Library() {
               const pct = progress[b.id];
               const pctLabel = pct > 0 ? `${Math.min(100, Math.round(pct * 100))}%` : null;
               return (
-                <div className="book-card" key={b.id}>
-                  <div
-                    className="cover"
-                    onClick={() => coverClick(b)}
-                    {...holdProps(b)}
-                    style={{ cursor: 'pointer' }}
-                  >
+                <div
+                  className={`book-card${pressedBook === b.id ? ' pressing' : ''}`}
+                  key={b.id}
+                  // The card is the open target, not just the cover: title,
+                  // author, badge and the padding around them all open the book.
+                  onClick={() => openBook(b)}
+                  {...holdProps(b)}
+                >
+                  <div className="cover">
                     {b.coverUrl ? (
                       <img src={b.coverUrl} alt={b.title} loading="lazy" />
                     ) : (
                       <div className="placeholder">{b.title}</div>
                     )}
                   </div>
-                  <div className="book-body" {...holdProps(b)}>
+                  <div className="book-body">
                     <div className="book-title" title={b.title}>
                       {b.title}
                     </div>
@@ -594,7 +651,9 @@ export default function Library() {
                       {pctLabel && <span className="book-progress">{pctLabel}</span>}
                     </div>
                   </div>
-                  <div className="book-actions">
+                  {/* These go somewhere of their own — 整理 / 拆分 / 导出 /
+                      删除 must not also be read as a tap on the card. */}
+                  <div className="book-actions" onClick={(e) => e.stopPropagation()}>
                     <Link className="btn sm" to={`/books/${b.id}/read`}>
                       阅读
                     </Link>
@@ -682,7 +741,15 @@ export default function Library() {
           author / tags / cover only); the desktop edit page stays a desktop
           job. */}
       {menuBook && (
-        <div className="sheet-mask" onClick={() => setMenuBook(null)}>
+        <div
+          className="sheet-mask"
+          onClick={() => {
+            // The release that ended the long-press clicks the mask it landed
+            // on; that is not a request to close the menu.
+            if (Date.now() - menuOpenedAt.current < LATE_CLICK_MS) return;
+            setMenuBook(null);
+          }}
+        >
           <div className="sheet" role="menu" onClick={(e) => e.stopPropagation()}>
             <div className="sheet-title">{menuBook.title}</div>
             <button className="sheet-item" onClick={() => openEdit(menuBook)}>
