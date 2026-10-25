@@ -60,9 +60,11 @@ const PAGE_SIZE = 12;
 // press-in transition to actually be painted.
 const PRESS_MS = 130;
 
-// A sheet opened by a hold is still under the thumb when the hold ends: the
-// release's click has to be ignored for this long, or the menu closes itself.
-const LATE_CLICK_MS = 400;
+// A hold that opened the menu leaves exactly one click behind when the finger
+// lifts. That click is the tail of the gesture, not a tap on anything: ignoring
+// it needs a window long enough to cover the browser's synth delay (~10-40ms)
+// and short enough that a real tap right after the release still counts.
+const HOLD_CLICK_MS = 200;
 
 // Same rule as the reader: a device whose primary pointer cannot hover is a
 // touch device, and a touchscreen laptop with a mouse stays "desktop".
@@ -174,24 +176,22 @@ export default function Library() {
      A 500ms hold anywhere on the card opens the sheet; any movement cancels it
      (it is a scroll, not a hold), and the click that ends the gesture is
      swallowed so the sheet does not immediately open the reader. */
-  const longPressRef = useRef<{ timer: number | null; fired: boolean }>({
+  const longPressRef = useRef<{ timer: number | null; firedAt: number }>({
     timer: null,
-    fired: false,
+    firedAt: 0,
   });
-  // When the hold opens the sheet, the finger is still down and the sheet-mask
-  // ends up underneath it. Releasing then sends a `click` to the mask, which
-  // would close the sheet the same gesture just opened — so the mask ignores
-  // clicks that arrive within a moment of opening.
-  const menuOpenedAt = useRef(0);
+  // Timestamps, not booleans: the sheet ends up under the thumb that opened it,
+  // so the release's click lands on the sheet-mask rather than on the card.
+  // A stale "fired" flag would then swallow the reader's next real tap.
+  const menuReleasedAt = useRef(0);
 
   function startLongPress(b: Book) {
     if (!isTouchPrimary()) return;
     cancelLongPress();
-    longPressRef.current.fired = false;
+    longPressRef.current.firedAt = 0;
     longPressRef.current.timer = window.setTimeout(() => {
       longPressRef.current.timer = null;
-      longPressRef.current.fired = true;
-      menuOpenedAt.current = Date.now();
+      longPressRef.current.firedAt = Date.now();
       setMenuBook(b);
       try {
         navigator.vibrate?.(10);
@@ -209,6 +209,14 @@ export default function Library() {
     }
   }
 
+  // Lifting the finger after a hold leaves a click behind. Only a hold that
+  // actually opened the menu produces one worth ignoring, and only the click
+  // that follows immediately — hence a timestamp, not a sticky flag.
+  function endLongPress() {
+    if (longPressRef.current.firedAt) menuReleasedAt.current = Date.now();
+    cancelLongPress();
+  }
+
   // The long-press gesture belongs to the whole card face, not just the cover:
   // a thumb lands on the title or the author line just as often. The card root
   // carries these handlers; the action buttons inside it are excluded.
@@ -216,7 +224,7 @@ export default function Library() {
     return {
       onTouchStart: () => startLongPress(b),
       onTouchMove: cancelLongPress,
-      onTouchEnd: cancelLongPress,
+      onTouchEnd: endLongPress,
       onTouchCancel: cancelLongPress,
       onContextMenu: (e: { preventDefault: () => void }) => {
         // The WebView's own long-press menu must not compete with ours
@@ -237,11 +245,9 @@ export default function Library() {
   const pressRef = useRef<number | null>(null);
 
   function openBook(b: Book) {
-    // The click that ends a long-press belongs to the sheet it already opened.
-    if (longPressRef.current.fired) {
-      longPressRef.current.fired = false;
-      return;
-    }
+    // The click that ends a hold belongs to the sheet it already opened. It
+    // arrives right after the finger lifts, so the release is the anchor.
+    if (Date.now() - menuReleasedAt.current < HOLD_CLICK_MS) return;
     // One press, one navigation: a double tap must not push two history
     // entries for the same book.
     if (pressRef.current !== null) return;
@@ -746,7 +752,7 @@ export default function Library() {
           onClick={() => {
             // The release that ended the long-press clicks the mask it landed
             // on; that is not a request to close the menu.
-            if (Date.now() - menuOpenedAt.current < LATE_CLICK_MS) return;
+            if (Date.now() - menuReleasedAt.current < HOLD_CLICK_MS) return;
             setMenuBook(null);
           }}
         >

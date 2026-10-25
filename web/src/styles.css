@@ -3508,6 +3508,9 @@ button.me-dict:disabled {
   display: flex;
   align-items: flex-end;
   justify-content: center;
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-touch-callout: none;
 }
 
 .sheet {
@@ -3516,6 +3519,19 @@ button.me-dict:disabled {
   background: var(--panel);
   border-radius: 14px 14px 0 0;
   padding: 6px 0 calc(10px + env(safe-area-inset-bottom));
+  /* A sheet opens under the thumb that asked for it, and the WebView's own
+     long-press selection timer is still running: it would select the menu's
+     text (usually the book title at the top of the panel). Nothing in a sheet
+     is meant to be copied — except what the reader types into the editor. */
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-touch-callout: none;
+}
+
+.sheet input,
+.sheet textarea {
+  -webkit-user-select: text;
+  user-select: text;
 }
 
 .sheet-title {
