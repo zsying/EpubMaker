@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { api, VocabItem, VocabStats } from '../api';
-import { toastError } from '../toast';
+import { toast, toastError } from '../toast';
 import { STATUS_HINT, STATUS_LABEL } from '../vocabLabels';
 import { emphasise } from '../highlight';
 import { repairContexts } from '../vocabRepair';
@@ -61,6 +61,11 @@ export default function Vocab() {
   // Matching rows in the database, not rows on screen — the only honest number
   // to show once the list arrives a screenful at a time.
   const [total, setTotal] = useState(0);
+  // Words neither the dictionary nor an earlier online lookup could explain.
+  // Zero hides the offer entirely: the page should not advertise a job when
+  // there is nothing to do.
+  const [gaps, setGaps] = useState(0);
+  const [filling, setFilling] = useState(false);
 
   // The list is read in pages, so 'how far in am I' has to be tracked
   // separately from `items.length`: a row dropped as a duplicate must not shift
@@ -101,6 +106,14 @@ export default function Vocab() {
         setHasMore(Boolean(page?.hasMore));
         setTotal(page?.total ?? rows.length);
         setStats(st);
+        // Off the critical path: the offer to go online is not what the reader
+        // came for, and the scan touches every word in the notebook.
+        void api
+          .vocabGlossGaps()
+          .then((n) => {
+            if (alive && seq === query.current) setGaps(n ?? 0);
+          })
+          .catch(() => undefined);
         // Entries captured by an older sentence extraction can hold a fragment
         // instead of the sentence; the chapter is still there to re-cut it from.
         // Draw the list first, then let the repaired rows arrive in place.
@@ -176,6 +189,49 @@ export default function Vocab() {
   // a word scheduled for next week is not a word to be asked about today.
   const due = stats?.due ?? 0;
 
+  // Ask a public dictionary about the words nothing here can explain. This is
+  // the one place the app sends a word to a server, so it only ever runs on a
+  // click — and every answer is stored, so the same word is never sent twice.
+  async function fillGlosses() {
+    if (filling) return;
+    setFilling(true);
+    let filled = 0;
+    let notFound = 0;
+    let failed = 0;
+    try {
+      // A few rounds per click: one round is quick enough to keep the spinner
+      // honest, and a round that fills nothing ends the loop instead of
+      // hammering two free public APIs.
+      for (let round = 0; round < 5; round++) {
+        const r = await api.fillVocabGlosses(8);
+        filled += r.filled;
+        notFound += r.notFound;
+        failed += r.failed;
+        setGaps(r.remaining);
+        if (r.remaining === 0 || r.filled === 0) break;
+      }
+      // The glosses live in the backend now; redraw the rows already on screen
+      // so they stop saying「（词库无释义）」.
+      const want = Math.min(200, Math.max(PAGE, items.length));
+      const page = await api.listVocab(filter, keyword, 0, want);
+      if (page) {
+        const rows = page.items ?? [];
+        cursor.current = rows.length;
+        setItems(rows);
+        setHasMore(Boolean(page.hasMore));
+        setTotal(page.total ?? rows.length);
+      }
+    } catch (e) {
+      toastError(e);
+    } finally {
+      setFilling(false);
+    }
+    const said = [`补全 ${filled} 个`];
+    if (notFound) said.push(`${notFound} 个词库也查不到`);
+    if (failed) said.push(`${failed} 个没连上，可以再试`);
+    toast(said.join('，'));
+  }
+
   return (
     <div className="page">
       <div className="lib-head">
@@ -221,6 +277,22 @@ export default function Vocab() {
           </button>
         ))}
       </div>
+
+      {/* The only network call the notebook makes, and it waits to be asked.
+          Hidden when there is nothing to explain, so it never becomes chrome. */}
+      {gaps > 0 && !loading && (
+        <div className="vocab-gap-bar">
+          <span className="vocab-gap-text">{gaps} 个词还没有释义</span>
+          <button
+            className="btn sm"
+            disabled={filling}
+            onClick={() => void fillGlosses()}
+            title="从有道词典取中文释义（查不到时用 Free Dictionary 的英文释义），查到后存入本地词库，以后不再联网"
+          >
+            {filling ? '联网查词中…' : '联网补全'}
+          </button>
+        </div>
+      )}
 
       {loading ? (
         <div className="loading">加载中…</div>

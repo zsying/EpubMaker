@@ -120,6 +120,21 @@ export interface VocabStats {
 }
 
 /**
+ * One round of filling in the notebook's missing glosses. `notFound` and
+ * `failed` are different: the first means the dictionaries answered and neither
+ * knew the word (it will not be asked again), the second means the request
+ * itself did not get through (it stays queued).
+ */
+export interface GlossFillResult {
+  tried: number;
+  filled: number;
+  notFound: number;
+  failed: number;
+  /** Words still unexplained after this round. */
+  remaining: number;
+}
+
+/**
  * One screenful of an unbounded list.
  *
  * `total` counts the whole filtered set, not the downloaded part, so the header
@@ -668,6 +683,20 @@ export const api = {
   vocabQueue: (limit: number) => call<VocabItem[]>('VocabQueue', limit),
 
   vocabStats: () => call<VocabStats>('VocabStats'),
+
+  /**
+   * How many notebook words nothing can explain — not the local dictionary,
+   * not a gloss fetched online before. Zero means the notebook reads normally
+   * and the「联网补全」action stays hidden.
+   */
+  vocabGlossGaps: () => call<number>('VocabGlossGaps'),
+
+  /**
+   * Look up to `limit` unexplained words on a public dictionary and store what
+   * comes back. This is the only call in the app that sends a word to a server,
+   * and it only runs when the reader asks for it.
+   */
+  fillVocabGlosses: (limit: number) => call<GlossFillResult>('FillVocabGlosses', limit),
 
   setVocabStatus: (vid: string, status: string) => call<boolean>('SetVocabStatus', vid, status),
 

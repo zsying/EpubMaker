@@ -1,25 +1,33 @@
 package app
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
 	"epubmaker-desktop/internal/config"
 	"epubmaker-desktop/internal/db"
 	"epubmaker-desktop/internal/dict"
+	"epubmaker-desktop/internal/dictcache"
 )
 
 // policyCSV covers the three cases the recording policy has to distinguish:
 // basic vocabulary (the), a rare word (blorp), and an inflected form whose own
 // entry only cross-references its base (blimped).
+//
+// blorps is the row that made the notebook show「（词库无释义）」: an inflected
+// form ECDICT ships with an empty translation, whose base form says everything.
 const policyCSV = `word,phonetic,definition,translation,pos,collins,oxford,tag,bnc,frq,exchange,detail,audio
 the,ðə,,"art. 这",art:100,5,1,zk,1,1,,
 blorp,,"a made-up noun","n. 虚构词",n:100,0,0,,0,20000,,
 blimp,,"a small airship","n. 小型飞艇",n:100,0,0,,0,30000,,
 blimped,,"imp. of blimp","v. blimp的过去式",,0,0,,0,25000,0:blimp/1:pd,,
+blorps,,,,,0,0,,0,26000,0:blorp,,
 `
 
 func TestMain(m *testing.M) {
@@ -48,7 +56,7 @@ func resetPolicy(t *testing.T) {
 	if err != nil {
 		t.Fatalf("db.Open: %v", err)
 	}
-	for _, table := range []string{"lookup_history", "vocab", "vocab_seen", "annotations", "bookmarks", "reading_progress", "chapters", "books"} {
+	for _, table := range []string{"dict_online", "lookup_history", "vocab", "vocab_seen", "annotations", "bookmarks", "reading_progress", "chapters", "books"} {
 		if _, err := d.Exec(`DELETE FROM ` + table); err != nil {
 			t.Fatalf("reset %s: %v", table, err)
 		}
@@ -89,8 +97,8 @@ func TestDictStatusReportsInstalled(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !st.Installed || st.Entries != 4 {
-		t.Fatalf("status = %+v, want installed with 4 entries", st)
+	if !st.Installed || st.Entries != 5 {
+		t.Fatalf("status = %+v, want installed with 5 entries", st)
 	}
 }
 
@@ -397,7 +405,8 @@ func TestLookupHistoryIgnoresUnknownWords(t *testing.T) {
 // The review session is built from the schedule, not from whatever the notebook
 // page happened to have loaded: a word graded a moment ago is not due again yet,
 // and graded words keep their meaning attached when it does come back.
-func TestVocabQueueIsTheReviewSession(t *testing.T) {	resetPolicy(t)
+func TestVocabQueueIsTheReviewSession(t *testing.T) {
+	resetPolicy(t)
 	b := &Backend{}
 	missed, err := b.VocabAdd("blorp", "blorp", "", "", 0, "a blorp appeared")
 	if err != nil {
@@ -591,5 +600,187 @@ func TestLookupHistoryPagesCoverTheListExactly(t *testing.T) {
 	}
 	if len(seen) != 3 {
 		t.Fatalf("saw %d of 3 words", len(seen))
+	}
+}
+
+/* ---------------------------- online glosses ---------------------------- */
+
+// stubFetch replaces the network for the duration of one test and returns a
+// counter of how many lookups were attempted.
+func stubFetch(t *testing.T, fn func(ctx context.Context, word string) (*dict.Online, error)) *int {
+	t.Helper()
+	calls := 0
+	old := fetchOnline
+	fetchOnline = func(ctx context.Context, word string) (*dict.Online, error) {
+		calls++
+		return fn(ctx, word)
+	}
+	t.Cleanup(func() { fetchOnline = old })
+	return &calls
+}
+
+// The notebook used to render「（词库无释义）」for an inflected form whose own
+// row is empty — while the base form, one row away, has the whole answer.
+func TestGlossFallsBackToTheBaseForm(t *testing.T) {
+	resetPolicy(t)
+	if _, err := (&Backend{}).VocabAdd("blorps", "blorps", "", "", 0, "a context"); err != nil {
+		t.Fatal(err)
+	}
+	d, err := openDict()
+	if err != nil {
+		t.Fatal(err)
+	}
+	g := glossOf(d, "blorps")
+	if !strings.Contains(g.Translation, "虚构词") {
+		t.Fatalf("translation = %q, want the base form's gloss", g.Translation)
+	}
+	if g.TriedOnline {
+		t.Error("a word its base form explains is not an online gap")
+	}
+}
+
+// A word the base form rescues must not be counted as missing, or the page
+// would offer to go online for something it can already answer.
+func TestGlossGapsIgnoresWordsTheBaseFormExplains(t *testing.T) {
+	resetPolicy(t)
+	b := &Backend{}
+	for _, w := range []string{"blorp", "blorps", "zorblat"} {
+		if _, err := b.VocabAdd(w, w, "", "", 0, ""); err != nil {
+			t.Fatal(err)
+		}
+	}
+	gaps, err := b.VocabGlossGaps()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gaps != 1 {
+		t.Fatalf("gaps = %d, want 1 — only zorblat is unexplained", gaps)
+	}
+}
+
+func TestFillVocabGlossesStoresWhatItFound(t *testing.T) {
+	resetPolicy(t)
+	b := &Backend{}
+	if _, err := b.VocabAdd("zorblat", "zorblat", "", "", 0, ""); err != nil {
+		t.Fatal(err)
+	}
+	stubFetch(t, func(_ context.Context, word string) (*dict.Online, error) {
+		return &dict.Online{
+			Word: word, Phonetic: "ˈzɔːblæt", Translation: "n. 编出来的词",
+			Source: dict.SourceYoudao,
+		}, nil
+	})
+
+	res, err := b.FillVocabGlosses(8)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Tried != 1 || res.Filled != 1 || res.Remaining != 0 {
+		t.Fatalf("result = %+v", res)
+	}
+
+	// The gloss now answers like any other entry: the popover, the notebook
+	// rows, and the gap count all read from the same place.
+	hit := cachedLookup("zorblat")
+	if hit == nil || hit.Entry == nil || hit.Entry.Translation != "n. 编出来的词" {
+		t.Fatalf("cachedLookup = %+v", hit)
+	}
+	if gaps, err := b.VocabGlossGaps(); err != nil || gaps != 0 {
+		t.Errorf("gaps = %d, %v after filling", gaps, err)
+	}
+	page, err := b.ListVocab("", "", 0, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(page.Items) != 1 || page.Items[0].Translation != "n. 编出来的词" {
+		t.Fatalf("page items = %+v", page.Items)
+	}
+	found, err := b.DictLookup("zorblat")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !found.Found || found.Entry == nil || found.Entry.Source != dict.SourceYoudao {
+		t.Fatalf("DictLookup = %+v", found)
+	}
+}
+
+// A word no source knows must be recorded as attempted. Otherwise every visit to
+// the notebook would ask for it again, forever, and the gap count would never
+// reach zero.
+func TestFillVocabGlossesRemembersAMiss(t *testing.T) {
+	resetPolicy(t)
+	b := &Backend{}
+	if _, err := b.VocabAdd("zorblat", "zorblat", "", "", 0, ""); err != nil {
+		t.Fatal(err)
+	}
+	calls := stubFetch(t, func(context.Context, string) (*dict.Online, error) {
+		return nil, nil // both sources answered, neither knew it
+	})
+
+	res, err := b.FillVocabGlosses(8)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.NotFound != 1 || res.Filled != 0 || res.Remaining != 0 {
+		t.Fatalf("result = %+v", res)
+	}
+	if gaps, err := b.VocabGlossGaps(); err != nil || gaps != 0 {
+		t.Errorf("gaps = %d, %v: an answered miss is not a gap", gaps, err)
+	}
+	if _, err := b.FillVocabGlosses(8); err != nil {
+		t.Fatal(err)
+	}
+	if *calls != 1 {
+		t.Errorf("asked %d times, want 1 — a known miss must not be retried", *calls)
+	}
+}
+
+// A network failure is different from a miss: it stays a gap, so the next click
+// tries again.
+func TestFillVocabGlossesKeepsGapsThatFailed(t *testing.T) {
+	resetPolicy(t)
+	b := &Backend{}
+	for _, w := range []string{"quibblex", "zorblat"} {
+		if _, err := b.VocabAdd(w, w, "", "", 0, ""); err != nil {
+			t.Fatal(err)
+		}
+	}
+	stubFetch(t, func(_ context.Context, word string) (*dict.Online, error) {
+		if word == "quibblex" {
+			return nil, errors.New("network is down")
+		}
+		return &dict.Online{Word: word, Translation: "n. 甲的释义", Source: dict.SourceYoudao}, nil
+	})
+
+	res, err := b.FillVocabGlosses(8)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Filled != 1 || res.Failed != 1 {
+		t.Fatalf("result = %+v, want one of each", res)
+	}
+	if gaps, err := b.VocabGlossGaps(); err != nil || gaps != 1 {
+		t.Errorf("gaps = %d, %v: the failed word must stay retryable", gaps, err)
+	}
+}
+
+// A cached gloss must never override a real entry. The ECDICT row is
+// authoritative; the network copy is only a last resort.
+func TestCachedGlossDoesNotOverrideTheDictionary(t *testing.T) {
+	resetPolicy(t)
+	if err := dictcache.Put(dictcache.Entry{
+		Term: "blorp", Word: "blorp", Translation: "n. 网络上抄错的释义", Source: dict.SourceYoudao,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	found, err := (&Backend{}).DictLookup("blorp")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if found.Entry == nil || !strings.Contains(found.Entry.Translation, "虚构词") {
+		t.Fatalf("DictLookup = %+v, want the local entry", found)
+	}
+	if found.Entry.Source != "" {
+		t.Errorf("source = %q, want empty for a local entry", found.Entry.Source)
 	}
 }

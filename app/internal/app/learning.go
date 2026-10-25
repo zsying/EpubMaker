@@ -1,12 +1,15 @@
 package app
 
 import (
+	"context"
 	"errors"
 	"strings"
 	"sync"
+	"time"
 
 	"epubmaker-desktop/internal/config"
 	"epubmaker-desktop/internal/dict"
+	"epubmaker-desktop/internal/dictcache"
 	"epubmaker-desktop/internal/vocab"
 )
 
@@ -102,21 +105,137 @@ func (b *Backend) DictImportCSV(csvPath string) (map[string]any, error) {
 // DictLookup resolves a word without touching the notebook. Used by the review
 // card and by the reader when a term is looked at but not picked up.
 func (b *Backend) DictLookup(raw string) (*LookupResult, error) {
-	d, err := openDict()
-	if err != nil {
-		if errors.Is(err, dict.ErrNotInstalled) {
-			// No dictionary on this device (the phone ships without one).
-			// Return a clean miss so the lookup card can say so — an error
-			// here is swallowed by the frontend and the tap looks dead.
-			return &LookupResult{Found: false, Query: raw}, nil
+	return resolveWord(raw)
+}
+
+/* ------------------------------- glosses ------------------------------- */
+
+// gloss is what the app can say about one word.
+type gloss struct {
+	Phonetic    string
+	Translation string
+	// TriedOnline records that a previous run asked a public dictionary and
+	// came back empty-handed. The word is still unexplained, but it is no
+	// longer a gap — asking again every time the notebook opens would be
+	// nothing but traffic for an answer that does not exist.
+	TriedOnline bool
+}
+
+// glossOf resolves a word for the list rows: the local dictionary first, then a
+// gloss fetched online earlier.
+func glossOf(d *dict.Dict, term string) gloss {
+	g := gloss{}
+	if d != nil {
+		if res, err := d.Lookup(term); err == nil && res != nil {
+			g = glossFrom(res.Entry, res.Base)
 		}
+	}
+	if g.Translation != "" {
+		return g
+	}
+	if e, err := dictcache.Get(term); err == nil && e != nil {
+		g.TriedOnline = true
+		if g.Phonetic == "" {
+			g.Phonetic = e.Phonetic
+		}
+		g.Translation = firstNonEmpty(e.Translation, e.Definition)
+	}
+	return g
+}
+
+// glossFrom reads the meaning off a dictionary entry and, when that entry
+// explains nothing, off its base form.
+//
+// This is the whole reason a word like "disrupts" used to render as
+// 「（词库无释义）」: ECDICT ships inflected forms as their own rows, and those
+// rows carry `exchange = 0:disrupt` plus an empty translation. The answer was
+// one row away the entire time.
+//
+// A Chinese translation always wins over an English definition, wherever it
+// comes from: the notebook is written in Chinese.
+func glossFrom(entry, base *dict.Entry) gloss {
+	g := gloss{}
+	if entry != nil {
+		g.Phonetic = entry.Phonetic
+		g.Translation = entry.Translation
+	}
+	if base != nil {
+		if g.Phonetic == "" {
+			g.Phonetic = base.Phonetic
+		}
+		if g.Translation == "" {
+			g.Translation = base.Translation
+		}
+	}
+	if g.Translation == "" && entry != nil {
+		g.Translation = entry.Definition
+	}
+	if g.Translation == "" && base != nil {
+		g.Translation = base.Definition
+	}
+	return g
+}
+
+func firstNonEmpty(vals ...string) string {
+	for _, v := range vals {
+		if strings.TrimSpace(v) != "" {
+			return v
+		}
+	}
+	return ""
+}
+
+// cachedLookup answers from the glosses fetched online earlier. It is consulted
+// only after the local dictionary has missed: a cached gloss must never
+// override a real entry.
+func cachedLookup(raw string) *LookupResult {
+	term := dict.Normalize(raw)
+	if term == "" {
+		return nil
+	}
+	e, err := dictcache.Get(term)
+	if err != nil || e == nil {
+		return nil
+	}
+	translation := firstNonEmpty(e.Translation, e.Definition)
+	if translation == "" {
+		return nil // a tombstone: we asked, nobody knew
+	}
+	return &LookupResult{
+		Found:   true,
+		Query:   term,
+		Matched: firstNonEmpty(e.Word, term),
+		Entry: &WordDetail{
+			Word:        firstNonEmpty(e.Word, term),
+			Phonetic:    e.Phonetic,
+			Translation: e.Translation,
+			Definition:  e.Definition,
+			Source:      e.Source,
+		},
+	}
+}
+
+// resolveWord runs the full chain for one word: local dictionary, then the
+// online cache, then a miss. A missing dictionary is not an error here — the
+// telephone ships with a trimmed one, and a cached gloss still answers.
+func resolveWord(raw string) (*LookupResult, error) {
+	d, err := openDict()
+	if err != nil && !errors.Is(err, dict.ErrNotInstalled) {
 		return nil, err
 	}
-	res, err := d.Lookup(raw)
-	if err != nil {
-		return nil, err
+	if err == nil {
+		res, err := d.Lookup(raw)
+		if err != nil {
+			return nil, err
+		}
+		if res.Found {
+			return toLookupResult(res), nil
+		}
 	}
-	return toLookupResult(res), nil
+	if hit := cachedLookup(raw); hit != nil {
+		return hit, nil
+	}
+	return &LookupResult{Found: false, Query: dict.Normalize(raw)}, nil
 }
 
 // WordDetail is the part of a dictionary entry the popover renders.
@@ -130,6 +249,9 @@ type WordDetail struct {
 	Collins     int    `json:"collins"`
 	FRQ         int    `json:"frq"`
 	BNC         int    `json:"bnc"`
+	// Source is set only for glosses that came from the online cache, so the
+	// card can say where an otherwise unexplained word came from.
+	Source string `json:"source,omitempty"`
 }
 
 func toWordDetail(e *dict.Entry) *WordDetail {
@@ -197,21 +319,13 @@ func isCommonWord(e *dict.Entry) bool {
 //   - everything else enters the notebook on the SECOND lookup, because the
 //     first lookup is often just curiosity.
 func (b *Backend) LookupWord(bookID, chapterID string, offset int, raw, context string) (*LookupResult, error) {
-	d, err := openDict()
-	if err != nil {
-		if errors.Is(err, dict.ErrNotInstalled) {
-			// Same graceful miss as DictLookup: the card must open and say
-			// "no dictionary" instead of the tap doing nothing at all.
-			return &LookupResult{Found: false, Query: raw}, nil
-		}
-		return nil, err
-	}
-	res, err := d.Lookup(raw)
+	// The card must open and say "not found" instead of the tap doing nothing,
+	// so a missing dictionary is a miss rather than an error.
+	out, err := resolveWord(raw)
 	if err != nil {
 		return nil, err
 	}
-	out := toLookupResult(res)
-	if !out.Found {
+	if !out.Found || out.Entry == nil {
 		return out, nil
 	}
 
@@ -350,19 +464,12 @@ func (b *Backend) VocabQueue(limit int) ([]VocabItem, error) {
 // enrich attaches the dictionary gloss to each row. One lookup per row is cheap
 // (indexed) and keeps the notebook page from opening a card per word.
 func enrich(rows []vocab.ListItem) []VocabItem {
-	d, dictErr := openDict()
+	d, _ := openDict() // nil on a device with no dictionary; glossOf copes
 	out := make([]VocabItem, 0, len(rows))
 	for _, row := range rows {
 		item := VocabItem{ListItem: row}
-		if dictErr == nil {
-			if res, err := d.Lookup(row.Term); err == nil && res.Found && res.Entry != nil {
-				item.Phonetic = res.Entry.Phonetic
-				item.Translation = res.Entry.Translation
-				if item.Translation == "" {
-					item.Translation = res.Entry.Definition
-				}
-			}
-		}
+		g := glossOf(d, row.Term)
+		item.Phonetic, item.Translation = g.Phonetic, g.Translation
 		out = append(out, item)
 	}
 	return out
@@ -403,19 +510,12 @@ func (b *Backend) ListLookupHistory(keyword string, offset, limit int) (*LookupP
 	if err != nil {
 		return nil, err
 	}
-	d, dictErr := openDict()
+	d, _ := openDict()
 	out := make([]LookupHit, 0, len(rows))
 	for _, row := range rows {
 		hit := LookupHit{Lookup: row}
-		if dictErr == nil {
-			if res, err := d.Lookup(row.Term); err == nil && res.Found && res.Entry != nil {
-				hit.Phonetic = res.Entry.Phonetic
-				hit.Translation = res.Entry.Translation
-				if hit.Translation == "" {
-					hit.Translation = res.Entry.Definition
-				}
-			}
-		}
+		g := glossOf(d, row.Term)
+		hit.Phonetic, hit.Translation = g.Phonetic, g.Translation
 		out = append(out, hit)
 	}
 	return &LookupPage{Items: out, Total: total, HasMore: offset+len(out) < total}, nil
@@ -437,4 +537,140 @@ func (b *Backend) SetVocabContext(id, context string) error {
 // review card can move on without refetching the whole notebook.
 func (b *Backend) GradeVocab(id string, known bool) (*vocab.Entry, error) {
 	return vocab.Grade(id, known)
+}
+
+/* ----------------------------- online glosses ----------------------------- */
+
+// The notebook's remaining blind spot is the word no local dictionary has and
+// no earlier fetch explained: proper nouns, coinages, and whatever the trimmed
+// Android dictionary left out. Filling those in is a deliberate,
+// reader-initiated action — it is the one place in the app that sends a word to
+// a server, and it should never happen behind their back.
+//
+// A filled gloss goes into the library database (see dictcache), and from then
+// on answers like any other entry: in the notebook, in the review card, and in
+// the reader's popover.
+
+const (
+	// fillBatch is how many words one click asks for. Eight keeps the wait to a
+	// few seconds and, more importantly, keeps a flaky network from turning one
+	// click into a minute of spinner.
+	fillBatch    = 8
+	fillBatchMax = 40
+)
+
+// fetchOnline is a seam for the tests: the suite must never touch the network.
+var fetchOnline = dict.FetchOnline
+
+// fillMu keeps two clicks from asking about the same words at once. The
+// frontend disables the button while a round runs, but a second device window
+// or a retried call would otherwise duplicate every request in flight.
+var fillMu sync.Mutex
+
+// glossGaps lists the notebook words nothing can explain yet.
+func glossGaps() ([]string, error) {
+	terms, err := vocab.Terms()
+	if err != nil {
+		return nil, err
+	}
+	d, _ := openDict()
+	out := make([]string, 0, len(terms))
+	for _, term := range terms {
+		if g := glossOf(d, term); g.Translation == "" && !g.TriedOnline {
+			out = append(out, term)
+		}
+	}
+	return out, nil
+}
+
+// VocabGlossGaps reports how many notebook words have no meaning at all —
+// neither the local dictionary nor a previous online lookup could explain them.
+func (b *Backend) VocabGlossGaps() (int, error) {
+	gaps, err := glossGaps()
+	if err != nil {
+		return 0, err
+	}
+	return len(gaps), nil
+}
+
+// GlossFillResult reports one round of filling in.
+type GlossFillResult struct {
+	Tried     int `json:"tried"`
+	Filled    int `json:"filled"`
+	NotFound  int `json:"notFound"`
+	Failed    int `json:"failed"`
+	Remaining int `json:"remaining"`
+}
+
+// FillVocabGlosses asks a public dictionary for up to `limit` unexplained
+// notebook words and stores the answers.
+//
+// It reports failures instead of returning them: one unreachable word must not
+// throw away the seven that worked.
+func (b *Backend) FillVocabGlosses(limit int) (*GlossFillResult, error) {
+	fillMu.Lock()
+	defer fillMu.Unlock()
+	if limit <= 0 {
+		limit = fillBatch
+	}
+	if limit > fillBatchMax {
+		limit = fillBatchMax
+	}
+	gaps, err := glossGaps()
+	if err != nil {
+		return nil, err
+	}
+	total := len(gaps)
+	res := &GlossFillResult{Remaining: total}
+	if total == 0 {
+		return res, nil
+	}
+	if len(gaps) > limit {
+		gaps = gaps[:limit]
+	}
+
+	// Generous overall budget: each source has its own 6s timeout, and two are
+	// tried per word.
+	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(len(gaps))*12*time.Second)
+	defer cancel()
+
+	for i, term := range gaps {
+		if i > 0 {
+			// About six words a second: these are hand-made requests, not a
+			// crawl, and both sources are free.
+			select {
+			case <-ctx.Done():
+			case <-time.After(150 * time.Millisecond):
+			}
+		}
+		res.Tried++
+		e, err := fetchOnline(ctx, term)
+		switch {
+		case err != nil:
+			res.Failed++
+		case e == nil:
+			// The sources answered and neither knew the word. Record the
+			// attempt (an entry with no gloss) so the next visit does not ask
+			// again — an unanswerable word would otherwise sit in the gap
+			// count forever.
+			res.NotFound++
+			_ = dictcache.Put(dictcache.Entry{Term: term, Word: term})
+		default:
+			err := dictcache.Put(dictcache.Entry{
+				Term:        term,
+				Word:        firstNonEmpty(e.Word, term),
+				Phonetic:    e.Phonetic,
+				Translation: e.Translation,
+				Definition:  e.Definition,
+				Source:      e.Source,
+			})
+			if err != nil {
+				res.Failed++
+			} else {
+				res.Filled++
+			}
+		}
+	}
+	res.Remaining = total - res.Filled - res.NotFound
+	return res, nil
 }

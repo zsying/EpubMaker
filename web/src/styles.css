@@ -2643,6 +2643,25 @@ a {
   margin-bottom: 14px;
 }
 
+/* The offer to fetch the missing glosses. Deliberately a quiet strip rather
+   than a card: it is a chore the reader may ignore, not content. */
+.vocab-gap-bar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 12px;
+  padding: 8px 10px;
+  border: 1px dashed var(--border);
+  border-radius: 8px;
+  background: var(--fill);
+}
+
+.vocab-gap-text {
+  font-size: 13px;
+  color: var(--text-3);
+}
+
 .vocab-wordline {
   display: flex;
   align-items: baseline;

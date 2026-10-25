@@ -169,6 +169,22 @@ CREATE TABLE IF NOT EXISTS lookup_history (
   last_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_lookup_history_last ON lookup_history(last_at);
+
+-- Glosses fetched from a public dictionary when the local one had nothing.
+--
+-- Deliberately in this database, not in dict.db: dict.db is rebuilt from an
+-- ECDICT csv import (ImportCSV replaces the whole file), and the telephone
+-- ships with a trimmed 150k-entry build of it. A gloss the reader had to go
+-- online for must survive both of those.
+CREATE TABLE IF NOT EXISTS dict_online (
+  term        TEXT PRIMARY KEY,
+  word        TEXT NOT NULL DEFAULT '',
+  phonetic    TEXT NOT NULL DEFAULT '',
+  translation TEXT NOT NULL DEFAULT '',
+  definition  TEXT NOT NULL DEFAULT '',
+  source      TEXT NOT NULL DEFAULT '',
+  fetched_at  TEXT NOT NULL DEFAULT ''
+);
 `
 
 func migrate(d *sql.DB) error {

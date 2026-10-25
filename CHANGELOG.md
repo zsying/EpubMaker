@@ -5,6 +5,23 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+- **A notebook word now shows its base form's meaning** — `disrupts`,
+  `primitives`, `violates` used to sit in 生词本 as「（词库无释义）」while the
+  whole answer was one row away: ECDICT ships inflected forms as their own
+  entries, and those entries carry `exchange = 0:disrupt` with an empty
+  translation. The lists now read the headword's meaning and, when it has none,
+  the base form's — Chinese always before English. This alone explains most of
+  the rows that looked broken, on both platforms.
+- **Words the dictionary cannot explain can be fetched online** — the notebook
+  shows「N 个词还没有释义 · 联网补全」for the rest (proper nouns, coinages, and
+  whatever the trimmed Android dictionary leaves out), and one click asks a
+  public dictionary. 有道 supplies a Chinese gloss and phonetic; when it has
+  nothing, dictionaryapi.dev supplies an English definition. Answers are stored
+  in the library database (`dict_online`), not in `dict.db`, so they survive a
+  dictionary re-import and work on the phone, which ships with a 150k-entry
+  dictionary instead of the 770k one. Once fetched, the word answers like any
+  other entry — notebook, review card, and the reader's popover — and is never
+  requested again. Nothing is sent anywhere until the reader presses the button.
 - **The word lists load a screenful at a time** — 生词本 and 查词历史 both fetched
   every row at once, and each row costs a dictionary lookup on the Go side, so
   opening either page got slower the longer the reader used the app. Both now

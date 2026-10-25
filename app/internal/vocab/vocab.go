@@ -248,6 +248,32 @@ func List(o ListOpts) ([]ListItem, error) {
 	return queryList(where, args, `v.updated_at DESC, v.id DESC`, o.Limit, o.Offset)
 }
 
+// Terms returns every headword in the notebook.
+//
+// The gloss-gap scan only needs the words themselves: it looks each one up in
+// the dictionary to see whether anything can explain it. Going through List
+// would drag the context, book titles and schedule columns along for nothing.
+func Terms() ([]string, error) {
+	d, err := db.Open()
+	if err != nil {
+		return nil, err
+	}
+	rows, err := d.Query(`SELECT term FROM vocab ORDER BY term`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []string{}
+	for rows.Next() {
+		var term string
+		if err := rows.Scan(&term); err != nil {
+			return nil, err
+		}
+		out = append(out, term)
+	}
+	return out, rows.Err()
+}
+
 // Count returns how many entries the filter matches — the number behind "共 N
 // 词", and what tells the page whether another screenful exists.
 func Count(o ListOpts) (int, error) {
