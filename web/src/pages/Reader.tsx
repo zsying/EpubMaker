@@ -1476,25 +1476,19 @@ export default function Reader() {
     if (Date.now() - turnedAtRef.current < 300) return;
 
     // Touch division of labour (微信读书/番茄 school):
-    //   1. a tap on a word looks it up — wherever the word is. Lookup wins over
-    //      everything because it only ever fires when a real word was hit;
-    //   2. the remaining taps split the screen into thirds: left turns back,
-    //      right turns forward (mirroring the swipe gestures), and ONLY the
-    //      middle third toggles the chrome. The earlier rules — a top/bottom
-    //      margin band and "any blank tap toggles" — meant every tap anywhere
-    //      could summon the menu, which read as a bug.
+    //   0. a tap while the dictionary card is open dismisses the card; a tap
+    //      inside the card belongs to the card;
+    //   1. otherwise a tap on a word looks it up — wherever the word is;
+    //   2. every remaining tap toggles the chrome. Taps never turn pages on
+    //      touch: the thirds split meant a slightly mis-aimed tap skipped a
+    //      page, so a turn is a horizontal swipe and nothing else.
     if (touchPrimary) {
+      const el = document.elementFromPoint(e.clientX, e.clientY) as HTMLElement | null;
+      if (lookupCard) {
+        if (!el?.closest('.dict-card')) setLookupCard(null);
+        return;
+      }
       if (scheduleWordLookup(e.clientX, e.clientY)) return;
-      const rect = stageRef.current?.getBoundingClientRect();
-      const r = rect && rect.width > 0 ? (e.clientX - rect.left) / rect.width : 0.5;
-      if (r < 1 / 3) {
-        turn(-1);
-        return;
-      }
-      if (r > 2 / 3) {
-        turn(1);
-        return;
-      }
       setChromeOpen((o) => !o);
       return;
     }
@@ -1582,9 +1576,17 @@ export default function Reader() {
   // this reader has prevented.
   function routeTap(x: number, y: number) {
     if (Date.now() - turnedAtRef.current < 300) return;
+    const el = document.elementFromPoint(x, y) as HTMLElement | null;
+    // The dictionary card is a floating layer over the text: a tap outside it
+    // dismisses it, a tap inside it belongs to the card (its buttons get real
+    // clicks; blank spots must neither look up the text beneath nor toggle the
+    // chrome).
+    if (lookupCard) {
+      if (!el?.closest('.dict-card')) setLookupCard(null);
+      return;
+    }
     // A tap on a highlight opens its annotation popover — the mark check the
     // click path used to do, re-expressed as a hit test.
-    const el = document.elementFromPoint(x, y) as HTMLElement | null;
     const mark = el?.closest('mark.hl') as HTMLElement | null;
     if (mark && mark.dataset.annId && mark.dataset.annId !== ANCHOR_ID) {
       const ann = annotations.find((a) => a.id === mark.dataset.annId);
@@ -1596,16 +1598,9 @@ export default function Reader() {
       return;
     }
     if (scheduleWordLookup(x, y)) return;
-    const rect = stageRef.current?.getBoundingClientRect();
-    const r = rect && rect.width > 0 ? (x - rect.left) / rect.width : 0.5;
-    if (r < 1 / 3) {
-      turn(-1);
-      return;
-    }
-    if (r > 2 / 3) {
-      turn(1);
-      return;
-    }
+    // Taps never turn pages on touch — a page turn is a horizontal swipe.
+    // Everything that is not a word lookup toggles the chrome, which is also
+    // how the edge menus come and go.
     setChromeOpen((o) => !o);
   }
   const routeTapRef = useRef(routeTap);
