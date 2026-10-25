@@ -1374,27 +1374,38 @@ export default function Reader() {
     const ch = byHref.get(docKey(href));
     return ch?.id;
   };
-  // A converted EPUB often ships a nav with a single entry ("Start") while the
-  // spine holds the real chapters — 28 of them, as the header counts. Drawing
-  // that one node is worse than useless: the header promises 28 chapters and
-  // the list behind it offers one, with nothing to say where the rest went. The
-  // chapter list is complete by construction, so it takes over whenever the
-  // outline can reach at most one chapter of a multi-chapter book.
-  const tocChapterCount = useMemo(() => {
+  // The drawer's header counts chapters, so the list has to offer all of them.
+  // A nav can fail that promise in two ways:
+  //
+  //  * it names fewer documents than the spine holds. Converted EPUBs are the
+  //    usual offenders — calibre split this book into 28 files but wrote only
+  //    three labels ("Taboo", "Introduction", "Midpoint"), so the tree drew
+  //    three rows under a header reading "29 章" and the other 26 chapters
+  //    could not be reached from it at all;
+  //  * it is flat, one row per chapter and no nesting, in which case the
+  //    chapter list says the same thing and keeps the chapter numbers.
+  //
+  // The chapter list is complete by construction, so it wins both times; the
+  // outline is drawn only when it is hierarchical *and* reaches every chapter.
+  const tocShape = useMemo(() => {
     const ids = new Set<string>();
+    let nested = false;
     const walk = (es: TocEntry[]) => {
       for (const e of es) {
         if (e.href) {
           const cid = byHref.get(docKey(e.href))?.id;
           if (cid) ids.add(cid);
         }
-        if (e.children?.length) walk(e.children);
+        if (e.children?.length) {
+          nested = true;
+          walk(e.children);
+        }
       }
     };
     walk(toc);
-    return ids.size;
+    return { reached: ids.size, nested };
   }, [toc, byHref]);
-  const useTocTree = toc.length > 0 && (chapters.length <= 1 || tocChapterCount > 1);
+  const useTocTree = toc.length > 0 && tocShape.nested && tocShape.reached >= chapters.length;
   const currentChapter = current ? (chapters.find((c) => c.id === current) ?? null) : null;
   const activeDoc = currentChapter?.href ?? null;
   // Active highlight for the hierarchical TOC (no-op for flat-legacy books).
