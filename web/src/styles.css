@@ -1681,10 +1681,15 @@ a {
 /* ---------- global bookmarks / annotations ---------- */
 .note-list {
   display: grid;
+  /* minmax(0, 1fr), not the implicit `auto`: an auto column is sized by its
+     content's min-content width, and a single unbreakable line (a long title,
+     a nowrap metadata row) would then widen the column past the page. */
+  grid-template-columns: minmax(0, 1fr);
   gap: 12px;
 }
 
 .note-card {
+  min-width: 0;
   display: flex;
   align-items: stretch;
   gap: 6px;
@@ -2550,18 +2555,35 @@ a {
   padding: 0 1px;
 }
 
-/* Metadata line: the provenance text takes the room that is left, the status
-   label trails it and drops to a second line rather than squeezing the text. */
+/* Metadata line: one row, never two. Where the word came from is the only part
+   allowed to give way — a long book title truncates with an ellipsis — while
+   the study line and the status label keep their width. Wrapping here used to
+   break "还没复习过" in the middle of a word. */
 .vocab-meta {
   display: flex;
   align-items: center;
   gap: 8px;
-  flex-wrap: wrap;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
 }
 
-.vocab-meta-text {
+.vocab-origin {
+  /* The provenance is what gives way: it shrinks to whatever the study line
+     and the status label leave behind, and ends in an ellipsis. */
+  flex: 1 1 0;
   min-width: 0;
-  overflow-wrap: anywhere;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.vocab-learn {
+  /* Never shrinks: "下次 6 天后" is the sentence this row exists to say, and a
+     line that cut it in half would be worse than a truncated book title. */
+  flex: 0 0 auto;
+  max-width: 55%;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 /* ------------------------------ lookup history ------------------------------ */
@@ -2612,15 +2634,34 @@ a {
   white-space: nowrap;
 }
 
-/* Review pass */
+/* Review pass — a second-level page. The header carries the way back and the
+   tab bar is gone (App.tsx only renders it for top-level destinations); every
+   action lives in a dock on the bottom edge, where a thumb already rests, so
+   the card above stays a reading surface instead of a control panel. */
+.review-page {
+  /* The card sits in the middle of what the dock leaves free, not glued to the
+     header — the eye lands on the word, and the thumb lands on the dock. */
+  display: flex;
+  flex-direction: column;
+  min-height: 100%;
+}
+
+.review-stage {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
 .review-card {
+  width: 100%;
   max-width: 520px;
-  margin: 24px auto;
+  margin: 12px auto;
   display: flex;
   flex-direction: column;
   align-items: center;
   gap: 10px;
-  padding: 36px 28px 28px;
+  padding: 34px 28px 30px;
   background: var(--panel);
   border: 1px solid var(--border);
   border-radius: var(--radius);
@@ -2628,9 +2669,14 @@ a {
 }
 
 .review-word {
-  font-size: 30px;
+  font-family: var(--font-serif);
+  font-size: 32px;
   font-weight: 650;
   letter-spacing: 0.3px;
+  /* A long headword wraps inside the card instead of widening it. */
+  max-width: 100%;
+  overflow-wrap: anywhere;
+  text-align: center;
 }
 
 .review-phon {
@@ -2639,26 +2685,18 @@ a {
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
 }
 
-.review-reveal {
-  margin-top: 14px;
-  width: 100%;
-  padding: 14px;
-  border: 1px dashed var(--border-strong);
-  border-radius: 10px;
-  background: var(--panel-2);
+.review-speak {
   color: var(--text-3);
-  font-family: inherit;
-  font-size: 13px;
-  cursor: pointer;
 }
 
-.review-reveal:hover {
-  border-color: #b9c0cd;
-  color: var(--text-2);
+.review-hint {
+  margin-top: 18px;
+  font-size: 12.5px;
+  color: var(--text-3);
 }
 
 .review-trans {
-  margin-top: 10px;
+  margin-top: 6px;
   font-size: 15px;
   line-height: 1.7;
   color: var(--text);
@@ -2674,10 +2712,84 @@ a {
   max-width: 440px;
 }
 
-.review-actions {
+.review-dock {
+  width: 100%;
+  max-width: 520px;
+  margin: 18px auto 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.review-receipt {
+  font-size: 12px;
+  color: var(--text-3);
+  text-align: center;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* The primary action is thumb-sized, not toolbar-sized: 48px is the smallest
+   target that survives being hit without looking. */
+.review-primary,
+.review-grades .btn {
+  height: 48px;
+  font-size: 15px;
+  border-radius: 12px;
+  width: 100%;
+  justify-content: center;
+}
+
+.review-grades {
   display: flex;
   gap: 10px;
-  margin-top: 16px;
+}
+
+.review-grade {
+  flex: 1;
+}
+
+/* Skip and stop are real options but not the point of the page: they sit under
+   the grade buttons as quiet links, still inside reach. */
+.review-minors {
+  display: flex;
+  justify-content: center;
+  gap: 4px;
+}
+
+.review-minors .btn {
+  color: var(--text-3);
+}
+
+.review-done {
+  max-width: 520px;
+  margin: 0 auto;
+  text-align: center;
+}
+
+.review-scores {
+  display: flex;
+  justify-content: center;
+  gap: 32px;
+  margin-bottom: 20px;
+}
+
+.review-score {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.review-score b {
+  font-size: 27px;
+  font-weight: 650;
+  line-height: 1.1;
+}
+
+.review-score span {
+  font-size: 12px;
+  color: var(--text-3);
 }
 
 /* Landing highlight for "jump back to the sentence" in scrolling mode. Fixed so
@@ -3435,6 +3547,41 @@ button.me-dict:disabled {
   .vocab-search {
     flex: 1 1 100%;
     width: 100%;
+  }
+
+  /* Review pass: the dock leaves the page flow and pins itself to the bottom
+     edge. The page reserves the space it covers so the card is never hidden
+     behind it, and the card itself gives up its side gutters — on a phone the
+     word should own the width. */
+  .review-page {
+    padding-bottom: calc(150px + env(safe-area-inset-bottom));
+  }
+
+  .review-dock {
+    position: fixed;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    z-index: 45;
+    max-width: none;
+    margin: 0;
+    padding: 10px 16px calc(10px + env(safe-area-inset-bottom));
+    background: var(--panel);
+    border-top: 1px solid var(--border);
+  }
+
+  .review-card {
+    padding: 26px 20px 24px;
+  }
+
+  .review-word {
+    font-size: 29px;
+  }
+
+  .review-primary,
+  .review-grades .btn {
+    height: 50px;
+    font-size: 16px;
   }
 }
 

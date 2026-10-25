@@ -109,7 +109,8 @@ export interface LookupHit {
   translation: string;
 }
 
-export interface VocabStats {  total: number;
+export interface VocabStats {
+  total: number;
   new: number;
   learning: number;
   known: number;

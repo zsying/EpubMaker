@@ -8,7 +8,18 @@ import { useNavigate } from 'react-router-dom';
  * pattern as the reader's own top bar, and the only way back when the desktop
  * top bar is hidden.
  */
-export default function SubHeader({ title, tag, children }: { title: ReactNode; tag?: ReactNode; children?: ReactNode }) {
+export default function SubHeader({
+  title,
+  tag,
+  children,
+  backTo = '/',
+}: {
+  title: ReactNode;
+  tag?: ReactNode;
+  children?: ReactNode;
+  /** Where to go when there is no history to pop (a cold start on this URL). */
+  backTo?: string;
+}) {
   const nav = useNavigate();
   return (
     <div className="sub-head">
@@ -17,7 +28,7 @@ export default function SubHeader({ title, tag, children }: { title: ReactNode; 
         aria-label="返回"
         onClick={() => {
           if (window.history.length > 1) nav(-1);
-          else nav('/');
+          else nav(backTo);
         }}
       >
         <svg width="18" height="18" viewBox="0 0 18 18" aria-hidden="true">

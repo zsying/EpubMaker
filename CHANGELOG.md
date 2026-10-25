@@ -5,6 +5,20 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+- **The review pass is a page of its own** — `/vocab/review` replaces the
+  in-place mode switch. It is a second-level page, so it now behaves like one:
+  a back chevron in a sticky header, no bottom tab bar, and every action in a
+  dock pinned to the bottom edge — the only place a thumb reaches without
+  regripping the phone. The primary button is 48–50px (显示释义 → 不记得 /
+  认识), with 跳过 and 结束本轮 as quiet links under it; the card above stays a
+  reading surface. The queue is fetched by the page itself, so a fresh start
+  gets a fresh queue, and the summary is a page rather than a dialog.
+- **The notebook's metadata line is one row** — a long book title used to fold
+  the row in two and break「还没复习过」across lines mid-word. The provenance now
+  truncates with an ellipsis and the study line (`下次 6 天后` / `还没复习过`)
+  never shrinks, with the status label last. The lookup/review/lapse counters
+  moved into the row's tooltip, and `.note-list` is `minmax(0, 1fr)` so no
+  unbreakable line can widen a card past the page.
 - **Lookup history** — a new「查词历史」second-level page under 生词本 lists every
   word ever looked up — including the ones the notebook's automatic rule
   declined (basic vocabulary, one-off curiosities) — with its gloss, how many
