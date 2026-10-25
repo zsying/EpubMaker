@@ -100,6 +100,17 @@
 - 改后端必须过：`cd app && go build ./... && go vet ./... && go test ./...`；
   改前端必须过 `cd web && npx tsc --noEmit`。改了前端还要 `npm run build` +
   `node scripts/sync-frontend-dist.js` 才会进入二进制（`//go:embed all:frontend/dist`）。
+- **格式化前端只用 `npm run format`**（= `prettier --write web/src`，配置在仓库根的
+  `.prettierrc.json`：单引号、`printWidth: 100`、LF）。它已经对齐过基线，是幂等的：
+  跑完只会改动你手写的那几行，`npm run format:check` 永远应该全绿。
+  **不要裸跑 `npx prettier --write`**：没有配置时 npx 会拉最新版 + 默认双引号 + 80 宽，
+  把 40 个文件整体重写，功能 diff 直接淹没（2026-10-25 踩过一次，花了半天还原）。
+  同理 **prettier 版本 pin 死**（`devDependencies` 里是精确版本，不是 `^`）：升级必须单独
+  一个 commit 并同时跑一遍基线，否则格式漂移会混进下一次功能提交。
+  `.prettierignore` 只管 `web/src`——Markdown 的手工折行和 CHANGELOG 的措辞比换行重要，
+  `package-lock.json` 是生成物，都不该被格式化。
+- **行尾统一 LF**（`.gitattributes`：`* text=auto eol=lf`，只有 `.ps1`/`.bat`/`.cmd` 是
+  CRLF）。不要改成 CRLF，否则 gofmt/prettier 每写一次文件 git 就警告一次。
 - **涉及 SQLite 的测试在沙箱里会卡死**，运行时要关沙箱。
 - **交互回归脚本在 `D:\tmp\epub-verify`（仓库外）**：`web/dist` 起 `vite preview --port 4173`，
   用系统 Edge（`channel: 'msedge'`，**必须 `--no-proxy-server`，地址用 `localhost` 而不是 127.0.0.1**）。

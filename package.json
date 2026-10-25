@@ -12,7 +12,9 @@
     "dev:app": "cd app && wails dev",
     "build:app": "cd app && wails build",
     "build:app:nsis": "cd app && wails build -nsis",
-    "test:e2e": "cd app && go test ./internal/api/... -run TestE2ELifecycle"
+    "test:e2e": "cd app && go test ./internal/api/... -run TestE2ELifecycle",
+    "format": "prettier --write web/src",
+    "format:check": "prettier --check web/src"
   },
   "engines": {
     "node": ">=20"
@@ -21,6 +23,7 @@
     "qrcode": "^1.5.4"
   },
   "devDependencies": {
-    "@types/qrcode": "^1.5.6"
+    "@types/qrcode": "^1.5.6",
+    "prettier": "3.9.10"
   }
 }
