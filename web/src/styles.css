@@ -15,7 +15,8 @@
   --radius: 10px;
   --toc-dock-w: 268px;
   --shadow: 0 1px 2px rgba(16, 24, 40, 0.04), 0 4px 16px rgba(16, 24, 40, 0.06);
-  --font: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB',
+  --font:
+    -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB',
     'Microsoft YaHei', sans-serif;
   --font-serif: Georgia, 'Songti SC', 'SimSun', 'Source Han Serif SC', serif;
 
@@ -396,7 +397,9 @@ a {
   font-family: inherit;
   font-size: 13px;
   outline: none;
-  transition: border-color 0.14s, box-shadow 0.14s;
+  transition:
+    border-color 0.14s,
+    box-shadow 0.14s;
 }
 
 .input:focus,
@@ -580,7 +583,9 @@ a {
   overflow: hidden;
   display: flex;
   flex-direction: column;
-  transition: transform 0.16s, box-shadow 0.16s;
+  transition:
+    transform 0.16s,
+    box-shadow 0.16s;
 }
 
 .book-card:hover {
@@ -1084,7 +1089,13 @@ a {
   top: 0;
   pointer-events: none;
   background:
-    linear-gradient(90deg, rgba(0, 0, 0, 0.04) 0%, rgba(0, 0, 0, 0) 5%, rgba(0, 0, 0, 0) 95%, rgba(0, 0, 0, 0.04) 100%),
+    linear-gradient(
+      90deg,
+      rgba(0, 0, 0, 0.04) 0%,
+      rgba(0, 0, 0, 0) 5%,
+      rgba(0, 0, 0, 0) 95%,
+      rgba(0, 0, 0, 0.04) 100%
+    ),
     linear-gradient(180deg, var(--rd-paper) 0%, var(--rd-paper-2) 100%);
   box-shadow:
     0 1px 3px rgba(0, 0, 0, 0.1),
@@ -1162,7 +1173,8 @@ a {
   /* Above the page sheets so the spine line stays visible. */
   z-index: 7;
   pointer-events: none;
-  background: linear-gradient(90deg,
+  background: linear-gradient(
+    90deg,
     rgba(0, 0, 0, 0.14) 0%,
     rgba(0, 0, 0, 0.04) 22%,
     rgba(255, 255, 255, 0.25) 45%,
@@ -1185,22 +1197,26 @@ a {
 }
 .book-edge.left {
   background:
-    repeating-linear-gradient(90deg,
-      rgba(40, 30, 15, 0.10) 0px,
-      rgba(40, 30, 15, 0.10) 1px,
-      rgba(255, 255, 255, 0.30) 1px,
-      rgba(255, 255, 255, 0.30) 2.5px),
+    repeating-linear-gradient(
+      90deg,
+      rgba(40, 30, 15, 0.1) 0px,
+      rgba(40, 30, 15, 0.1) 1px,
+      rgba(255, 255, 255, 0.3) 1px,
+      rgba(255, 255, 255, 0.3) 2.5px
+    ),
     linear-gradient(90deg, #b3aa99 0%, #d8d0c0 55%, #fbf9f3 100%);
   border-radius: 7px 2px 2px 7px;
   box-shadow: -3px 12px 24px rgba(0, 0, 0, 0.22);
 }
 .book-edge.right {
   background:
-    repeating-linear-gradient(90deg,
-      rgba(40, 30, 15, 0.10) 0px,
-      rgba(40, 30, 15, 0.10) 1px,
-      rgba(255, 255, 255, 0.30) 1px,
-      rgba(255, 255, 255, 0.30) 2.5px),
+    repeating-linear-gradient(
+      90deg,
+      rgba(40, 30, 15, 0.1) 0px,
+      rgba(40, 30, 15, 0.1) 1px,
+      rgba(255, 255, 255, 0.3) 1px,
+      rgba(255, 255, 255, 0.3) 2.5px
+    ),
     linear-gradient(270deg, #b3aa99 0%, #d8d0c0 55%, #fbf9f3 100%);
   border-radius: 2px 7px 7px 2px;
   box-shadow: 3px 12px 24px rgba(0, 0, 0, 0.22);
@@ -1274,9 +1290,15 @@ a {
   color: inherit;
   padding: 0.05em 0;
 }
-.reader-content mark.hl-yellow { background: #fff3a3; }
-.reader-content mark.hl-green { background: #bdf5c8; }
-.reader-content mark.hl-red { background: #ffc9c9; }
+.reader-content mark.hl-yellow {
+  background: #fff3a3;
+}
+.reader-content mark.hl-green {
+  background: #bdf5c8;
+}
+.reader-content mark.hl-red {
+  background: #ffc9c9;
+}
 
 /* chrome (on-demand bars) — theme-coloured via --chrome-* so a paper page is
    never crowned with jet-black bars again */
@@ -1306,8 +1328,17 @@ a {
      touches while their layer keeps living on the compositor. */
   pointer-events: none;
 }
-.reader-chrome.top { top: 0; border-bottom: 1px solid var(--chrome-border); justify-content: space-between; }
-.reader-chrome .chrome-left { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.reader-chrome.top {
+  top: 0;
+  border-bottom: 1px solid var(--chrome-border);
+  justify-content: space-between;
+}
+.reader-chrome .chrome-left {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
 .reader-chrome .chrome-center {
   flex: 1 1 auto;
   min-width: 0;
@@ -1321,7 +1352,11 @@ a {
   white-space: nowrap;
   pointer-events: none;
 }
-.reader-chrome .chrome-right { display: flex; align-items: center; gap: 6px; }
+.reader-chrome .chrome-right {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
 .reader-chrome.bottom {
   bottom: 0;
   justify-content: space-between;
@@ -1332,16 +1367,32 @@ a {
   color: var(--chrome-btn-fg);
   border-color: var(--chrome-btn-border);
 }
-.reader-chrome .btn:hover { background: var(--fill); }
+.reader-chrome .btn:hover {
+  background: var(--fill);
+}
 .reader-chrome .btn.primary {
   background: var(--accent);
   color: #fff;
   border-color: var(--accent);
 }
-.reader-chrome .btn:disabled { opacity: 0.4; cursor: default; }
-.reader-chrome .crumb { display: flex; align-items: center; gap: 6px; font-size: 13px; color: var(--chrome-muted); }
-.reader-chrome .crumb strong { color: var(--chrome-fg); font-weight: 550; }
-.reader-chrome .muted { color: var(--chrome-muted); }
+.reader-chrome .btn:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+.reader-chrome .crumb {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  color: var(--chrome-muted);
+}
+.reader-chrome .crumb strong {
+  color: var(--chrome-fg);
+  font-weight: 550;
+}
+.reader-chrome .muted {
+  color: var(--chrome-muted);
+}
 
 /* Narrow screens (phones). The top bar carries eight controls and ran straight
    off the right edge at 390px, where the last ones became untappable. Wrapping
@@ -1438,9 +1489,18 @@ a {
   font-weight: 600;
   font-size: 14px;
 }
-.drawer-head .btn { margin-left: auto; }
-.drawer-head .btn.primary { margin-left: 0; }
-.drawer-body { flex: 1; min-height: 0; overflow-y: auto; padding: 8px 0; }
+.drawer-head .btn {
+  margin-left: auto;
+}
+.drawer-head .btn.primary {
+  margin-left: 0;
+}
+.drawer-body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 8px 0;
+}
 .drawer-item {
   display: block;
   width: 100%;
@@ -1455,10 +1515,24 @@ a {
   line-height: 1.5;
   border-left: 2px solid transparent;
 }
-.drawer-item:hover { background: var(--fill-2); color: var(--text); }
-.drawer-item.active { background: var(--accent-soft); color: var(--accent); border-left-color: var(--accent); }
-.drawer-item .num { color: var(--text-3); margin-right: 6px; font-size: 11.5px; }
-.drawer-item.group { color: var(--text); font-weight: 600; }
+.drawer-item:hover {
+  background: var(--fill-2);
+  color: var(--text);
+}
+.drawer-item.active {
+  background: var(--accent-soft);
+  color: var(--accent);
+  border-left-color: var(--accent);
+}
+.drawer-item .num {
+  color: var(--text-3);
+  margin-right: 6px;
+  font-size: 11.5px;
+}
+.drawer-item.group {
+  color: var(--text);
+  font-weight: 600;
+}
 .drawer-row {
   display: flex;
   align-items: stretch;
@@ -1478,9 +1552,18 @@ a {
   border-radius: 6px;
   min-width: 0;
 }
-.drawer-row-main:hover { background: var(--fill-2); }
-.drawer-row-title { font-size: 13px; display: flex; align-items: center; gap: 6px; }
-.drawer-row .btn.danger { align-self: center; }
+.drawer-row-main:hover {
+  background: var(--fill-2);
+}
+.drawer-row-title {
+  font-size: 13px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.drawer-row .btn.danger {
+  align-self: center;
+}
 
 /* selection toolbar + annotation popover */
 .sel-toolbar {
@@ -1655,10 +1738,19 @@ a {
   cursor: pointer;
   padding: 0;
 }
-.swatch.sw-yellow { background: #fff3a3; }
-.swatch.sw-green { background: #bdf5c8; }
-.swatch.sw-red { background: #ffc9c9; }
-.swatch.on { outline: 2px solid var(--accent); outline-offset: 1px; }
+.swatch.sw-yellow {
+  background: #fff3a3;
+}
+.swatch.sw-green {
+  background: #bdf5c8;
+}
+.swatch.sw-red {
+  background: #ffc9c9;
+}
+.swatch.on {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
 
 .ann-popover {
   position: fixed;
@@ -1671,7 +1763,11 @@ a {
   padding: 10px;
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.22);
 }
-.ann-pop-colors { display: flex; gap: 6px; margin-bottom: 8px; }
+.ann-pop-colors {
+  display: flex;
+  gap: 6px;
+  margin-bottom: 8px;
+}
 .ann-note {
   width: 100%;
   min-height: 56px;
@@ -1682,11 +1778,27 @@ a {
   font-family: inherit;
   font-size: 13px;
 }
-.ann-pop-actions { display: flex; gap: 6px; margin-top: 8px; justify-content: flex-end; }
-.dot { width: 10px; height: 10px; border-radius: 50%; display: inline-block; }
-.dot.hl-yellow { background: #ffe14d; }
-.dot.hl-green { background: #5fd98a; }
-.dot.hl-red { background: #ff8a8a; }
+.ann-pop-actions {
+  display: flex;
+  gap: 6px;
+  margin-top: 8px;
+  justify-content: flex-end;
+}
+.dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  display: inline-block;
+}
+.dot.hl-yellow {
+  background: #ffe14d;
+}
+.dot.hl-green {
+  background: #5fd98a;
+}
+.dot.hl-red {
+  background: #ff8a8a;
+}
 
 /* ---------- global bookmarks / annotations ---------- */
 /* The tail of a paged word list. Both lists arrive a screenful at a time, so
@@ -2124,7 +2236,10 @@ a {
   border-radius: 9px;
   cursor: pointer;
   font-size: 13px;
-  transition: border-color 0.12s, color 0.12s, background 0.12s;
+  transition:
+    border-color 0.12s,
+    color 0.12s,
+    background 0.12s;
 }
 .add-part-btn:hover {
   border-color: var(--accent);
@@ -2481,7 +2596,6 @@ a {
     display: none;
   }
 }
-
 
 @media (max-width: 980px) {
   .editor-grid {
@@ -3125,7 +3239,10 @@ button.me-dict:disabled {
   border: 1px solid var(--border);
   border-radius: 50%;
   background: var(--panel-2);
-  transition: color 0.2s, border-color 0.2s, background 0.2s;
+  transition:
+    color 0.2s,
+    border-color 0.2s,
+    background 0.2s;
 }
 
 .wifi-orb.on {
@@ -3191,7 +3308,10 @@ button.me-dict:disabled {
   color: #fff;
   background: var(--accent);
   border-color: var(--accent);
-  transition: transform 0.12s ease, background 0.15s ease, border-color 0.15s ease;
+  transition:
+    transform 0.12s ease,
+    background 0.15s ease,
+    border-color 0.15s ease;
 }
 
 .wifi-toggle:hover:not(:disabled) {
@@ -3859,11 +3979,21 @@ button.me-dict:disabled {
   border-radius: 50%;
   border: 1px solid rgba(0, 0, 0, 0.15);
 }
-.rd-theme.t-light .rd-theme-dot { background: linear-gradient(180deg, #ffffff, #f0f2f5); }
-.rd-theme.t-sepia .rd-theme-dot { background: linear-gradient(180deg, #fdfbf6, #f3efe5); }
-.rd-theme.t-green .rd-theme-dot { background: #cde8cf; }
-.rd-theme.t-dark .rd-theme-dot { background: #16181c; }
-.rd-theme.t-midnight .rd-theme-dot { background: linear-gradient(180deg, #182031, #10151f); }
+.rd-theme.t-light .rd-theme-dot {
+  background: linear-gradient(180deg, #ffffff, #f0f2f5);
+}
+.rd-theme.t-sepia .rd-theme-dot {
+  background: linear-gradient(180deg, #fdfbf6, #f3efe5);
+}
+.rd-theme.t-green .rd-theme-dot {
+  background: #cde8cf;
+}
+.rd-theme.t-dark .rd-theme-dot {
+  background: #16181c;
+}
+.rd-theme.t-midnight .rd-theme-dot {
+  background: linear-gradient(180deg, #182031, #10151f);
+}
 .rd-theme.on .rd-theme-dot {
   outline: 2px solid var(--accent);
   outline-offset: 2px;

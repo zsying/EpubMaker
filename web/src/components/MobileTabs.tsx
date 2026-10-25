@@ -28,7 +28,13 @@ const TABS = [
     end: false,
     icon: (
       <svg width="20" height="20" viewBox="0 0 20 20" aria-hidden="true">
-        <path d="M4.5 5 h11 M4.5 9 h11 M4.5 13 h6.5" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+        <path
+          d="M4.5 5 h11 M4.5 9 h11 M4.5 13 h6.5"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="1.5"
+          strokeLinecap="round"
+        />
       </svg>
     ),
   },
@@ -39,7 +45,13 @@ const TABS = [
     icon: (
       <svg width="20" height="20" viewBox="0 0 20 20" aria-hidden="true">
         <circle cx="10" cy="6.5" r="3.2" fill="none" stroke="currentColor" strokeWidth="1.5" />
-        <path d="M4 16.5 c0.9 -3.2 3.2 -4.9 6 -4.9 s5.1 1.7 6 4.9" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+        <path
+          d="M4 16.5 c0.9 -3.2 3.2 -4.9 6 -4.9 s5.1 1.7 6 4.9"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="1.5"
+          strokeLinecap="round"
+        />
       </svg>
     ),
   },

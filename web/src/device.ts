@@ -16,7 +16,9 @@
 export function isTouchPrimary(): boolean {
   if (typeof window === 'undefined' || !window.matchMedia) return false;
   if (window.matchMedia('(any-pointer: fine)').matches) return false;
-  return window.matchMedia('(pointer: coarse)').matches || window.matchMedia('(hover: none)').matches;
+  return (
+    window.matchMedia('(pointer: coarse)').matches || window.matchMedia('(hover: none)').matches
+  );
 }
 
 /** Flags <html> with `touch-primary` once, at boot. */

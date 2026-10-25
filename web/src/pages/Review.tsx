@@ -165,7 +165,9 @@ export default function Review() {
               <>
                 <div className="review-trans">{cur.translation || '（词库无释义）'}</div>
                 {cur.context && (
-                  <div className="review-context">{emphasise(cur.context, [cur.surface, cur.term])}</div>
+                  <div className="review-context">
+                    {emphasise(cur.context, [cur.surface, cur.term])}
+                  </div>
                 )}
               </>
             ) : (

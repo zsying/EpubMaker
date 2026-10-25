@@ -1,4 +1,11 @@
-import { DragEvent as ReactDragEvent, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import {
+  DragEvent as ReactDragEvent,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { useBackClose } from '../backNav';
 import {
@@ -53,7 +60,9 @@ const PAGE_SIZE = 12;
 function isTouchPrimary(): boolean {
   if (typeof window === 'undefined' || !window.matchMedia) return false;
   if (window.matchMedia('(any-pointer: fine)').matches) return false;
-  return window.matchMedia('(pointer: coarse)').matches || window.matchMedia('(hover: none)').matches;
+  return (
+    window.matchMedia('(pointer: coarse)').matches || window.matchMedia('(hover: none)').matches
+  );
 }
 
 export default function Library() {
@@ -150,7 +159,10 @@ export default function Library() {
      A 500ms hold on the cover opens the sheet; any movement cancels it (it is
      a scroll, not a hold), and the click that ends the gesture is swallowed so
      the sheet does not immediately open the reader. */
-  const longPressRef = useRef<{ timer: number | null; fired: boolean }>({ timer: null, fired: false });
+  const longPressRef = useRef<{ timer: number | null; fired: boolean }>({
+    timer: null,
+    fired: false,
+  });
 
   function startLongPress(b: Book) {
     if (!isTouchPrimary()) return;
@@ -316,7 +328,8 @@ export default function Library() {
   const dragDepth = useRef(0);
   // A drag with files in it is an OS file, not an element being dragged inside
   // the page; only the former can be imported.
-  const isFileDrag = (e: ReactDragEvent) => Array.from(e.dataTransfer?.types ?? []).includes('Files');
+  const isFileDrag = (e: ReactDragEvent) =>
+    Array.from(e.dataTransfer?.types ?? []).includes('Files');
 
   async function exportBook(book: Book) {
     try {
@@ -330,7 +343,10 @@ export default function Library() {
   // Opens the native csv picker and builds the local dictionary. This blocks
   // for a few seconds on the full 770k-entry ECDICT export.
   async function doImportDict() {
-    if (dict?.installed && !confirm(`已安装词库（${dict.entries} 条）。重新导入会覆盖现有词库，继续？`)) {
+    if (
+      dict?.installed &&
+      !confirm(`已安装词库（${dict.entries} 条）。重新导入会覆盖现有词库，继续？`)
+    ) {
       return;
     }
     try {
@@ -476,7 +492,12 @@ export default function Library() {
         >
           <svg width="20" height="20" viewBox="0 0 20 20" aria-hidden="true">
             <circle cx="8.6" cy="8.6" r="5.9" fill="none" stroke="currentColor" strokeWidth="1.7" />
-            <path d="M13.2 13.2 L17.4 17.4" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" />
+            <path
+              d="M13.2 13.2 L17.4 17.4"
+              stroke="currentColor"
+              strokeWidth="1.7"
+              strokeLinecap="round"
+            />
           </svg>
         </button>
         {/* 排序 and ＋: phone-only header icons (the desktop header has the
@@ -487,7 +508,12 @@ export default function Library() {
           onClick={() => setSortOpen(true)}
         >
           <svg width="20" height="20" viewBox="0 0 20 20" aria-hidden="true">
-            <path d="M3 6h14M3 10h10M3 14h6" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" />
+            <path
+              d="M3 6h14M3 10h10M3 14h6"
+              stroke="currentColor"
+              strokeWidth="1.7"
+              strokeLinecap="round"
+            />
           </svg>
         </button>
         <button
@@ -496,7 +522,12 @@ export default function Library() {
           onClick={() => setImportOpen(true)}
         >
           <svg width="20" height="20" viewBox="0 0 20 20" aria-hidden="true">
-            <path d="M10 4v12M4 10h12" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" />
+            <path
+              d="M10 4v12M4 10h12"
+              stroke="currentColor"
+              strokeWidth="1.9"
+              strokeLinecap="round"
+            />
           </svg>
         </button>
         <input
@@ -507,7 +538,11 @@ export default function Library() {
           onChange={(e) => setKeyword(e.target.value)}
         />
         {desktop ? (
-          <button className="btn primary import-btn" disabled={importing} onClick={() => void pickAndImport()}>
+          <button
+            className="btn primary import-btn"
+            disabled={importing}
+            onClick={() => void pickAndImport()}
+          >
             {importing ? '导入中…' : '导入 EPUB'}
           </button>
         ) : null}
@@ -536,7 +571,12 @@ export default function Library() {
               const pctLabel = pct > 0 ? `${Math.min(100, Math.round(pct * 100))}%` : null;
               return (
                 <div className="book-card" key={b.id}>
-                  <div className="cover" onClick={() => coverClick(b)} {...holdProps(b)} style={{ cursor: 'pointer' }}>
+                  <div
+                    className="cover"
+                    onClick={() => coverClick(b)}
+                    {...holdProps(b)}
+                    style={{ cursor: 'pointer' }}
+                  >
                     {b.coverUrl ? (
                       <img src={b.coverUrl} alt={b.title} loading="lazy" />
                     ) : (
@@ -701,7 +741,11 @@ export default function Library() {
             </label>
             <div className="edit-cover-row">
               <div className="edit-cover">
-                {editBook.coverUrl ? <img src={editBook.coverUrl} alt="" /> : <span>{editBook.title.slice(0, 2)}</span>}
+                {editBook.coverUrl ? (
+                  <img src={editBook.coverUrl} alt="" />
+                ) : (
+                  <span>{editBook.title.slice(0, 2)}</span>
+                )}
               </div>
               <button className="btn ghost" onClick={() => void changeCover()}>
                 更换封面

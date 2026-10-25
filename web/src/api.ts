@@ -365,17 +365,16 @@ async function call<T>(method: string, ...args: unknown[]): Promise<T> {
 export async function onSharedImport(fn: (path: string) => void): Promise<() => void> {
   if (!hasV3Runtime()) return () => {};
   const runtime = await loadV3Runtime();
-  const off = runtime.Events?.On?.('common:sharedImport', (payload: {
-    name?: string;
-    data?: { path?: string };
-    path?: string;
-  }) => {
-    // The v3 runtime hands the callback the whole {name, data} envelope, not
-    // the bare payload; accept both shapes anyway.
-    const data = payload?.data ?? payload;
-    const path = typeof data === 'string' ? data : data?.path;
-    if (typeof path === 'string' && path) fn(path);
-  });
+  const off = runtime.Events?.On?.(
+    'common:sharedImport',
+    (payload: { name?: string; data?: { path?: string }; path?: string }) => {
+      // The v3 runtime hands the callback the whole {name, data} envelope, not
+      // the bare payload; accept both shapes anyway.
+      const data = payload?.data ?? payload;
+      const path = typeof data === 'string' ? data : data?.path;
+      if (typeof path === 'string' && path) fn(path);
+    },
+  );
   return typeof off === 'function' ? off : () => {};
 }
 
@@ -440,7 +439,10 @@ export async function pickDictFile(): Promise<string | null> {
   return paths[0] ?? null;
 }
 
-/** Calls a bound App (native integration) method: window.go.app.App.<method>. */async function callApp<T>(method: string, ...args: unknown[]): Promise<T> {  const fn = (window as any).go?.app?.App?.[method];
+/** Calls a bound App (native integration) method: window.go.app.App.<method>. */ async function callApp<
+  T,
+>(method: string, ...args: unknown[]): Promise<T> {
+  const fn = (window as any).go?.app?.App?.[method];
   if (typeof fn === 'function') {
     return (await fn(...args)) as T;
   }
@@ -491,15 +493,13 @@ export const api = {
   updateBook: (id: string, patch: Partial<Book> & { coverHref?: string | null }) =>
     call<Book>('UpdateBook', id, patch),
 
-  deleteBook: (id: string) =>
-    call<{ deleted: boolean; movedToTrash: boolean }>('DeleteBook', id),
+  deleteBook: (id: string) => call<{ deleted: boolean; movedToTrash: boolean }>('DeleteBook', id),
 
   trash: () => call<TrashItem[]>('ListTrash'),
 
   restoreTrash: (id: string) => call<Book>('RestoreBook', id),
 
-  purgeTrash: (id: string) =>
-    call<{ purged: boolean; dataKept: boolean }>('PurgeBook', id),
+  purgeTrash: (id: string) => call<{ purged: boolean; dataKept: boolean }>('PurgeBook', id),
 
   listChapters: (bookId: string) => call<Chapter[]>('ListChapters', bookId),
 
@@ -517,7 +517,7 @@ export const api = {
 
   createChapter: (
     bookId: string,
-    body: { title?: string; html?: string; afterChapterId?: string | null }
+    body: { title?: string; html?: string; afterChapterId?: string | null },
   ) => call<Chapter>('CreateChapter', bookId, body),
 
   deleteChapter: (bookId: string, cid: string) =>
@@ -558,8 +558,19 @@ export const api = {
     pageIndex: number,
     text: string,
     color: string,
-    note: string
-  ) => call<Annotation>('AddAnnotation', bookId, chapterId, startOffset, endOffset, pageIndex, text, color, note),
+    note: string,
+  ) =>
+    call<Annotation>(
+      'AddAnnotation',
+      bookId,
+      chapterId,
+      startOffset,
+      endOffset,
+      pageIndex,
+      text,
+      color,
+      note,
+    ),
 
   updateAnnotation: (id: string, color: string, note: string) =>
     call<Annotation>('UpdateAnnotation', id, color, note),
@@ -586,12 +597,11 @@ export const api = {
   split: (
     bookId: string,
     parts: { title: string; author?: string; chapterIds: string[]; coverHref?: string | null }[],
-    deleteSource: boolean
+    deleteSource: boolean,
   ) => call<Book[]>('SplitBook', bookId, parts, deleteSource),
 
   /** Builds the EPUB and returns it inline as { filename, dataUrl }. */
-  exportBook: (bookId: string) =>
-    call<{ filename: string; dataUrl: string }>('ExportBook', bookId),
+  exportBook: (bookId: string) => call<{ filename: string; dataUrl: string }>('ExportBook', bookId),
 
   /* ---------------- WebDAV ---------------- */
   webdavTest: (conn: WebDavConn) => call<WebDavTestResult>('WebdavTest', conn),
@@ -620,11 +630,15 @@ export const api = {
   selectDictFile: () => callApp<string>('SelectDictFile'),
 
   /** Builds the local dictionary from an ECDICT csv chosen on disk. Blocking. */
-  dictImport: (csvPath: string) => call<{ entries: number; path: string }>('DictImportCSV', csvPath),
+  dictImport: (csvPath: string) =>
+    call<{ entries: number; path: string }>('DictImportCSV', csvPath),
 
   /** One in-app downloadable dictionary offered by the Me page. */
   // eslint-disable-next-line @typescript-eslint/no-empty-object-type
-  dictSources: () => call<Array<{ id: string; name: string; desc: string; url: string; bytes: number }>>('DictSources'),
+  dictSources: () =>
+    call<Array<{ id: string; name: string; desc: string; url: string; bytes: number }>>(
+      'DictSources',
+    ),
 
   /** Downloads a catalog source and imports it. Blocking; minutes on a phone. */
   downloadDict: (id: string) => call<{ entries: number; source: string }>('DownloadDict', id),
@@ -638,7 +652,7 @@ export const api = {
     bookId: string,
     chapterId: string,
     offset: number,
-    context: string
+    context: string,
   ) => call<VocabEntry>('VocabAdd', term, surface, bookId, chapterId, offset, context),
 
   /**
@@ -666,5 +680,5 @@ export const api = {
   /** One screenful of every word ever looked up, newest first — the notebook's
    * raw material, and the longest list in the app. */
   listLookupHistory: (keyword: string, offset: number, limit: number) =>
-    call<Page<LookupHit>>('ListLookupHistory', keyword, offset, limit)
+    call<Page<LookupHit>>('ListLookupHistory', keyword, offset, limit),
 };

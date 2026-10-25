@@ -141,13 +141,24 @@ export default function Me() {
               <span className="me-row-desc">{e.desc}</span>
             </span>
             <svg width="14" height="14" viewBox="0 0 14 14" aria-hidden="true">
-              <path d="M5 3 L10 7 L5 11" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+              <path
+                d="M5 3 L10 7 L5 11"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="1.5"
+                strokeLinecap="round"
+              />
             </svg>
           </Link>
         ))}
       </div>
 
-      <button type="button" className="me-dict" disabled={!!busy} onClick={() => setSheetOpen(true)}>
+      <button
+        type="button"
+        className="me-dict"
+        disabled={!!busy}
+        onClick={() => setSheetOpen(true)}
+      >
         <span>查词词库</span>
         <span className={dict?.installed || busy ? 'tag' : 'tag muted-tag'}>{dictDesc}</span>
       </button>
@@ -165,7 +176,11 @@ export default function Me() {
             <button className="sheet-item" onClick={() => void importDictFile()}>
               从本地文件导入（ECDICT CSV）
             </button>
-            <button className="sheet-item cancel" disabled={!!busy} onClick={() => setSheetOpen(false)}>
+            <button
+              className="sheet-item cancel"
+              disabled={!!busy}
+              onClick={() => setSheetOpen(false)}
+            >
               取消
             </button>
           </div>

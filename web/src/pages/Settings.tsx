@@ -21,7 +21,9 @@ import {
  */
 export default function Settings() {
   const [font, setFont] = useState(() => localStorage.getItem(FONT_FAMILY_KEY) || 'default');
-  const [mode, setMode] = useState<ReadMode>(() => (localStorage.getItem(MODE_KEY) as ReadMode) || 'paged');
+  const [mode, setMode] = useState<ReadMode>(
+    () => (localStorage.getItem(MODE_KEY) as ReadMode) || 'paged',
+  );
   const [theme, setTheme] = useState<AppTheme>(() => appTheme());
   // Default ON: without it an EPUB's own font-family beats the picked face.
   const [override, setOverride] = useState(() => localStorage.getItem(FONT_OVERRIDE_KEY) !== '0');
@@ -79,7 +81,9 @@ export default function Settings() {
         <div className="rd-set-row last">
           <span className="rd-set-label">
             覆盖书籍字体
-            <small className="rd-set-desc">开启后所选字体强制应用于正文，忽略 EPUB 内嵌的字体设定</small>
+            <small className="rd-set-desc">
+              开启后所选字体强制应用于正文，忽略 EPUB 内嵌的字体设定
+            </small>
           </span>
           <button
             role="switch"
@@ -97,7 +101,10 @@ export default function Settings() {
         </div>
       </div>
 
-      <p className="settings-hint">主题全局生效（书架、阅读页同时切换）；字体下载一次即可离线使用，阅读器内（Aa 面板）也可随时调整。</p>
+      <p className="settings-hint">
+        主题全局生效（书架、阅读页同时切换）；字体下载一次即可离线使用，阅读器内（Aa
+        面板）也可随时调整。
+      </p>
     </div>
   );
 }

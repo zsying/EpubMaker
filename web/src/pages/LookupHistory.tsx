@@ -120,11 +120,7 @@ export default function LookupHistory() {
       // met. The notebook row is still complete enough to be reviewed.
       await api.vocabAdd(hit.term, hit.term, '', '', 0, '');
       setItems((prev) =>
-        prev.map((it) =>
-          it.term === hit.term
-            ? { ...it, inNotebook: true, status: 'new' }
-            : it,
-        ),
+        prev.map((it) => (it.term === hit.term ? { ...it, inNotebook: true, status: 'new' } : it)),
       );
       toast(`已加入生词本：${hit.term}`, 'success');
     } catch (e) {
@@ -139,10 +135,7 @@ export default function LookupHistory() {
       {/* The number is the whole history, not the part on screen: the page is
           read a screenful at a time, and '40 词' that keeps growing as you
           scroll would be a lie about how much is there. */}
-      <SubHeader
-        title="查词历史"
-        tag={total > 0 ? `共 ${total} 词` : undefined}
-      />
+      <SubHeader title="查词历史" tag={total > 0 ? `共 ${total} 词` : undefined} />
 
       <div className="hist-toolbar">
         <input
@@ -157,9 +150,7 @@ export default function LookupHistory() {
         <div className="loading">加载中…</div>
       ) : items.length === 0 ? (
         <div className="empty">
-          {keyword
-            ? '没有查过这个词。'
-            : '还没有查词记录。阅读时点一下单词，这里就会留下一条。'}
+          {keyword ? '没有查过这个词。' : '还没有查词记录。阅读时点一下单词，这里就会留下一条。'}
         </div>
       ) : (
         <>
@@ -169,13 +160,9 @@ export default function LookupHistory() {
                 <div className="note-card-body hist-body">
                   <div className="vocab-wordline">
                     <span className="vocab-word">{it.term}</span>
-                    {it.phonetic && (
-                      <span className="dict-phon">/{it.phonetic}/</span>
-                    )}
+                    {it.phonetic && <span className="dict-phon">/{it.phonetic}/</span>}
                   </div>
-                  <div className="vocab-trans">
-                    {it.translation || '（词库无释义）'}
-                  </div>
+                  <div className="vocab-trans">{it.translation || '（词库无释义）'}</div>
                   <div className="note-card-meta hist-meta">
                     <span className="hist-when">
                       查过 {it.lookups} 次 · {whenLabel(it.lastAt)}

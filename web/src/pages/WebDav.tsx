@@ -26,7 +26,12 @@ function fmtDate(s: string | null): string {
 }
 
 export default function WebDav() {
-  const [form, setForm] = useState<WebDavConn>({ baseUrl: '', username: '', password: '', insecure: false });
+  const [form, setForm] = useState<WebDavConn>({
+    baseUrl: '',
+    username: '',
+    password: '',
+    insecure: false,
+  });
   const [showPwd, setShowPwd] = useState(false);
   const [connected, setConnected] = useState(false);
   const [conn, setConn] = useState<WebDavConn | null>(null);
@@ -48,7 +53,7 @@ export default function WebDav() {
           baseUrl: c.baseUrl || '',
           username: c.username || '',
           password: c.password || '',
-          insecure: !!c.insecure
+          insecure: !!c.insecure,
         });
       }
     } catch {
@@ -63,10 +68,10 @@ export default function WebDav() {
       setError(null);
       setSelected(new Set());
       try {
-      const list = await api.webdavList(conn, p);
-      setEntries(list);
-      setPath(p);
-      setImportResult(null);
+        const list = await api.webdavList(conn, p);
+        setEntries(list);
+        setPath(p);
+        setImportResult(null);
       } catch (e) {
         setError(e instanceof Error ? e.message : String(e));
         setEntries([]);
@@ -74,7 +79,7 @@ export default function WebDav() {
         setLoading(false);
       }
     },
-    [conn]
+    [conn],
   );
 
   async function connect() {

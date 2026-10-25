@@ -38,7 +38,7 @@ export default function Editor() {
     publisher: '',
     description: '',
     identifier: '',
-    coverHref: null as string | null
+    coverHref: null as string | null,
   });
 
   // 章节编辑
@@ -71,7 +71,7 @@ export default function Editor() {
         publisher: b.publisher,
         description: b.description,
         identifier: b.identifier,
-        coverHref: b.coverHref
+        coverHref: b.coverHref,
       });
     } catch (e) {
       toastError(e);
@@ -155,7 +155,12 @@ export default function Editor() {
     [list[i], list[j]] = [list[j], list[i]];
     setChapters(list);
     try {
-      setChapters(await api.reorderChapters(id, list.map((c) => c.id)));
+      setChapters(
+        await api.reorderChapters(
+          id,
+          list.map((c) => c.id),
+        ),
+      );
     } catch (e) {
       toastError(e);
       void reload();
@@ -174,7 +179,12 @@ export default function Editor() {
     list.splice(ti, 0, moved);
     setChapters(list);
     try {
-      setChapters(await api.reorderChapters(id, list.map((c) => c.id)));
+      setChapters(
+        await api.reorderChapters(
+          id,
+          list.map((c) => c.id),
+        ),
+      );
     } catch (e) {
       toastError(e);
       void reload();
@@ -222,9 +232,18 @@ export default function Editor() {
   async function mergeSelected() {
     const ordered = chapters.filter((c) => selected.has(c.id));
     if (ordered.length < 2) return;
-    if (!confirm(`把后 ${ordered.length - 1} 章的正文合并到「${ordered[0].title}」？被合并的章节会从目录移除。`)) return;
+    if (
+      !confirm(
+        `把后 ${ordered.length - 1} 章的正文合并到「${ordered[0].title}」？被合并的章节会从目录移除。`,
+      )
+    )
+      return;
     try {
-      const cs = await api.mergeChapters(id, ordered[0].id, ordered.slice(1).map((c) => c.id));
+      const cs = await api.mergeChapters(
+        id,
+        ordered[0].id,
+        ordered.slice(1).map((c) => c.id),
+      );
       setChapters(cs);
       setSelected(new Set());
       toast('已合并', 'success');
@@ -338,16 +357,32 @@ export default function Editor() {
                     {it.chapter.title}
                   </span>
                   <span className="ops" onClick={(e) => e.stopPropagation()}>
-                    <button className="icon-btn" title="上移" onClick={() => void move(it.chapter.id, -1)}>
+                    <button
+                      className="icon-btn"
+                      title="上移"
+                      onClick={() => void move(it.chapter.id, -1)}
+                    >
                       ↑
                     </button>
-                    <button className="icon-btn" title="下移" onClick={() => void move(it.chapter.id, 1)}>
+                    <button
+                      className="icon-btn"
+                      title="下移"
+                      onClick={() => void move(it.chapter.id, 1)}
+                    >
                       ↓
                     </button>
-                    <button className="icon-btn" title="重命名" onClick={() => void renameChapter(it.chapter)}>
+                    <button
+                      className="icon-btn"
+                      title="重命名"
+                      onClick={() => void renameChapter(it.chapter)}
+                    >
                       ✎
                     </button>
-                    <button className="icon-btn danger" title="移除" onClick={() => void removeChapter(it.chapter)}>
+                    <button
+                      className="icon-btn danger"
+                      title="移除"
+                      onClick={() => void removeChapter(it.chapter)}
+                    >
                       ✕
                     </button>
                   </span>
@@ -364,7 +399,10 @@ export default function Editor() {
         {/* 右侧 */}
         <div className="pane">
           <div className="tabs">
-            <button className={`tab${tab === 'book' ? ' active' : ''}`} onClick={() => setTab('book')}>
+            <button
+              className={`tab${tab === 'book' ? ' active' : ''}`}
+              onClick={() => setTab('book')}
+            >
               书籍信息
             </button>
             <button
@@ -450,7 +488,12 @@ export default function Editor() {
                       className={`cover-pick${!form.coverHref ? ' active' : ''}`}
                       onClick={() => setForm({ ...form, coverHref: null })}
                       title="不使用封面"
-                      style={{ display: 'grid', placeItems: 'center', fontSize: 11, color: 'var(--text-3)' }}
+                      style={{
+                        display: 'grid',
+                        placeItems: 'center',
+                        fontSize: 11,
+                        color: 'var(--text-3)',
+                      }}
                     >
                       无
                     </button>
@@ -514,7 +557,10 @@ export default function Editor() {
                   </button>
                 </div>
                 {preview ? (
-                  <div className="preview-box reader-content" dangerouslySetInnerHTML={{ __html: safePreview }} />
+                  <div
+                    className="preview-box reader-content"
+                    dangerouslySetInnerHTML={{ __html: safePreview }}
+                  />
                 ) : (
                   <textarea
                     className="textarea"
@@ -527,7 +573,11 @@ export default function Editor() {
                   />
                 )}
                 <div className="toolbar" style={{ marginTop: 12 }}>
-                  <button className="btn primary" disabled={saving || !chDirty} onClick={() => void saveChapter()}>
+                  <button
+                    className="btn primary"
+                    disabled={saving || !chDirty}
+                    onClick={() => void saveChapter()}
+                  >
                     {saving ? '保存中…' : chDirty ? '保存章节' : '已保存'}
                   </button>
                   <Link className="btn" to={`/books/${id}/read/${currentId}`}>

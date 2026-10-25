@@ -39,7 +39,9 @@ export function speakWord(word: string) {
     }
     current = null;
   }
-  const audio = new Audio(`https://dict.youdao.com/dictvoice?audio=${encodeURIComponent(w.toLowerCase())}&type=2`);
+  const audio = new Audio(
+    `https://dict.youdao.com/dictvoice?audio=${encodeURIComponent(w.toLowerCase())}&type=2`,
+  );
   current = audio;
   let done = false;
   const fail = () => {

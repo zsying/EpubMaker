@@ -44,7 +44,8 @@ export function appTheme(): AppTheme {
   // Old installs picked a reading background; map it onto the matching app
   // theme so nobody's choice is silently dropped.
   const legacy = localStorage.getItem(LEGACY_THEME_KEY);
-  const migrated = legacy === 'dark' ? 'dark' : legacy === 'green' ? 'green' : legacy === 'paper' ? 'sepia' : null;
+  const migrated =
+    legacy === 'dark' ? 'dark' : legacy === 'green' ? 'green' : legacy === 'paper' ? 'sepia' : null;
   if (migrated) {
     localStorage.setItem(APP_THEME_KEY, migrated);
     return migrated;

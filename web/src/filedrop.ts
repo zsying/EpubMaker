@@ -16,7 +16,10 @@ import { toast } from './toast';
 type DropListener = (paths: string[]) => void;
 
 type WailsRuntime = {
-  OnFileDrop?: (cb: (x: number, y: number, paths: string[]) => void, useDropTarget: boolean) => void;
+  OnFileDrop?: (
+    cb: (x: number, y: number, paths: string[]) => void,
+    useDropTarget: boolean,
+  ) => void;
 };
 
 type WailsFlags = {

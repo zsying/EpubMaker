@@ -108,10 +108,16 @@ export default function WifiShare() {
           {running ? '传书中' : '未开启'}
         </div>
         <p className="wifi-desc">
-          在同一 Wi-Fi 下，用电脑浏览器打开下方地址（或扫码），即可把 EPUB 文件推送到本书架。传输不经过任何服务器。
+          在同一 Wi-Fi 下，用电脑浏览器打开下方地址（或扫码），即可把 EPUB
+          文件推送到本书架。传输不经过任何服务器。
         </p>
 
-        <button type="button" className={`btn wifi-toggle${running ? ' on' : ''}`} disabled={busy} onClick={() => void toggle()}>
+        <button
+          type="button"
+          className={`btn wifi-toggle${running ? ' on' : ''}`}
+          disabled={busy}
+          onClick={() => void toggle()}
+        >
           {running ? (
             <svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
               <rect x="6" y="6" width="12" height="12" rx="2.5" />
@@ -133,19 +139,44 @@ export default function WifiShare() {
       {running && (
         <div className="wifi-live">
           <div className="wifi-qr-card">
-            <img className="wifi-qr" src={qr} alt="传书地址二维码" style={{ opacity: qr ? 1 : 0 }} />
+            <img
+              className="wifi-qr"
+              src={qr}
+              alt="传书地址二维码"
+              style={{ opacity: qr ? 1 : 0 }}
+            />
             {!qr && <div className="wifi-qr-loading" />}
             <div className="wifi-qr-label">电脑浏览器扫码打开</div>
           </div>
 
-          <button type="button" className="wifi-url" onClick={() => void copyAddress()} title="点击复制">
+          <button
+            type="button"
+            className="wifi-url"
+            onClick={() => void copyAddress()}
+            title="点击复制"
+          >
             {status.url}
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-              <rect x="9" y="9" width="11" height="11" rx="2" stroke="currentColor" strokeWidth="1.8" />
-              <path d="M5 15V6a2 2 0 0 1 2-2h9" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+              <rect
+                x="9"
+                y="9"
+                width="11"
+                height="11"
+                rx="2"
+                stroke="currentColor"
+                strokeWidth="1.8"
+              />
+              <path
+                d="M5 15V6a2 2 0 0 1 2-2h9"
+                stroke="currentColor"
+                strokeWidth="1.8"
+                strokeLinecap="round"
+              />
             </svg>
           </button>
-          <div className="wifi-hint">手机与电脑需连接同一 Wi-Fi；传输期间请保持本页在后台运行。</div>
+          <div className="wifi-hint">
+            手机与电脑需连接同一 Wi-Fi；传输期间请保持本页在后台运行。
+          </div>
         </div>
       )}
 

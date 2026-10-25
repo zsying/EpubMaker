@@ -7,7 +7,16 @@ import { Caret } from '../Caret';
 import { toast, toastError } from '../toast';
 import SubHeader from '../components/SubHeader';
 
-const COLORS = ['#2f6bff', '#e2725b', '#1a9c62', '#a05ce0', '#d9a12b', '#0e9ba8', '#d94f8a', '#6b7a90'];
+const COLORS = [
+  '#2f6bff',
+  '#e2725b',
+  '#1a9c62',
+  '#a05ce0',
+  '#d9a12b',
+  '#0e9ba8',
+  '#d94f8a',
+  '#6b7a90',
+];
 
 interface Part {
   title: string;
@@ -24,7 +33,7 @@ function CoverGallery({
   part,
   images,
   inheritUrl,
-  onPick
+  onPick,
 }: {
   part: Part;
   images: ImageAsset[];
@@ -33,10 +42,15 @@ function CoverGallery({
 }) {
   const items: { key: string; label: string; href: string; thumb: string | null }[] = [
     { key: '__inherit', label: '原书封面', href: '', thumb: inheritUrl },
-    { key: '__none', label: '不使用', href: NO_COVER, thumb: null }
+    { key: '__none', label: '不使用', href: NO_COVER, thumb: null },
   ];
   for (const img of images) {
-    items.push({ key: img.href, label: img.href.split('/').pop() || img.href, href: img.href, thumb: img.url });
+    items.push({
+      key: img.href,
+      label: img.href.split('/').pop() || img.href,
+      href: img.href,
+      thumb: img.url,
+    });
   }
 
   return (
@@ -53,7 +67,9 @@ function CoverGallery({
             title={it.label}
             onClick={() => onPick(it.href)}
           >
-            <span className="thumb">{it.thumb ? <img src={it.thumb} alt={it.label} /> : <span>{phText}</span>}</span>
+            <span className="thumb">
+              {it.thumb ? <img src={it.thumb} alt={it.label} /> : <span>{phText}</span>}
+            </span>
             <span className="label">{it.label}</span>
           </button>
         );
@@ -70,7 +86,7 @@ function describeCover(part: Part, images: ImageAsset[], inheritUrl: string | nu
   return {
     label: img ? img.href.split('/').pop() || img.href : part.coverHref,
     thumb: img?.url ?? null,
-    ph: '图'
+    ph: '图',
   };
 }
 
@@ -84,7 +100,7 @@ function CoverField({
   inheritUrl,
   open,
   onToggle,
-  onPick
+  onPick,
 }: {
   part: Part;
   images: ImageAsset[];
@@ -101,18 +117,28 @@ function CoverField({
           {cur.thumb ? <img src={cur.thumb} alt={cur.label} /> : <span>{cur.ph}</span>}
         </span>
         <div className="cover-meta">
-          <div className="muted" style={{ fontSize: 11.5 }}>封面</div>
-          <div className="cover-cur" title={cur.label}>{cur.label}</div>
+          <div className="muted" style={{ fontSize: 11.5 }}>
+            封面
+          </div>
+          <div className="cover-cur" title={cur.label}>
+            {cur.label}
+          </div>
         </div>
-        <button className="btn sm" onClick={onToggle}>更换封面</button>
+        <button className="btn sm" onClick={onToggle}>
+          更换封面
+        </button>
       </div>
     );
   }
   return (
     <div className="cover-field open">
       <div className="cover-field-head">
-        <span className="muted" style={{ fontSize: 11.5 }}>选择封面（点击缩略图）</span>
-        <button className="btn sm ghost" onClick={onToggle}>收起</button>
+        <span className="muted" style={{ fontSize: 11.5 }}>
+          选择封面（点击缩略图）
+        </span>
+        <button className="btn sm ghost" onClick={onToggle}>
+          收起
+        </button>
       </div>
       <CoverGallery
         part={part}
@@ -131,7 +157,7 @@ function CoverField({
 function ChapterPreview({
   bookId,
   chapter,
-  onClose
+  onClose,
 }: {
   bookId: string;
   chapter: Chapter;
@@ -166,8 +192,9 @@ function ChapterPreview({
   }, [onClose]);
 
   const safeHtml = useMemo(
-    () => DOMPurify.sanitize(html, { ADD_ATTR: ['target'], FORBID_TAGS: ['script', 'style', 'link'] }),
-    [html]
+    () =>
+      DOMPurify.sanitize(html, { ADD_ATTR: ['target'], FORBID_TAGS: ['script', 'style', 'link'] }),
+    [html],
   );
 
   return (
@@ -177,7 +204,9 @@ function ChapterPreview({
           <strong className="modal-title" title={chapter.title}>
             {chapter.title}
           </strong>
-          <span className="muted" style={{ fontSize: 12, flex: 'none' }}>#{chapter.index + 1}</span>
+          <span className="muted" style={{ fontSize: 12, flex: 'none' }}>
+            #{chapter.index + 1}
+          </span>
           <span style={{ flex: 1 }} />
           <button className="icon-btn" title="关闭" onClick={onClose}>
             ✕
@@ -239,7 +268,7 @@ export default function Split() {
         setToc(tocTree);
         setParts([
           { title: `${b.title} 上`, author: b.author, coverHref: '' },
-          { title: `${b.title} 下`, author: b.author, coverHref: '' }
+          { title: `${b.title} 下`, author: b.author, coverHref: '' },
         ]);
         const half = Math.ceil(cs.length / 2);
         const a: Record<string, number> = {};
@@ -316,16 +345,12 @@ export default function Split() {
         title: p.title.trim() || `分卷 ${i + 1}`,
         author: p.author,
         chapterIds: chapters.filter((c) => assign[c.id] === i).map((c) => c.id),
-        coverHref: p.coverHref === '' ? undefined : p.coverHref === NO_COVER ? null : p.coverHref
+        coverHref: p.coverHref === '' ? undefined : p.coverHref === NO_COVER ? null : p.coverHref,
       }))
       .filter((p) => p.chapterIds.length > 0);
 
     if (!payload.length) return toast('每个分卷都为空，无法拆分', 'error');
-    if (
-      deleteSource &&
-      !confirm('拆分完成后将删除原书籍，且不可恢复。确定继续吗？')
-    )
-      return;
+    if (deleteSource && !confirm('拆分完成后将删除原书籍，且不可恢复。确定继续吗？')) return;
 
     setBusy(true);
     try {
@@ -382,7 +407,10 @@ export default function Split() {
                 const p = assign[c.id] ?? -1;
                 return (
                   <div className="split-row" key={c.id} style={{ paddingLeft: 10 + it.level * 16 }}>
-                    <span className="idx muted" style={{ width: 30, textAlign: 'right', fontSize: 11.5 }}>
+                    <span
+                      className="idx muted"
+                      style={{ width: 30, textAlign: 'right', fontSize: 11.5 }}
+                    >
                       {c.index + 1}
                     </span>
                     <button
@@ -454,7 +482,10 @@ export default function Split() {
               <button
                 className="btn sm"
                 onClick={() =>
-                  setParts([...parts, { title: `分卷 ${parts.length + 1}`, author: book.author, coverHref: '' }])
+                  setParts([
+                    ...parts,
+                    { title: `分卷 ${parts.length + 1}`, author: book.author, coverHref: '' },
+                  ])
                 }
               >
                 + 分卷
@@ -479,7 +510,7 @@ export default function Split() {
                       setParts(next);
                       setAssign(a);
                       setOpenCoverFor((prev) =>
-                        prev === null ? null : prev === i ? null : prev > i ? prev - 1 : prev
+                        prev === null ? null : prev === i ? null : prev > i ? prev - 1 : prev,
                       );
                     }}
                   >
@@ -516,14 +547,19 @@ export default function Split() {
             <button
               className="add-part-btn"
               onClick={() =>
-                setParts([...parts, { title: `分卷 ${parts.length + 1}`, author: book.author, coverHref: '' }])
+                setParts([
+                  ...parts,
+                  { title: `分卷 ${parts.length + 1}`, author: book.author, coverHref: '' },
+                ])
               }
             >
               + 添加分卷
             </button>
 
             <div className="toolbar" style={{ marginTop: 10 }}>
-              <span className="muted" style={{ fontSize: 12 }}>按层次分卷：</span>
+              <span className="muted" style={{ fontSize: 12 }}>
+                按层次分卷：
+              </span>
               <select
                 className="select"
                 style={{ width: 92 }}
@@ -537,13 +573,19 @@ export default function Split() {
               <button
                 className="btn sm"
                 disabled={toc.length === 0}
-                title={toc.length === 0 ? '本书无层级目录，无法按层次分卷' : '按所选层级把每个分组拆成一卷'}
+                title={
+                  toc.length === 0
+                    ? '本书无层级目录，无法按层次分卷'
+                    : '按所选层级把每个分组拆成一卷'
+                }
                 onClick={() => applyHierarchySplit(splitLevel)}
               >
                 生成分卷
               </button>
               {toc.length === 0 && (
-                <span className="muted" style={{ fontSize: 11.5 }}>本书无层级目录</span>
+                <span className="muted" style={{ fontSize: 11.5 }}>
+                  本书无层级目录
+                </span>
               )}
             </div>
 
@@ -558,11 +600,28 @@ export default function Split() {
           </div>
 
           <div className="pane">
-            <label style={{ display: 'flex', gap: 8, alignItems: 'center', fontSize: 13, marginBottom: 12 }}>
-              <input type="checkbox" checked={deleteSource} onChange={(e) => setDeleteSource(e.target.checked)} />
+            <label
+              style={{
+                display: 'flex',
+                gap: 8,
+                alignItems: 'center',
+                fontSize: 13,
+                marginBottom: 12,
+              }}
+            >
+              <input
+                type="checkbox"
+                checked={deleteSource}
+                onChange={(e) => setDeleteSource(e.target.checked)}
+              />
               拆分成功后删除原书籍
             </label>
-            <button className="btn primary" style={{ width: '100%', height: 36 }} disabled={busy} onClick={() => void run()}>
+            <button
+              className="btn primary"
+              style={{ width: '100%', height: 36 }}
+              disabled={busy}
+              onClick={() => void run()}
+            >
               {busy ? '拆分中…' : '开始拆分'}
             </button>
             <div className="muted" style={{ fontSize: 11.5, marginTop: 10, lineHeight: 1.7 }}>

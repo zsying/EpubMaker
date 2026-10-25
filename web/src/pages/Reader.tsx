@@ -1,12 +1,36 @@
-import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type MouseEvent as ReactMouseEvent } from 'react';
+import {
+  Fragment,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  type CSSProperties,
+  type MouseEvent as ReactMouseEvent,
+} from 'react';
 import { Link, useLocation, useNavigate, useParams } from 'react-router-dom';
 import DOMPurify from 'dompurify';
-import { api, Annotation, Book, Bookmark, Chapter, LookupResult, ReadingProgress, TocEntry } from '../api';
+import {
+  api,
+  Annotation,
+  Book,
+  Bookmark,
+  Chapter,
+  LookupResult,
+  ReadingProgress,
+  TocEntry,
+} from '../api';
 import { Caret } from '../Caret';
 import { toast, toastError } from '../toast';
 import { Anchor, EDGE_GAP, placeOverlay } from '../overlay';
 import { wordAt, isCJK } from '../wordHit';
-import { charOffset, getSelectionOffsets, CHAPTER_PURIFY, sentenceAt, textNodeAt } from '../sentence';
+import {
+  charOffset,
+  getSelectionOffsets,
+  CHAPTER_PURIFY,
+  sentenceAt,
+  textNodeAt,
+} from '../sentence';
 import { speakWord } from '../speech';
 import {
   MODE_KEY,
@@ -193,7 +217,12 @@ function TocNode({
     <>
       <div className="toc-row" style={{ paddingLeft: depth * 16 }}>
         {hasKids ? (
-          <button type="button" className="toc-caret" onClick={toggle} aria-label={open ? '折叠' : '展开'}>
+          <button
+            type="button"
+            className="toc-caret"
+            onClick={toggle}
+            aria-label={open ? '折叠' : '展开'}
+          >
             <Caret open={open} />
           </button>
         ) : (
@@ -302,7 +331,12 @@ type Highlight = { id: string; startOffset: number; endOffset: number; color?: s
 // revealed once measured — otherwise it would paint once at its clipped
 // position. `revision` re-measures when the content changes height, e.g. when
 // the dictionary card grows its "already saved" footer.
-function useAnchoredOverlay(anchor: Anchor | null, prefer: 'above' | 'below', gap: number, revision: unknown) {
+function useAnchoredOverlay(
+  anchor: Anchor | null,
+  prefer: 'above' | 'below',
+  gap: number,
+  revision: unknown,
+) {
   const ref = useRef<HTMLDivElement>(null);
   const [pos, setPos] = useState<{ left: number; top: number } | null>(null);
 
@@ -412,7 +446,8 @@ function applyHighlights(root: HTMLElement, anns: Highlight[]) {
     for (const a of overlaps) {
       const a0 = Math.max(a.startOffset, ns);
       const a1 = Math.min(a.endOffset, ne);
-      if (a0 > p) frag.appendChild(document.createTextNode(node.textContent!.slice(p - ns, a0 - ns)));
+      if (a0 > p)
+        frag.appendChild(document.createTextNode(node.textContent!.slice(p - ns, a0 - ns)));
       const mark = document.createElement('mark');
       mark.className = 'hl hl-' + (a.color || 'yellow');
       mark.dataset.annId = a.id;
@@ -464,7 +499,9 @@ export default function Reader() {
   const [loading, setLoading] = useState(true);
   const [fontSize, setFontSize] = useState(() => Number(localStorage.getItem(FONT_KEY)) || 17);
 
-  const [mode, setMode] = useState<ReadMode>(() => (localStorage.getItem(MODE_KEY) as ReadMode) || 'paged');
+  const [mode, setMode] = useState<ReadMode>(
+    () => (localStorage.getItem(MODE_KEY) as ReadMode) || 'paged',
+  );
   // Theme is app-wide (html[data-app-theme]); the Aa sheet only edits it. A
   // local mirror keeps the picker's tick mark honest while the panel is open.
   const [theme, setTheme] = useState<AppTheme>(() => appTheme());
@@ -472,7 +509,9 @@ export default function Reader() {
   // Reading font: 'default' (system) or the file name of a downloaded font.
   // `fontEpoch` increments once the custom face has actually loaded, so the
   // paged layout re-measures against the real metrics instead of the fallback's.
-  const [readFont, setReadFont] = useState<string>(() => localStorage.getItem(FONT_FAMILY_KEY) || 'default');
+  const [readFont, setReadFont] = useState<string>(
+    () => localStorage.getItem(FONT_FAMILY_KEY) || 'default',
+  );
   // When on, the picked face beats the families an EPUB embeds (inline CSS or
   // stylesheets would otherwise win the cascade and the choice would appear to
   // do nothing for most books).
@@ -562,21 +601,36 @@ export default function Reader() {
   useBackClose(annOpen, () => setAnnOpen(false));
   // A jump from the notebook or an annotation list has to be visible, not just
   // correct: this is a transient highlight over the landed-on text.
-  const [flash, setFlash] = useState<{ left: number; top: number; width: number; height: number } | null>(null);
+  const [flash, setFlash] = useState<{
+    left: number;
+    top: number;
+    width: number;
+    height: number;
+  } | null>(null);
 
   // Overlay placement: the selection toolbar prefers the space above the text,
   // the dictionary card and annotation popover the space below. Each flips to
   // the other side when its preferred direction has no room, and all three are
   // clamped sideways, so a word picked at the margin of the window no longer
   // pushes its card partly off screen.
-  const selPos = useAnchoredOverlay(sel && { x: sel.x, top: sel.y, bottom: sel.bottom }, 'above', EDGE_GAP, sel?.start);
+  const selPos = useAnchoredOverlay(
+    sel && { x: sel.x, top: sel.y, bottom: sel.bottom },
+    'above',
+    EDGE_GAP,
+    sel?.start,
+  );
   const dictPos = useAnchoredOverlay(
     lookupCard && { x: lookupCard.x, top: lookupCard.top, bottom: lookupCard.bottom },
     'below',
     14,
     `${lookupCard?.res.found}-${lookupCard?.res.recorded}`,
   );
-  const popPos = useAnchoredOverlay(popover && { x: popover.x, top: popover.y, bottom: popover.y }, 'below', 0, popover?.ann.id);
+  const popPos = useAnchoredOverlay(
+    popover && { x: popover.x, top: popover.y, bottom: popover.y },
+    'below',
+    0,
+    popover?.ann.id,
+  );
 
   const mainRef = useRef<HTMLDivElement>(null);
   const stageRef = useRef<HTMLDivElement>(null);
@@ -728,7 +782,10 @@ export default function Reader() {
   // Theme persists through applyAppTheme at pick time; nothing to save here.
   useEffect(() => localStorage.setItem(TOC_DOCK_KEY, tocDocked ? '1' : '0'), [tocDocked]);
   useEffect(() => localStorage.setItem(FONT_FAMILY_KEY, readFont), [readFont]);
-  useEffect(() => localStorage.setItem(FONT_OVERRIDE_KEY, fontOverride ? '1' : '0'), [fontOverride]);
+  useEffect(
+    () => localStorage.setItem(FONT_OVERRIDE_KEY, fontOverride ? '1' : '0'),
+    [fontOverride],
+  );
 
   // Registers the selected reading font once per change and re-measures the
   // paged layout after the face is really loaded: a font swap changes every
@@ -781,7 +838,7 @@ export default function Reader() {
 
   const annotationsForChapter = useMemo(
     () => annotations.filter((a) => a.chapterId === current),
-    [annotations, current]
+    [annotations, current],
   );
 
   // Scroll-mode counterpart of the paged offset restore. Paged mode resolves
@@ -806,7 +863,12 @@ export default function Reader() {
     // Landing counts as a position: record it, otherwise a reader who jumps
     // back and leaves immediately would find the old anchor next time.
     if (current) api.saveProgress(id, current, target, 1).catch(() => {});
-    setFlash({ left: after.left - 2, top: after.top - 3, width: Math.max(after.width, 6), height: after.height + 6 });
+    setFlash({
+      left: after.left - 2,
+      top: after.top - 3,
+      width: Math.max(after.width, 6),
+      height: after.height + 6,
+    });
     const timer = window.setTimeout(() => setFlash(null), 1400);
     return () => window.clearTimeout(timer);
   }, [safeHtml, mode, preview]);
@@ -817,9 +879,15 @@ export default function Reader() {
     if (mode !== 'scroll' || preview?.source !== 'vocab' || !preview.word) return;
     const el = contentRef.current;
     if (!el || el.querySelector('mark.hl-vocab')) return;
-    const r = wordRangeAt(el, preview.offset, [preview.surface, preview.word].filter((s): s is string => !!s));
+    const r = wordRangeAt(
+      el,
+      preview.offset,
+      [preview.surface, preview.word].filter((s): s is string => !!s),
+    );
     if (!r) return;
-    applyHighlights(el, [{ id: ANCHOR_ID, startOffset: r.start, endOffset: r.end, color: 'vocab' }]);
+    applyHighlights(el, [
+      { id: ANCHOR_ID, startOffset: r.start, endOffset: r.end, color: 'vocab' },
+    ]);
   }, [safeHtml, mode, preview]);
 
   /* ---- imperatively set content + highlights (paged mode) ---- */
@@ -831,12 +899,19 @@ export default function Reader() {
     // turns: the markup lives in the chapter, not in a floating layer.
     const anchor =
       preview && preview.word
-        ? wordRangeAt(el, preview.offset, [preview.surface, preview.word].filter((s): s is string => !!s))
+        ? wordRangeAt(
+            el,
+            preview.offset,
+            [preview.surface, preview.word].filter((s): s is string => !!s),
+          )
         : null;
     applyHighlights(
       el,
       anchor
-        ? [...annotationsForChapter, { id: ANCHOR_ID, startOffset: anchor.start, endOffset: anchor.end, color: 'vocab' }]
+        ? [
+            ...annotationsForChapter,
+            { id: ANCHOR_ID, startOffset: anchor.start, endOffset: anchor.end, color: 'vocab' },
+          ]
         : annotationsForChapter,
     );
     el.querySelectorAll('img').forEach((img) => {
@@ -1188,7 +1263,11 @@ export default function Reader() {
     range.setEnd(hit.node, end);
 
     const rect = range.getBoundingClientRect();
-    const top = rect.top - scroller.getBoundingClientRect().top + scroller.scrollTop - scroller.clientHeight / 3;
+    const top =
+      rect.top -
+      scroller.getBoundingClientRect().top +
+      scroller.scrollTop -
+      scroller.clientHeight / 3;
     scroller.scrollTo({ top: Math.max(0, top), behavior: 'auto' });
 
     // Measured again after scrolling so the caller's highlight lands on the
@@ -1197,7 +1276,12 @@ export default function Reader() {
   }
 
   function flashAt(box: { left: number; top: number; width: number; height: number }) {
-    setFlash({ left: box.left - 2, top: box.top - 3, width: Math.max(box.width, 6), height: box.height + 6 });
+    setFlash({
+      left: box.left - 2,
+      top: box.top - 3,
+      width: Math.max(box.width, 6),
+      height: box.height + 6,
+    });
     window.setTimeout(() => setFlash(null), 1400);
   }
 
@@ -1216,7 +1300,11 @@ export default function Reader() {
       caretRangeFromPoint?: (x: number, y: number) => Range | null;
     };
     const caret = doc.caretRangeFromPoint?.(x, y);
-    if (caret && caret.startContainer.nodeType === Node.TEXT_NODE && root.contains(caret.startContainer)) {
+    if (
+      caret &&
+      caret.startContainer.nodeType === Node.TEXT_NODE &&
+      root.contains(caret.startContainer)
+    ) {
       return charOffset(root, caret.startContainer, caret.startOffset);
     }
     // Fallback for engines without caretRangeFromPoint: the first text node
@@ -1282,7 +1370,7 @@ export default function Reader() {
     const ch = byHref.get(docKey(href));
     return ch?.id;
   };
-  const currentChapter = current ? chapters.find((c) => c.id === current) ?? null : null;
+  const currentChapter = current ? (chapters.find((c) => c.id === current) ?? null) : null;
   const activeDoc = currentChapter?.href ?? null;
   // Active highlight for the hierarchical TOC (no-op for flat-legacy books).
   const activeSet = useMemo(
@@ -1601,7 +1689,8 @@ export default function Reader() {
     // inside them is a button/input (matched below), and a swipe that starts
     // on the word card must still turn the page.
     const isNativeTarget = (t: EventTarget | null): boolean =>
-      !!(t instanceof Element &&
+      !!(
+        t instanceof Element &&
         (t.closest('.drawer-mask') ||
           t.closest('.sheet-mask') ||
           t.closest('.reader-chrome') ||
@@ -1609,7 +1698,8 @@ export default function Reader() {
           t.closest('button') ||
           t.closest('input') ||
           t.closest('textarea') ||
-          t.closest('a')));
+          t.closest('a'))
+      );
 
     const onStart = (e: TouchEvent) => {
       lpFired = false;
@@ -1833,16 +1923,34 @@ export default function Reader() {
       // of the overlay.
       if (e.key === 'Escape') {
         // Overlays are checked innermost first.
-        if (lookupCard) { setLookupCard(null); return; }
-        if (popover) { setPopover(null); return; }
+        if (lookupCard) {
+          setLookupCard(null);
+          return;
+        }
+        if (popover) {
+          setPopover(null);
+          return;
+        }
         if (sel) {
           clearSelectionUI();
           return;
         }
-        if (settingsOpen) { setSettingsOpen(false); return; }
-        if (tocOpen) { setTocOpen(false); return; }
-        if (bmOpen) { setBmOpen(false); return; }
-        if (annOpen) { setAnnOpen(false); return; }
+        if (settingsOpen) {
+          setSettingsOpen(false);
+          return;
+        }
+        if (tocOpen) {
+          setTocOpen(false);
+          return;
+        }
+        if (bmOpen) {
+          setBmOpen(false);
+          return;
+        }
+        if (annOpen) {
+          setAnnOpen(false);
+          return;
+        }
         // A bar raised by hovering the edge is not state anyone chose, but it
         // is still on screen. Both ways of showing it count as one layer: the
         // pointer is usually resting in the edge band when the bars are open,
@@ -1898,7 +2006,25 @@ export default function Reader() {
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [mode, prev, next, pageIndex, pageCount, chromeOpen, chromeHover, popover, sel, bmOpen, annOpen, tocOpen, settingsOpen, lookupCard, current, id, preview]);
+  }, [
+    mode,
+    prev,
+    next,
+    pageIndex,
+    pageCount,
+    chromeOpen,
+    chromeHover,
+    popover,
+    sel,
+    bmOpen,
+    annOpen,
+    tocOpen,
+    settingsOpen,
+    lookupCard,
+    current,
+    id,
+    preview,
+  ]);
 
   /* ---- hover the top/bottom edge to reveal the reader chrome (paged) ---- */
   useEffect(() => {
@@ -2062,7 +2188,11 @@ export default function Reader() {
       // The handle hangs below the text line; aim ~20px above the finger so
       // the caret lands on the line being adjusted.
       const caret = doc.caretRangeFromPoint?.(px, py - 20);
-      if (!caret || caret.startContainer.nodeType !== Node.TEXT_NODE || !root.contains(caret.startContainer)) {
+      if (
+        !caret ||
+        caret.startContainer.nodeType !== Node.TEXT_NODE ||
+        !root.contains(caret.startContainer)
+      ) {
         return;
       }
       const range = document.createRange();
@@ -2402,7 +2532,14 @@ export default function Reader() {
     const entry = res.entry;
     if (!entry) return;
     try {
-      const v = await api.vocabAdd(entry.word, res.query || entry.word, id, current || '', offset, context);
+      const v = await api.vocabAdd(
+        entry.word,
+        res.query || entry.word,
+        id,
+        current || '',
+        offset,
+        context,
+      );
       setLookupCard({ ...lookupCard, res: { ...res, recorded: true, vocabId: v.id } });
       toast('已加入生词本', 'success');
     } catch (e) {
@@ -2414,7 +2551,16 @@ export default function Reader() {
   async function createAnnotation(color: string) {
     if (!sel || !current) return;
     try {
-      const a = await api.addAnnotation(id, current, sel.start, sel.end, pageIndex, sel.text, color, '');
+      const a = await api.addAnnotation(
+        id,
+        current,
+        sel.start,
+        sel.end,
+        pageIndex,
+        sel.text,
+        color,
+        '',
+      );
       setAnnotations((prev) => [...prev, a]);
       clearSelectionUI();
       toast('已划线', 'success');
@@ -2495,7 +2641,11 @@ export default function Reader() {
   function currentPageBookmark(): Bookmark | null {
     if (!current) return null;
     if (mode === 'paged') {
-      return bookmarks.find((b) => b.chapterId === current && pageIndexForOffset(b.anchor) === pageIndex) ?? null;
+      return (
+        bookmarks.find(
+          (b) => b.chapterId === current && pageIndexForOffset(b.anchor) === pageIndex,
+        ) ?? null
+      );
     }
     const top = offsetAtViewportTop();
     return bookmarks.find((b) => b.chapterId === current && Math.abs(b.anchor - top) < 500) ?? null;
@@ -2533,28 +2683,72 @@ export default function Reader() {
   const pageBookmark = touchPrimary && chromeOpen ? currentPageBookmark() : null;
 
   const iconBack = (
-    <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <svg
+      viewBox="0 0 24 24"
+      width="22"
+      height="22"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    >
       <path d="M15 18l-6-6 6-6" />
     </svg>
   );
   const iconBookmark = (filled: boolean) => (
-    <svg viewBox="0 0 24 24" width="20" height="20" fill={filled ? 'currentColor' : 'none'} stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <svg
+      viewBox="0 0 24 24"
+      width="20"
+      height="20"
+      fill={filled ? 'currentColor' : 'none'}
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    >
       <path d="M6 4h12v17l-6-4.2L6 21z" />
     </svg>
   );
   const iconToc = (
-    <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+    <svg
+      viewBox="0 0 24 24"
+      width="20"
+      height="20"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+    >
       <path d="M4 6h16M4 12h16M4 18h10" />
     </svg>
   );
   const iconPen = (
-    <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <svg
+      viewBox="0 0 24 24"
+      width="20"
+      height="20"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    >
       <path d="M12 20h9" />
       <path d="M16.5 3.5a2.12 2.12 0 013 3L7 19l-4 1 1-4z" />
     </svg>
   );
   const iconEdit = (
-    <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <svg
+      viewBox="0 0 24 24"
+      width="20"
+      height="20"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    >
       <path d="M11 4H4v16h16v-7" />
       <path d="M17.5 3.5a2.12 2.12 0 013 3L13 14l-4 1 1-4z" />
     </svg>
@@ -2658,7 +2852,6 @@ export default function Reader() {
     <div className={`reader-chrome bottom m-bottom${chromeCls}`}>{mTabsRow}</div>
   );
 
-
   // Overlays live outside both reading layouts: they are viewport-anchored, and
   // keeping one copy is what makes "select a word, look it up" work while
   // scrolling as well as while paging.
@@ -2668,14 +2861,24 @@ export default function Reader() {
           only chase the thumb */}
       {sel && !selDragging && (
         <div className="sel-toolbar" ref={selPos.ref} style={overlayStyle(selPos.pos)}>
-          <button className="sel-lookup" title="查词" onClick={lookupSelection} disabled={lookupBusy}>
+          <button
+            className="sel-lookup"
+            title="查词"
+            onClick={lookupSelection}
+            disabled={lookupBusy}
+          >
             {lookupBusy ? '查询中' : '查词'}
           </button>
           {/* Highlights are painted by the paginated view only, so offering
               colours while scrolling would promise something invisible. */}
           {mode === 'paged' &&
             COLORS.map((c) => (
-              <button key={c} className={`swatch sw-${c}`} title={c} onClick={() => createAnnotation(c)} />
+              <button
+                key={c}
+                className={`swatch sw-${c}`}
+                title={c}
+                onClick={() => createAnnotation(c)}
+              />
             ))}
         </div>
       )}
@@ -2738,7 +2941,9 @@ export default function Reader() {
               {lookupCard.res.entry.translation ? (
                 <div className="dict-trans">{lookupCard.res.entry.translation}</div>
               ) : (
-                <div className="dict-trans muted">{lookupCard.res.entry.definition || '暂无释义'}</div>
+                <div className="dict-trans muted">
+                  {lookupCard.res.entry.definition || '暂无释义'}
+                </div>
               )}
               {lookupCard.res.base && (
                 <div className="dict-base">
@@ -2883,31 +3088,32 @@ export default function Reader() {
   // Floating above the page it sits clear of the bottom chrome instead of under
   // it, so the buttons never end up behind a bar that appears on approach.
   const previewSrc = preview ? PREVIEW_SOURCE[preview.source] : null;
-  const detourBar = preview && previewSrc ? (
-    <div
-      className={`detour-bar${mode === 'paged' ? ' floating' : ''}`}
-      style={mode === 'paged' && chromeOpen ? { bottom: touchPrimary ? 132 : 58 } : undefined}
-    >
-      <button className="btn sm" onClick={() => goUp(previewSrc.back)} title="返回来源列表">
-        返回
-      </button>
-      <button
-        className="btn sm"
-        disabled={!origin || !origin.chapterId}
-        onClick={jumpToLastReading}
-        title={origin ? '回到上次读到的地方，正常阅读' : '这本书还没有阅读记录'}
+  const detourBar =
+    preview && previewSrc ? (
+      <div
+        className={`detour-bar${mode === 'paged' ? ' floating' : ''}`}
+        style={mode === 'paged' && chromeOpen ? { bottom: touchPrimary ? 132 : 58 } : undefined}
       >
-        跳到最后阅读
-      </button>
-      <button
-        className="btn sm"
-        onClick={resumeFromPreview}
-        title="把当前位置记为阅读进度，从这里开始正常阅读"
-      >
-        从当前开始阅读
-      </button>
-    </div>
-  ) : null;
+        <button className="btn sm" onClick={() => goUp(previewSrc.back)} title="返回来源列表">
+          返回
+        </button>
+        <button
+          className="btn sm"
+          disabled={!origin || !origin.chapterId}
+          onClick={jumpToLastReading}
+          title={origin ? '回到上次读到的地方，正常阅读' : '这本书还没有阅读记录'}
+        >
+          跳到最后阅读
+        </button>
+        <button
+          className="btn sm"
+          onClick={resumeFromPreview}
+          title="把当前位置记为阅读进度，从这里开始正常阅读"
+        >
+          从当前开始阅读
+        </button>
+      </div>
+    ) : null;
 
   if (mode === 'scroll') {
     return (
@@ -2915,15 +3121,37 @@ export default function Reader() {
         <aside className="toc">
           <div className="toc-head">
             目录 · {chapters.length} 章
-            <button className="toc-locate" title="定位到当前章节" onClick={locateCurrent} aria-label="定位到当前章节">
-              <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <button
+              className="toc-locate"
+              title="定位到当前章节"
+              onClick={locateCurrent}
+              aria-label="定位到当前章节"
+            >
+              <svg
+                viewBox="0 0 24 24"
+                width="15"
+                height="15"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              >
                 <circle cx="12" cy="12" r="3" />
                 <path d="M12 2v3M12 19v3M2 12h3M19 12h3" />
               </svg>
             </button>
           </div>
           {toc.length > 0 ? (
-            <TocTree entries={toc} itemClass="toc-item" activeSet={activeSet} resolve={resolveTocHref} onPick={openChapter} collapsed={tocCollapsed} onToggle={toggleToc} />
+            <TocTree
+              entries={toc}
+              itemClass="toc-item"
+              activeSet={activeSet}
+              resolve={resolveTocHref}
+              onPick={openChapter}
+              collapsed={tocCollapsed}
+              onToggle={toggleToc}
+            />
           ) : (
             chapters.map((c, i) => (
               <button
@@ -3025,7 +3253,9 @@ export default function Reader() {
   const bookEdgeTuck = 8;
   const bookEdgeVisible = bookEdgeW - bookEdgeTuck;
   // Only render the sheets actually on screen (1 or 2) so no third-page edge leaks.
-  const visibleSheets = geometryReady ? Math.min(pagesPerView, Math.max(0, pageCount - pageIndex)) : 0;
+  const visibleSheets = geometryReady
+    ? Math.min(pagesPerView, Math.max(0, pageCount - pageIndex))
+    : 0;
 
   return (
     <div
@@ -3040,8 +3270,22 @@ export default function Reader() {
         <aside className="toc-dock">
           <div className="toc-head">
             目录 · {chapters.length} 章
-            <button className="toc-locate" title="定位到当前章节" onClick={locateCurrent} aria-label="定位到当前章节">
-              <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <button
+              className="toc-locate"
+              title="定位到当前章节"
+              onClick={locateCurrent}
+              aria-label="定位到当前章节"
+            >
+              <svg
+                viewBox="0 0 24 24"
+                width="15"
+                height="15"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              >
                 <circle cx="12" cy="12" r="3" />
                 <path d="M12 2v3M12 19v3M2 12h3M19 12h3" />
               </svg>
@@ -3052,16 +3296,24 @@ export default function Reader() {
           </div>
           <div className="toc-dock-body">
             {toc.length > 0 ? (
-              <TocTree entries={toc} itemClass="toc-item" activeSet={activeSet} resolve={resolveTocHref} onPick={openChapter} collapsed={tocCollapsed} onToggle={toggleToc} />
+              <TocTree
+                entries={toc}
+                itemClass="toc-item"
+                activeSet={activeSet}
+                resolve={resolveTocHref}
+                onPick={openChapter}
+                collapsed={tocCollapsed}
+                onToggle={toggleToc}
+              />
             ) : (
               chapters.map((c, i) => (
                 <button
                   key={c.id}
-                  className={`toc-item${c.id === current ? " active" : ""}`}
+                  className={`toc-item${c.id === current ? ' active' : ''}`}
                   onClick={() => openChapter(c.id)}
                   title={c.title}
                 >
-                  <span className="num">{String(i + 1).padStart(2, "0")}</span>
+                  <span className="num">{String(i + 1).padStart(2, '0')}</span>
                   {c.title}
                 </button>
               ))
@@ -3127,7 +3379,9 @@ export default function Reader() {
                     height: sheetHeight,
                   }}
                 >
-                  <span className={`page-num ${corner}`}>{i + 1} / {pageCount}</span>
+                  <span className={`page-num ${corner}`}>
+                    {i + 1} / {pageCount}
+                  </span>
                 </div>
               );
             })}
@@ -3179,70 +3433,74 @@ export default function Reader() {
       ) : (
         (chromeOpen || chromeHover) && (
           <>
-          <div className="reader-chrome top">
-            <div className="chrome-left">
-              <button
-                className="btn sm"
-                onClick={() => (preview ? goUp(PREVIEW_SOURCE[preview.source].back) : goUp('/'))}
-              >
-                {preview ? '← 返回' : '← 书架'}
-              </button>
-              <div className="crumb">
-                <strong>{book.title}</strong>
-                <span>·</span>
-                <span>{book.author || '未知作者'}</span>
+            <div className="reader-chrome top">
+              <div className="chrome-left">
+                <button
+                  className="btn sm"
+                  onClick={() => (preview ? goUp(PREVIEW_SOURCE[preview.source].back) : goUp('/'))}
+                >
+                  {preview ? '← 返回' : '← 书架'}
+                </button>
+                <div className="crumb">
+                  <strong>{book.title}</strong>
+                  <span>·</span>
+                  <span>{book.author || '未知作者'}</span>
+                </div>
+              </div>
+              <div className="chrome-center" title={currentChapter?.title || undefined}>
+                {currentChapter?.title || '尚未打开章节'}
+              </div>
+              <div className="chrome-right">
+                <span className="muted" style={{ fontSize: 12 }}>
+                  {Math.round(progressPct)}%
+                </span>
+                <button className="btn sm" onClick={() => setFontSize((f) => Math.max(13, f - 1))}>
+                  A−
+                </button>
+                <span className="muted" style={{ fontSize: 12, minWidth: 28, textAlign: 'center' }}>
+                  {fontSize}
+                </span>
+                <button className="btn sm" onClick={() => setFontSize((f) => Math.min(26, f + 1))}>
+                  A+
+                </button>
+                <button className="btn sm" onClick={() => setTocOpen(true)}>
+                  目录
+                </button>
+                <button
+                  className={`btn sm dock-toggle${tocDocked ? ' primary' : ''}`}
+                  onClick={() => setTocDocked((v) => !v)}
+                  title={tocDocked ? '取消固定目录（恢复为抽屉）' : '将目录固定在侧边'}
+                >
+                  {tocDocked ? '目录已固定' : '固定目录'}
+                </button>
+                <button className="btn sm" onClick={() => setBmOpen(true)}>
+                  书签
+                </button>
+                <button className="btn sm" onClick={() => setAnnOpen(true)}>
+                  划线
+                </button>
+                <button className="btn sm" onClick={() => setMode('scroll')}>
+                  滚动
+                </button>
               </div>
             </div>
-            <div className="chrome-center" title={currentChapter?.title || undefined}>
-              {currentChapter?.title || '尚未打开章节'}
-            </div>
-            <div className="chrome-right">
-              <span className="muted" style={{ fontSize: 12 }}>
-                {Math.round(progressPct)}%
-              </span>
-            <button className="btn sm" onClick={() => setFontSize((f) => Math.max(13, f - 1))}>
-              A−
-            </button>
-            <span className="muted" style={{ fontSize: 12, minWidth: 28, textAlign: 'center' }}>
-              {fontSize}
-            </span>
-            <button className="btn sm" onClick={() => setFontSize((f) => Math.min(26, f + 1))}>
-              A+
-            </button>
-            <button className="btn sm" onClick={() => setTocOpen(true)}>
-              目录
-            </button>
-            <button
-              className={`btn sm dock-toggle${tocDocked ? ' primary' : ''}`}
-              onClick={() => setTocDocked((v) => !v)}
-              title={tocDocked ? '取消固定目录（恢复为抽屉）' : '将目录固定在侧边'}
-            >
-              {tocDocked ? '目录已固定' : '固定目录'}
-            </button>
-            <button className="btn sm" onClick={() => setBmOpen(true)}>
-              书签
-            </button>
-            <button className="btn sm" onClick={() => setAnnOpen(true)}>
-              划线
-            </button>
-            <button className="btn sm" onClick={() => setMode('scroll')}>
-              滚动
-            </button>
-            </div>
-          </div>
 
-          <div className="reader-chrome bottom">
-            <button className="btn" disabled={pageIndex <= 0 && !prev} onClick={() => turn(-1)}>
-              ← 上一页
-            </button>
-            <span className="muted" style={{ fontSize: 12 }}>
-              第 {pageIndex + 1} / {pageCount} 页
-            </span>
-            <button className="btn" disabled={pageIndex >= maxPageIndex && !next} onClick={() => turn(1)}>
-              下一页 →
-            </button>
-          </div>
-        </>
+            <div className="reader-chrome bottom">
+              <button className="btn" disabled={pageIndex <= 0 && !prev} onClick={() => turn(-1)}>
+                ← 上一页
+              </button>
+              <span className="muted" style={{ fontSize: 12 }}>
+                第 {pageIndex + 1} / {pageCount} 页
+              </span>
+              <button
+                className="btn"
+                disabled={pageIndex >= maxPageIndex && !next}
+                onClick={() => turn(1)}
+              >
+                下一页 →
+              </button>
+            </div>
+          </>
         )
       )}
 
@@ -3252,8 +3510,22 @@ export default function Reader() {
           <aside className="drawer" onClick={(e) => e.stopPropagation()}>
             <div className="drawer-head">
               目录 · {chapters.length} 章
-              <button className="toc-locate" title="定位到当前章节" onClick={locateCurrent} aria-label="定位到当前章节">
-                <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <button
+                className="toc-locate"
+                title="定位到当前章节"
+                onClick={locateCurrent}
+                aria-label="定位到当前章节"
+              >
+                <svg
+                  viewBox="0 0 24 24"
+                  width="15"
+                  height="15"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="2"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                >
                   <circle cx="12" cy="12" r="3" />
                   <path d="M12 2v3M12 19v3M2 12h3M19 12h3" />
                 </svg>
@@ -3264,7 +3536,15 @@ export default function Reader() {
             </div>
             <div className="drawer-body">
               {toc.length > 0 ? (
-                <TocTree entries={toc} itemClass="drawer-item" activeSet={activeSet} resolve={resolveTocHref} onPick={openChapter} collapsed={tocCollapsed} onToggle={toggleToc} />
+                <TocTree
+                  entries={toc}
+                  itemClass="drawer-item"
+                  activeSet={activeSet}
+                  resolve={resolveTocHref}
+                  onPick={openChapter}
+                  collapsed={tocCollapsed}
+                  onToggle={toggleToc}
+                />
               ) : (
                 chapters.map((c, i) => (
                   <button

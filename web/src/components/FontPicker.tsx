@@ -71,7 +71,13 @@ export const FONT_CATALOG: CatalogFont[] = [
  * file name); persistence is handled here so both surfaces write the same key.
  * An undownloaded entry downloads on first tap (label shows ↓), then applies.
  */
-export default function FontPicker({ value, onChange }: { value: string; onChange: (file: string) => void }) {
+export default function FontPicker({
+  value,
+  onChange,
+}: {
+  value: string;
+  onChange: (file: string) => void;
+}) {
   const [fonts, setFonts] = useState<Array<{ file: string; size: number }>>([]);
   const [busy, setBusy] = useState<string | null>(null);
 
@@ -106,10 +112,13 @@ export default function FontPicker({ value, onChange }: { value: string; onChang
 
   return (
     <div className="rd-fonts">
-      <button className={`rd-font${value === 'default' ? ' on' : ''}`} onClick={() => {
-        localStorage.setItem(FONT_FAMILY_KEY, 'default');
-        onChange('default');
-      }}>
+      <button
+        className={`rd-font${value === 'default' ? ' on' : ''}`}
+        onClick={() => {
+          localStorage.setItem(FONT_FAMILY_KEY, 'default');
+          onChange('default');
+        }}
+      >
         默认
       </button>
       {FONT_CATALOG.map((f) => {

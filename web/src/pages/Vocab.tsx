@@ -73,9 +73,7 @@ export default function Vocab() {
   function mergeInto(fixed: Map<string, string>, seq: number) {
     if (seq !== query.current || fixed.size === 0) return;
     setItems((prev) =>
-      prev.map((it) =>
-        fixed.has(it.id) ? { ...it, context: fixed.get(it.id) as string } : it,
-      ),
+      prev.map((it) => (fixed.has(it.id) ? { ...it, context: fixed.get(it.id) as string } : it)),
     );
   }
 
@@ -197,11 +195,7 @@ export default function Vocab() {
         />
         {/* The history is where the words the notebook declined live, so the
             way in sits next to the notebook it feeds. */}
-        <button
-          className="btn sm"
-          onClick={() => nav('/vocab/history')}
-          title="看都查过哪些词"
-        >
+        <button className="btn sm" onClick={() => nav('/vocab/history')} title="看都查过哪些词">
           查词历史
         </button>
         {/* A pass gets its own page: it is a mode with its own back header and
@@ -249,8 +243,7 @@ export default function Vocab() {
               // study line is the reason the page exists, so it stays whole and
               // short — the schedule, not a tally; the provenance truncates. The
               // counters still exist, in the row's tooltip.
-              const learn =
-                it.status === 'ignored' ? '' : scheduleLine(it.dueAt);
+              const learn = it.status === 'ignored' ? '' : scheduleLine(it.dueAt);
               const counts = [
                 it.lookups > 1 ? `查过 ${it.lookups} 次` : '',
                 it.reviews > 0 ? `复习 ${it.reviews} 次` : '',
@@ -258,9 +251,7 @@ export default function Vocab() {
               ]
                 .filter(Boolean)
                 .join(' · ');
-              const detail = [origin, counts, learn]
-                .filter(Boolean)
-                .join(' · ');
+              const detail = [origin, counts, learn].filter(Boolean).join(' · ');
 
               return (
                 <div className="note-card" key={it.id}>
@@ -272,13 +263,9 @@ export default function Vocab() {
                   >
                     <div className="vocab-wordline">
                       <span className="vocab-word">{it.term}</span>
-                      {it.phonetic && (
-                        <span className="dict-phon">/{it.phonetic}/</span>
-                      )}
+                      {it.phonetic && <span className="dict-phon">/{it.phonetic}/</span>}
                     </div>
-                    <div className="vocab-trans">
-                      {it.translation || '（词库无释义）'}
-                    </div>
+                    <div className="vocab-trans">{it.translation || '（词库无释义）'}</div>
                     {it.context && (
                       <div className="note-card-text">
                         {emphasise(it.context, [it.surface, it.term])}

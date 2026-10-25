@@ -48,14 +48,20 @@ function elementStart(root: Node, el: Element): number {
   return seen;
 }
 
-export function getSelectionOffsets(root: HTMLElement, range: Range): { start: number; end: number } | null {
+export function getSelectionOffsets(
+  root: HTMLElement,
+  range: Range,
+): { start: number; end: number } | null {
   const a = charOffset(root, range.startContainer, range.startOffset);
   const b = charOffset(root, range.endContainer, range.endOffset);
   return b < a ? { start: b, end: a } : { start: a, end: b };
 }
 
 /** The text node holding a character offset, with the offset inside it. */
-export function textNodeAt(root: HTMLElement, offset: number): { node: Text; offset: number } | null {
+export function textNodeAt(
+  root: HTMLElement,
+  offset: number,
+): { node: Text; offset: number } | null {
   const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
   let seen = 0;
   let n: Node | null;
@@ -70,9 +76,36 @@ export function textNodeAt(root: HTMLElement, offset: number): { node: Text; off
 /* A sentence lives inside one block — a paragraph, a list item, a heading. HTML
    carries no such thing as "end of sentence", only end of block. */
 const BLOCK_TAGS = new Set([
-  'P', 'DIV', 'LI', 'UL', 'OL', 'DL', 'DT', 'DD', 'BLOCKQUOTE', 'SECTION', 'ARTICLE',
-  'HEADER', 'FOOTER', 'ASIDE', 'NAV', 'MAIN', 'FIGURE', 'FIGCAPTION', 'PRE',
-  'H1', 'H2', 'H3', 'H4', 'H5', 'H6', 'TD', 'TH', 'TR', 'TABLE', 'BODY',
+  'P',
+  'DIV',
+  'LI',
+  'UL',
+  'OL',
+  'DL',
+  'DT',
+  'DD',
+  'BLOCKQUOTE',
+  'SECTION',
+  'ARTICLE',
+  'HEADER',
+  'FOOTER',
+  'ASIDE',
+  'NAV',
+  'MAIN',
+  'FIGURE',
+  'FIGCAPTION',
+  'PRE',
+  'H1',
+  'H2',
+  'H3',
+  'H4',
+  'H5',
+  'H6',
+  'TD',
+  'TH',
+  'TR',
+  'TABLE',
+  'BODY',
 ]);
 
 /** The text range of the innermost block element holding `offset`. */

@@ -44,11 +44,7 @@ export default function Trash() {
   }
 
   async function purge(it: TrashItem) {
-    if (
-      !confirm(
-        `确定彻底删除《${it.title}》？此操作不可恢复（数据库记录与磁盘文件都会被删除）。`
-      )
-    )
+    if (!confirm(`确定彻底删除《${it.title}》？此操作不可恢复（数据库记录与磁盘文件都会被删除）。`))
       return;
     setBusyId(it.id);
     try {
@@ -93,13 +89,21 @@ export default function Trash() {
               <div style={{ flex: 1, minWidth: 0 }}>
                 <div
                   className="name"
-                  style={{ fontSize: 13.5, fontWeight: 550, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
+                  style={{
+                    fontSize: 13.5,
+                    fontWeight: 550,
+                    overflow: 'hidden',
+                    textOverflow: 'ellipsis',
+                    whiteSpace: 'nowrap',
+                  }}
                   title={it.title}
                 >
                   {it.title}
                 </div>
                 <div className="muted" style={{ fontSize: 12, marginTop: 2 }}>
-                  {it.recoverable ? `${it.author || '未知作者'} · 删除于 ${fmt(it.deletedAt)}` : '该条目的原数据库记录已丢失，无法恢复，只能彻底删除'}
+                  {it.recoverable
+                    ? `${it.author || '未知作者'} · 删除于 ${fmt(it.deletedAt)}`
+                    : '该条目的原数据库记录已丢失，无法恢复，只能彻底删除'}
                 </div>
               </div>
               <button
