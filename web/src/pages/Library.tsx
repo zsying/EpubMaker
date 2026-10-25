@@ -485,12 +485,25 @@ export default function Library() {
     try {
       const path = await pickImageFile();
       if (!path) return;
-      await api.uploadCoverFromPath(editBook.id, path);
+      setEditBusy(true);
+      // Uploading only stores the image as an asset — the book still points at
+      // its old cover, so the shelf kept painting the old one. Point it at the
+      // new href (with whatever else was typed in the form, so a cover change
+      // does not throw the other edits away).
+      const up = await api.uploadCoverFromPath(editBook.id, path);
+      await api.updateBook(editBook.id, {
+        title: editForm.title.trim() || editBook.title,
+        author: editForm.author.trim(),
+        tags: parseTagInput(editForm.tags),
+        coverHref: up.href,
+      });
       toast('封面已更新', 'success');
       setEditBook(null);
       await load(keyword.trim() || undefined);
     } catch (e) {
       toastError(e);
+    } finally {
+      setEditBusy(false);
     }
   }
 
@@ -820,8 +833,8 @@ export default function Library() {
                   <span>{editBook.title.slice(0, 2)}</span>
                 )}
               </div>
-              <button className="btn ghost" onClick={() => void changeCover()}>
-                更换封面
+              <button className="btn ghost" disabled={editBusy} onClick={() => void changeCover()}>
+                {editBusy ? '处理中…' : '更换封面'}
               </button>
             </div>
             <div className="edit-actions">
