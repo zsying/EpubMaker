@@ -8,24 +8,31 @@ import (
 	"regexp"
 	"strings"
 	"sync"
+	"time"
 
+	"epubmaker-desktop/internal/ai"
 	"epubmaker-desktop/internal/aicache"
 	"epubmaker-desktop/internal/aiconfig"
-	"epubmaker-desktop/internal/ai"
 	"epubmaker-desktop/internal/html"
 	"epubmaker-desktop/internal/library"
+	"epubmaker-desktop/internal/logx"
 )
 
 // The AI features are grounded by design (ADR-10): every one of them hangs off
-// material the app already holds — the dictionary's own senses, the sentence
-// the reader selected, the chapter they are reading. Nothing is generated from
+// material the app already holds — the sentence the reader selected, the word
+// they tapped in it, the chapter they are reading. Nothing is generated from
 // nothing, which is what keeps hallucination, cost, and the privacy question
-// all bounded: the model picks, translates, or summarises; it does not invent
-// facts about a book it has not been given.
+// all bounded: the model explains what is on screen; it does not invent facts
+// about a book it has not been given.
 //
 // Every call is an explicit reader action (red line 2a), bounded to one
 // request timeout (2b), and its answer lands in ai_cache so the same question
 // is never paid for twice (2c).
+//
+// Every call is also logged (logx, category "ai"): the request text, the
+// answer, the provider's finish_reason and the elapsed time. A failed AI call
+// depends on a provider the developer cannot reach, so without this record a
+// bug report can only say "it didn't work".
 
 /* ------------------------------ configuration ------------------------------ */
 
@@ -45,7 +52,13 @@ func (b *Backend) GetAIConfig() (*aiconfig.View, error) {
 // settings page never receives the key, so a model-only change sends a blank
 // one back.
 func (b *Backend) SaveAIConfig(baseURL, apiKey, model string) error {
-	return aiconfig.Save(ai.Config{BaseURL: baseURL, APIKey: apiKey, Model: model})
+	err := aiconfig.Save(ai.Config{BaseURL: baseURL, APIKey: apiKey, Model: model})
+	if err != nil {
+		logx.Event(logx.LevelWarn, "ai", "设置保存失败", "error", err.Error())
+		return err
+	}
+	logx.Event(logx.LevelInfo, "ai", "设置已保存", "baseUrl", baseURL, "model", model)
+	return nil
 }
 
 // AITestConnection makes one tiny real call against the stored settings, so
@@ -58,25 +71,32 @@ func (b *Backend) AITestConnection() (map[string]any, error) {
 		return nil, err
 	}
 	if !cfg.Configured() {
+		logx.Event(logx.LevelWarn, "ai", "测试连接：未配置", "file", aiconfig.Path())
 		return map[string]any{"ok": false, "error": errAINotConfigured.Error()}, nil
 	}
-	reply, err := aiChat(context.Background(), cfg,
+	reply, err := aiAsk(context.Background(), cfg,
 		"你是一个连接测试服务，只用于验证接口可用。",
 		"请回复：连接正常")
 	if err != nil {
+		logx.Event(logx.LevelWarn, "ai", "测试连接失败", "error", err.Error())
 		return map[string]any{"ok": false, "error": "AI 请求失败：" + err.Error()}, nil
 	}
-	if strings.TrimSpace(reply) == "" {
+	if strings.TrimSpace(reply.Content) == "" {
+		logx.Event(logx.LevelWarn, "ai", "测试连接：空回答",
+			"finish", reply.Finish,
+			"reasoningChars", itoa(len([]rune(reply.Reasoning))))
 		return map[string]any{"ok": false, "error": "接口返回了空内容，请检查模型名称"}, nil
 	}
-	return map[string]any{"ok": true, "reply": reply}, nil
+	logx.Event(logx.LevelInfo, "ai", "测试连接成功",
+		"model", reply.Model, "finish", reply.Finish, "chars", itoa(len([]rune(reply.Content))))
+	return map[string]any{"ok": true, "reply": reply.Content}, nil
 }
 
 /* -------------------------------- capabilities ------------------------------- */
 
-// aiChat is a seam for the tests: the suite must never touch the network.
-var aiChat = func(ctx context.Context, cfg ai.Config, system, user string) (string, error) {
-	return ai.NewClient(cfg).Chat(ctx, system, user)
+// aiAsk is a seam for the tests: the suite must never touch the network.
+var aiAsk = func(ctx context.Context, cfg ai.Config, system, user string) (ai.Reply, error) {
+	return ai.NewClient(cfg).Ask(ctx, system, user)
 }
 
 // aiMu serialises AI calls. The panel disables its trigger while one runs,
@@ -87,131 +107,229 @@ var aiMu sync.Mutex
 
 // errAINotConfigured and friends are the reader-facing failures. They are
 // plain strings by the time the frontend sees them (Wails serialises the
-// error), which is why they are written for the reader, not the log.
+// error), which is why they are written for the reader, not the log. Each one
+// names a different cause, because "it didn't work" is not something a reader
+// can act on: the fix for a missing provider is settings, the fix for a
+// truncated answer is retry-or-another-model.
 var (
 	errAINotConfigured = errors.New("AI 未配置，请先在设置中填写接口信息")
 	errAIEmptyReply    = errors.New("AI 没有返回内容，请重试")
 	errAIBadReply      = errors.New("AI 返回内容无法解析，请重试")
+	errAITruncated     = errors.New("AI 的回答被截断了（输出达到长度上限），请重试或换一个模型")
+	errAIReasoningOnly = errors.New("AI 只输出了思考过程，没有给出回答（多为输出上限不足或该模型不支持此接口），请重试或换一个模型")
 )
+
+// aiAnswer is one completed (or cached) exchange: the text plus the facts that
+// explain an empty or broken one.
+type aiAnswer struct {
+	Text   string
+	Finish string
+	Cached bool
+	// ReasoningChars says the provider returned thinking without an answer —
+	// the signature of a reasoning model that ran out of room mid-thought.
+	ReasoningChars int
+}
+
+// noContentError turns "the provider gave us nothing" into a message that says
+// which of the three ways it happened.
+func noContentError(a aiAnswer) error {
+	switch {
+	case a.Finish == "length":
+		return errAITruncated
+	case a.ReasoningChars > 0:
+		return errAIReasoningOnly
+	case a.Finish != "" && a.Finish != "stop":
+		return fmt.Errorf("AI 没有返回内容（finish_reason=%s），请重试或换一个模型", a.Finish)
+	}
+	return errAIEmptyReply
+}
+
+// badReplyError is noContentError for a reply that arrived but could not be
+// read as JSON. A cut-off answer is the common cause, and saying so is much
+// more useful than "无法解析".
+func badReplyError(a aiAnswer) error {
+	if a.Finish == "length" {
+		return errAITruncated
+	}
+	return errAIBadReply
+}
 
 // askCached answers from ai_cache when possible and otherwise calls the
 // provider, storing the answer. Only non-empty answers are stored: an empty
 // reply is a soft failure the reader can retry, and a network or HTTP error is
 // not an answer at all. Caching either would make the retry button a lie.
-func askCached(ctx context.Context, kind, system, user string) (string, bool, error) {
+func askCached(ctx context.Context, kind, system, user string) (aiAnswer, error) {
 	// The key covers the exact prompt: an improved prompt invalidates the
 	// cache by itself, which is what should happen when the questions get
 	// better.
 	key := aicache.Key(kind, system+"\n"+user)
 	if e, err := aicache.Get(key); err == nil && e != nil && e.Response != "" {
-		return e.Response, true, nil
+		logx.Event(logx.LevelDebug, "ai", "命中缓存",
+			"kind", kind, "chars", itoa(len([]rune(e.Response))))
+		return aiAnswer{Text: e.Response, Cached: true}, nil
 	}
 	cfg, err := aiconfig.Load()
 	if err != nil {
-		return "", false, fmt.Errorf("读取 AI 设置失败（%s）：%w", aiconfig.Path(), err)
+		logx.Event(logx.LevelError, "ai", "读取设置失败",
+			"kind", kind, "file", aiconfig.Path(), "error", err.Error())
+		return aiAnswer{}, fmt.Errorf("读取 AI 设置失败（%s）：%w", aiconfig.Path(), err)
 	}
 	if !cfg.Configured() {
 		// The path is part of the message on purpose: the usual cause of "but I
 		// DID configure it" is a second settings file somewhere else (another
 		// AppHome, a build run with a different EPUBMAKER_HOME), and the path
 		// settles that in one glance instead of a round trip.
-		return "", false, fmt.Errorf("%w（配置文件：%s）", errAINotConfigured, aiconfig.Path())
+		logx.Event(logx.LevelWarn, "ai", "未配置", "kind", kind, "file", aiconfig.Path())
+		return aiAnswer{}, fmt.Errorf("%w（配置文件：%s）", errAINotConfigured, aiconfig.Path())
 	}
-	reply, err := aiChat(ctx, cfg, system, user)
+
+	// The prompt is logged in full (logx clips it at a generous cap): when an
+	// answer is wrong, the question is half the evidence, and it is the half a
+	// provider console does not keep.
+	logx.Event(logx.LevelInfo, "ai", "请求",
+		"kind", kind,
+		"model", cfg.Model,
+		"baseUrl", cfg.BaseURL,
+		"promptChars", itoa(len([]rune(system+"\n"+user))),
+		"system", system,
+		"user", user,
+	)
+	start := time.Now()
+	reply, err := aiAsk(ctx, cfg, system, user)
+	ms := time.Since(start).Milliseconds()
 	if err != nil {
-		return "", false, fmt.Errorf("AI 请求失败：%w", err)
+		logx.Event(logx.LevelWarn, "ai", "请求失败",
+			"kind", kind, "ms", itoa64(ms), "error", err.Error())
+		return aiAnswer{}, fmt.Errorf("AI 请求失败：%w", err)
 	}
-	if strings.TrimSpace(reply) == "" {
-		return "", false, errAIEmptyReply
+	logx.Event(logx.LevelInfo, "ai", "回答",
+		"kind", kind,
+		"ms", itoa64(ms),
+		"finish", reply.Finish,
+		"chars", itoa(len([]rune(reply.Content))),
+		"reasoningChars", itoa(len([]rune(reply.Reasoning))),
+		"tokens", itoa(reply.Usage.CompletionTokens)+"/"+itoa(reply.Usage.PromptTokens),
+		"model", reply.Model,
+		"content", reply.Content,
+	)
+
+	ans := aiAnswer{
+		Text:           strings.TrimSpace(reply.Content),
+		Finish:         reply.Finish,
+		ReasoningChars: len([]rune(reply.Reasoning)),
+	}
+	if ans.Text == "" {
+		// A warning of its own: "empty answer" should be findable in the log
+		// without reading every response.
+		logx.Event(logx.LevelWarn, "ai", "空回答",
+			"kind", kind,
+			"finish", reply.Finish,
+			"reasoningChars", itoa(ans.ReasoningChars),
+			"reasoningHead", firstRunes(reply.Reasoning, 200))
+		return aiAnswer{}, noContentError(ans)
 	}
 	// A cache write must not lose the answer the reader is waiting for; a
 	// failed write only costs them a second call later.
-	_ = aicache.Put(aicache.Entry{Key: key, Kind: kind, Response: reply})
-	return reply, false, nil
+	_ = aicache.Put(aicache.Entry{Key: key, Kind: kind, Response: ans.Text})
+	return ans, nil
 }
 
 /* ---------------------------- explain in context ---------------------------- */
 
-// ExplainResult is the contextual gloss for one word: which of the
-// dictionary's own senses the sentence is using, plus a one-line Chinese
-// explanation. Sense is 1-based, matching the numbered list the prompt shows;
-// -1 means the model found none of the senses fitting.
+// ExplainResult is the reader-facing gloss for one word: what it means *here*,
+// what the whole sentence says, and one thing worth noticing about it.
+//
+// This used to ask the model to choose among the dictionary's numbered senses.
+// That looked tidier but worked worse: ECDICT packs a word's meanings into one
+// line ("n. 1.儿童 2.婴儿 3.子女 …"), so the model was handed a list it could not
+// pick from and often answered "none of these fit" while a perfectly good sense
+// sat in the middle of the line. The model can translate; asking it to explain
+// and translate directly is shorter and grounded in the sentence the reader is
+// actually looking at.
 type ExplainResult struct {
-	Word      string `json:"word"`
-	Sense     int    `json:"sense"`
-	SenseText string `json:"senseText"`
-	Note      string `json:"note"`
-	Cached    bool   `json:"cached"`
+	Word        string `json:"word"`
+	Meaning     string `json:"meaning"`
+	Translation string `json:"translation"`
+	POS         string `json:"pos"`
+	Note        string `json:"note"`
+	Cached      bool   `json:"cached"`
 }
 
-// ExplainInContext asks the model to pick the sense a word carries in the
-// sentence it appeared in — from the local dictionary's own senses, numbered.
-// The senses are the grounding: the model chooses between them and explains
-// the choice, so there is nothing to hallucinate and nothing to fact-check.
-func (b *Backend) ExplainInContext(word, sentence string, senses []string) (*ExplainResult, error) {
+// ExplainInContext explains one word as it is used in one sentence, and
+// translates that sentence.
+func (b *Backend) ExplainInContext(word, sentence string) (*ExplainResult, error) {
 	word = strings.TrimSpace(word)
 	sentence = strings.TrimSpace(sentence)
-	if word == "" || sentence == "" || len(senses) == 0 {
-		return nil, errors.New("缺少词、句子或词典义项，无法解释")
+	if word == "" || sentence == "" {
+		return nil, errors.New("缺少单词或句子，无法解释")
 	}
-	if len(word) > 64 || len(sentence) > 2000 || len(senses) > 12 {
+	if len([]rune(word)) > 64 || len([]rune(sentence)) > 2000 {
 		return nil, errors.New("输入过长")
 	}
 
 	aiMu.Lock()
 	defer aiMu.Unlock()
 
-	system, user := explainPrompt(word, sentence, senses)
-	reply, cached, err := askCached(context.Background(), "explain", system, user)
+	system, user := explainPrompt(word, sentence)
+	ans, err := askCached(context.Background(), "explain", system, user)
 	if err != nil {
 		return nil, err
 	}
-	out, err := decodeExplain(word, senses, reply)
+	out, err := decodeExplain(word, ans)
 	if err != nil {
 		return nil, err
 	}
-	out.Cached = cached
+	out.Cached = ans.Cached
 	return out, nil
 }
 
-func explainPrompt(word, sentence string, senses []string) (string, string) {
-	system := `你是英语阅读助手。用户会给你一个单词、它所在的句子、以及本地词典列出的义项（编号从 1 开始）。
-你的任务：判断这个句子实际使用的是哪个义项，并用一句中文解释它在这里的含义。
+func explainPrompt(word, sentence string) (string, string) {
+	system := `你是英语阅读助手。读者正在读原版书，遇到了一个词，给你这个词和它所在的句子。
+请结合句子回答三件事：
+1. 这个词在本句中的意思；
+2. 整句的中文翻译；
+3. 一条最值得注意的用法、搭配或语法点，没有就留空。
+只输出 JSON，格式：
+{"meaning":"本句中的意思","translation":"整句翻译","pos":"n./v./adj. 这样的词性","note":"用法提示"}
 规则：
-- sense 只能取给出的义项编号；没有合适义项时填 -1。
-- note 始终用一句中文（40 字以内）：解释了该词在本句中的意思；sense 为 -1 时说明为何都不贴合。
-- 只输出 JSON，格式：{"sense": 编号, "note": "..."}`
-	var b strings.Builder
-	b.WriteString("单词：")
-	b.WriteString(word)
-	b.WriteString("\n句子：")
-	b.WriteString(sentence)
-	b.WriteString("\n义项：")
-	for i, s := range senses {
-		fmt.Fprintf(&b, "\n%d. %s", i+1, s)
-	}
-	return system, b.String()
+- meaning 用一句中文说清「在这个句子里它是什么意思」，不要罗列词典释义。
+- translation 要通顺自然，像人话，不要逐词直译。
+- pos 只填词性缩写，拿不准就填空字符串。
+- note 最多一条，不要重复 meaning 的内容。
+- 不要输出 JSON 以外的任何内容。`
+	return system, "单词：" + word + "\n句子：" + sentence
 }
 
-func decodeExplain(word string, senses []string, reply string) (*ExplainResult, error) {
-	raw := jsonObject(reply)
+func decodeExplain(word string, a aiAnswer) (*ExplainResult, error) {
+	out := &ExplainResult{Word: word}
+	raw := jsonObject(a.Text)
 	if raw == "" {
-		return nil, errAIBadReply
+		if looksLikeJSON(a.Text) {
+			return nil, badReplyError(a)
+		}
+		// A model that ignores the JSON instruction still answered usefully;
+		// showing its prose beats showing a parse error.
+		out.Meaning = strings.TrimSpace(a.Text)
+		if out.Meaning == "" {
+			return nil, noContentError(a)
+		}
+		return out, nil
 	}
 	var r struct {
-		Sense int    `json:"sense"`
-		Note  string `json:"note"`
+		Meaning     string `json:"meaning"`
+		Translation string `json:"translation"`
+		POS         string `json:"pos"`
+		Note        string `json:"note"`
 	}
 	if err := json.Unmarshal([]byte(raw), &r); err != nil {
-		return nil, errAIBadReply
+		return nil, badReplyError(a)
 	}
-	out := &ExplainResult{Word: word, Sense: -1, Note: strings.TrimSpace(r.Note)}
-	if r.Sense >= 1 && r.Sense <= len(senses) {
-		out.Sense = r.Sense
-		out.SenseText = senses[r.Sense-1]
-	}
-	if out.Note == "" {
-		return nil, errAIEmptyReply
+	out.Meaning = strings.TrimSpace(r.Meaning)
+	out.Translation = strings.TrimSpace(r.Translation)
+	out.POS = strings.TrimSpace(r.POS)
+	out.Note = strings.TrimSpace(r.Note)
+	if out.Meaning == "" && out.Translation == "" {
+		return nil, badReplyError(a)
 	}
 	return out, nil
 }
@@ -244,7 +362,7 @@ func (b *Backend) ParseSentence(sentence string) (*ParseResult, error) {
 	if sentence == "" {
 		return nil, errors.New("句子不能为空")
 	}
-	if len(sentence) > 2000 {
+	if len([]rune(sentence)) > 2000 {
 		return nil, errors.New("句子过长")
 	}
 
@@ -252,15 +370,15 @@ func (b *Backend) ParseSentence(sentence string) (*ParseResult, error) {
 	defer aiMu.Unlock()
 
 	system, user := parsePrompt(sentence)
-	reply, cached, err := askCached(context.Background(), "parse", system, user)
+	ans, err := askCached(context.Background(), "parse", system, user)
 	if err != nil {
 		return nil, err
 	}
-	out, err := decodeParse(reply)
+	out, err := decodeParse(ans)
 	if err != nil {
 		return nil, err
 	}
-	out.Cached = cached
+	out.Cached = ans.Cached
 	return out, nil
 }
 
@@ -271,21 +389,25 @@ func parsePrompt(sentence string) (string, string) {
  "segments": [{"text": "原文片段", "role": "语法角色", "gloss": "该片段的中文"}],
  "notes": ["语法点提示"]}
 规则：
+- translation 在前，要通顺自然，像人话。
 - segments 按句子结构切分且覆盖整个句子，role 用「主语/谓语/宾语/定语/状语/补语」等中文术语。
 - notes 最多 2 条，讲这个句子最值得学的语法点；没有值得讲的就给空数组。
 - 不要输出 JSON 以外的任何内容。`
 	return system, "句子：" + sentence
 }
 
-func decodeParse(reply string) (*ParseResult, error) {
+func decodeParse(a aiAnswer) (*ParseResult, error) {
 	out := &ParseResult{}
-	raw := jsonObject(reply)
+	raw := jsonObject(a.Text)
 	if raw == "" {
+		if looksLikeJSON(a.Text) {
+			return nil, badReplyError(a)
+		}
 		// A model that ignores the JSON instruction and just writes the
 		// translation is still useful: show it, minus the breakdown.
-		out.Translation = strings.TrimSpace(reply)
+		out.Translation = strings.TrimSpace(a.Text)
 		if out.Translation == "" {
-			return nil, errAIEmptyReply
+			return nil, noContentError(a)
 		}
 		return out, nil
 	}
@@ -295,13 +417,15 @@ func decodeParse(reply string) (*ParseResult, error) {
 		Notes       []string  `json:"notes"`
 	}
 	if err := json.Unmarshal([]byte(raw), &r); err != nil {
-		return nil, errAIBadReply
+		// The usual cause is a cut-off answer: the JSON object opens, the budget
+		// runs out, the closing brackets never arrive.
+		return nil, badReplyError(a)
 	}
 	out.Translation = strings.TrimSpace(r.Translation)
 	out.Segments = r.Segments
 	out.Notes = r.Notes
 	if out.Translation == "" && len(out.Segments) == 0 {
-		return nil, errAIEmptyReply
+		return nil, noContentError(a)
 	}
 	return out, nil
 }
@@ -351,16 +475,16 @@ func (b *Backend) SummarizeChapter(bookID, chapterID string) (*SummaryResult, er
 	defer aiMu.Unlock()
 
 	system, user := summarizePrompt(src.Title, text)
-	reply, cached, err := askCached(context.Background(), "summarize", system, user)
+	ans, err := askCached(context.Background(), "summarize", system, user)
 	if err != nil {
 		return nil, err
 	}
-	out, err := decodeSummarize(reply)
+	out, err := decodeSummarize(ans)
 	if err != nil {
 		return nil, err
 	}
 	out.Truncated = truncated
-	out.Cached = cached
+	out.Cached = ans.Cached
 	return out, nil
 }
 
@@ -378,11 +502,11 @@ func summarizePrompt(title, text string) (string, string) {
 	return system, "章节标题：" + title + "\n正文：\n" + text
 }
 
-func decodeSummarize(reply string) (*SummaryResult, error) {
+func decodeSummarize(a aiAnswer) (*SummaryResult, error) {
 	out := &SummaryResult{}
-	raw := jsonObject(reply)
+	raw := jsonObject(a.Text)
 	if raw == "" {
-		return nil, errAIBadReply
+		return nil, badReplyError(a)
 	}
 	var r struct {
 		Summary string        `json:"summary"`
@@ -390,13 +514,13 @@ func decodeSummarize(reply string) (*SummaryResult, error) {
 		Terms   []SummaryTerm `json:"terms"`
 	}
 	if err := json.Unmarshal([]byte(raw), &r); err != nil {
-		return nil, errAIBadReply
+		return nil, badReplyError(a)
 	}
 	out.Summary = strings.TrimSpace(r.Summary)
 	out.Points = r.Points
 	out.Terms = r.Terms
 	if out.Summary == "" {
-		return nil, errAIEmptyReply
+		return nil, noContentError(a)
 	}
 	return out, nil
 }
@@ -438,3 +562,25 @@ func jsonObject(s string) string {
 	}
 	return s[start : end+1]
 }
+
+// looksLikeJSON reports whether a reply was trying to be the JSON object the
+// prompt asked for. One that opens a brace and never closes it is not prose —
+// it is an answer that ran out of room, and showing it as a translation would
+// put half a JSON object in front of the reader.
+func looksLikeJSON(s string) bool {
+	return strings.HasPrefix(strings.TrimSpace(s), "{")
+}
+
+// firstRunes is for log fields: enough to see what the model was doing, never
+// enough to bloat a log line.
+func firstRunes(s string, n int) string {
+	r := []rune(s)
+	if len(r) <= n {
+		return s
+	}
+	return string(r[:n]) + "…"
+}
+
+func itoa(n int) string { return fmt.Sprintf("%d", n) }
+
+func itoa64(n int64) string { return fmt.Sprintf("%d", n) }

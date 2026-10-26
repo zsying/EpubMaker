@@ -85,6 +85,10 @@ export default function AIPanel<T>({ title, run, render, onClose, onGoSettings }
                   </button>
                 )}
               </div>
+              {/* Every failed call is in the local log with its prompt and the
+                  provider's reply, which is the only way to tell a bad key from
+                  a cut-off answer after the fact. */}
+              <p className="ai-error-hint">详细信息已记入「我的 → 设置 → 诊断日志」。</p>
             </div>
           )}
           {state.kind === 'done' && render(state.result)}

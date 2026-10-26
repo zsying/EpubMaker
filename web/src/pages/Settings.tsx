@@ -1,7 +1,9 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
+import { Link } from 'react-router-dom';
 import AISettings from '../components/AISettings';
 import FontPicker from '../components/FontPicker';
 import SubHeader from '../components/SubHeader';
+import { api } from '../api';
 import {
   APP_THEMES,
   FONT_FAMILY_KEY,
@@ -28,6 +30,15 @@ export default function Settings() {
   const [theme, setTheme] = useState<AppTheme>(() => appTheme());
   // Default ON: without it an EPUB's own font-family beats the picked face.
   const [override, setOverride] = useState(() => localStorage.getItem(FONT_OVERRIDE_KEY) !== '0');
+  // The diagnostic log's switch lives here; its entries are on their own page.
+  const [logOn, setLogOn] = useState(true);
+
+  useEffect(() => {
+    api
+      .logState()
+      .then((s) => setLogOn(s.enabled))
+      .catch(() => {});
+  }, []);
 
   return (
     <div className="page settings-page">
@@ -104,6 +115,32 @@ export default function Settings() {
 
       <div style={{ marginTop: 16 }}>
         <AISettings />
+      </div>
+
+      {/* Diagnostics. Next to the AI settings because almost every report that
+          arrives is about an AI call or a page that went blank, and both are
+          answered by the same file. */}
+      <div className="settings-log">
+        <div className="settings-log-text">
+          <b>诊断日志</b>
+          <small>记录 AI 请求与回答、错误和页面跳转，只保存在本机</small>
+        </div>
+        <button
+          role="switch"
+          aria-checked={logOn}
+          aria-label="记录诊断日志"
+          className={`rd-switch${logOn ? ' on' : ''}`}
+          onClick={() => {
+            const next = !logOn;
+            setLogOn(next);
+            api.setLogEnabled(next).catch(() => setLogOn(!next));
+          }}
+        >
+          <span className="rd-switch-knob" />
+        </button>
+        <Link className="btn sm" to="/logs">
+          查看
+        </Link>
       </div>
 
       <p className="settings-hint">

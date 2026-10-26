@@ -4471,28 +4471,25 @@ button.me-dict:disabled {
   color: var(--accent);
   font-weight: 700;
 }
-.ai-senses {
-  list-style: none;
-  margin: 10px 0 0;
-  padding: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-}
-.ai-senses li {
-  padding: 7px 10px;
-  border-radius: 8px;
-  background: var(--panel-2);
-  border: 1px solid transparent;
-  font-size: 13px;
-  line-height: 1.6;
-  color: var(--text-2);
-}
-.ai-senses li.on {
-  background: var(--accent-soft);
-  border-color: var(--accent);
+/* The word's meaning in this sentence — the payload of the gloss, so it carries
+   the weight the translation used to. */
+.ai-explain {
+  margin: 0;
+  font-size: 15.5px;
+  font-weight: 650;
+  line-height: 1.7;
   color: var(--text);
+}
+/* Part of speech: real information, too small to compete with the meaning. */
+.ai-pos {
+  margin-left: 8px;
+  padding: 1px 7px;
+  border-radius: 999px;
+  background: var(--panel-2);
+  color: var(--text-3);
+  font-size: 11px;
   font-weight: 600;
+  vertical-align: 1px;
 }
 .ai-note {
   margin-top: 14px;
@@ -4699,4 +4696,265 @@ button.me-dict:disabled {
     border-right: none;
     border-radius: 0;
   }
+}
+
+/* --------------------------- diagnostics (0.4) ---------------------------
+   Two surfaces: the switch on the settings page, and the log page itself.
+   The log is deliberately plain — it is read while something is broken, so
+   nothing may depend on hover, animation, or a second tap to reveal. */
+
+.settings-log {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-top: 16px;
+  padding: 14px 16px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+.settings-log-text {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.settings-log-text b {
+  font-size: 14px;
+}
+.settings-log-text small {
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--text-3);
+}
+
+.logs-page {
+  padding-bottom: 48px;
+}
+.logs-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 14px 16px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+.logs-row-text {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.logs-row-text b {
+  font-size: 14px;
+}
+.logs-row-text small {
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--text-3);
+}
+.logs-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin: 10px 2px 0;
+  font-size: 12px;
+  color: var(--text-3);
+}
+.logs-dot {
+  opacity: 0.5;
+}
+.logs-path {
+  width: 100%;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 11px;
+  line-height: 1.5;
+  word-break: break-all;
+  opacity: 0.85;
+}
+.logs-filters {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-top: 12px;
+}
+.logs-chip {
+  padding: 5px 12px;
+  border-radius: 999px;
+  border: 1px solid var(--border-strong);
+  background: var(--panel);
+  color: var(--text-2);
+  font-size: 12.5px;
+  cursor: pointer;
+}
+.logs-chip.on {
+  background: var(--accent-soft);
+  border-color: var(--accent);
+  color: var(--accent);
+  font-weight: 600;
+}
+.logs-gap {
+  flex: 1;
+}
+.logs-actions {
+  display: flex;
+  gap: 10px;
+  margin-top: 12px;
+}
+.logs-empty,
+.logs-error {
+  margin-top: 16px;
+  padding: 18px 16px;
+  border-radius: var(--radius);
+  background: var(--panel-2);
+  border: 1px dashed var(--border-strong);
+  color: var(--text-3);
+  font-size: 13px;
+  text-align: center;
+}
+.logs-error {
+  border-style: solid;
+  border-color: var(--danger);
+  color: var(--danger);
+  background: var(--danger-soft);
+}
+.logs-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 14px;
+}
+.log-item {
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-left: 3px solid transparent;
+}
+.log-item.lv-warn {
+  border-left-color: var(--mark-line);
+}
+.log-item.lv-error {
+  border-left-color: var(--danger);
+}
+.log-head {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 6px;
+  font-size: 12.5px;
+  line-height: 1.55;
+}
+.log-time {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 11px;
+  color: var(--text-3);
+}
+.log-cat {
+  padding: 0 6px;
+  border-radius: 4px;
+  background: var(--fill);
+  color: var(--text-2);
+  font-size: 11px;
+}
+.log-cat.cat-ai {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+.log-kind {
+  font-size: 11px;
+  color: var(--text-3);
+}
+.log-msg {
+  color: var(--text);
+  flex: 1;
+  min-width: 0;
+  word-break: break-word;
+}
+.log-item.lv-error .log-msg {
+  color: var(--danger);
+}
+.log-data {
+  margin-top: 4px;
+}
+.log-data summary {
+  cursor: pointer;
+  font-size: 11.5px;
+  color: var(--text-3);
+  list-style: none;
+}
+.log-data summary::-webkit-details-marker {
+  display: none;
+}
+.log-data summary::before {
+  content: '▸ ';
+}
+.log-data[open] summary::before {
+  content: '▾ ';
+}
+.log-data pre {
+  margin: 6px 0 0;
+  padding: 8px 10px;
+  border-radius: 6px;
+  background: var(--fill);
+  font-size: 11.5px;
+  line-height: 1.6;
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 260px;
+  overflow: auto;
+}
+
+/* The error boundary's page. It has to be reachable with one thumb and say
+   what happened, because it replaces a screen that showed nothing at all. */
+.crash {
+  max-width: 520px;
+  margin: 64px auto;
+  padding: 0 20px;
+  text-align: center;
+}
+.crash h2 {
+  margin: 0 0 10px;
+  font-size: 18px;
+  color: var(--text);
+}
+.crash p {
+  font-size: 13.5px;
+  line-height: 1.7;
+  color: var(--text-2);
+}
+.crash-msg {
+  margin: 14px 0;
+  padding: 12px;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  background: var(--panel-2);
+  text-align: left;
+  font-size: 12px;
+  line-height: 1.6;
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 180px;
+  overflow: auto;
+}
+.crash-actions {
+  display: flex;
+  gap: 10px;
+  justify-content: center;
+  margin: 16px 0;
+}
+.crash-hint {
+  font-size: 12px;
+  color: var(--text-3);
+}
+.ai-error-hint {
+  margin: 12px 0 0;
+  font-size: 11.5px;
+  line-height: 1.6;
+  color: var(--text-3);
 }

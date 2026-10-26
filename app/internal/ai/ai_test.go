@@ -228,3 +228,88 @@ func TestEndpointShapes(t *testing.T) {
 		})
 	}
 }
+
+// The bookkeeping that explains an empty answer has to survive the trip: the
+// reader-facing error is chosen from it (cut off by the token cap? thinking
+// but no answer? genuinely nothing?), so losing it turns every odd reply into
+// the same useless "AI 没有返回内容".
+func TestAskKeepsFinishReasonAndUsage(t *testing.T) {
+	payload := `{"model":"deepseek-flash",
+	             "choices":[{"message":{"role":"assistant","content":""},"finish_reason":"length"}],
+	             "usage":{"prompt_tokens":812,"completion_tokens":4096,"total_tokens":4908}}`
+	srv := fakeProvider(t, 200, payload, nil)
+
+	c := NewClient(Config{BaseURL: srv.URL, APIKey: "k", Model: "m"})
+	r, err := c.Ask(context.Background(), "sys", "user")
+	if err != nil {
+		t.Fatalf("Ask: %v", err)
+	}
+	if r.Content != "" {
+		t.Errorf("content = %q", r.Content)
+	}
+	if r.Finish != "length" {
+		t.Errorf("finish = %q, want length", r.Finish)
+	}
+	if r.Usage.CompletionTokens != 4096 || r.Model != "deepseek-flash" {
+		t.Errorf("reply = %+v", r)
+	}
+}
+
+// A reasoning model that spent the whole budget thinking, then answered in the
+// reasoning channel only, must not read as an unreadable response.
+func TestAskReasoningOnlyReply(t *testing.T) {
+	payload := `{"choices":[{"message":{"role":"assistant","content":null,
+	             "reasoning_content":"用户要拆句，我先分析句子结构……"},
+	             "finish_reason":"length"}]}`
+	srv := fakeProvider(t, 200, payload, nil)
+
+	c := NewClient(Config{BaseURL: srv.URL, Model: "m"})
+	r, err := c.Ask(context.Background(), "sys", "user")
+	if err != nil {
+		t.Fatalf("Ask: %v", err)
+	}
+	if r.Content != "" {
+		t.Errorf("content = %q, want empty", r.Content)
+	}
+	if !strings.Contains(r.Reasoning, "拆句") {
+		t.Errorf("reasoning = %q", r.Reasoning)
+	}
+}
+
+// Some endpoints return the body as parts rather than a string.
+func TestAskContentParts(t *testing.T) {
+	payload := `{"choices":[{"message":{"content":[{"type":"text","text":"第一段"},
+	             {"type":"text","text":"第二段"}],"role":"assistant"},"finish_reason":"stop"}]}`
+	srv := fakeProvider(t, 200, payload, nil)
+
+	c := NewClient(Config{BaseURL: srv.URL, Model: "m"})
+	r, err := c.Ask(context.Background(), "sys", "user")
+	if err != nil {
+		t.Fatalf("Ask: %v", err)
+	}
+	if r.Content != "第一段第二段" {
+		t.Errorf("content = %q", r.Content)
+	}
+	if r.Finish != "stop" {
+		t.Errorf("finish = %q", r.Finish)
+	}
+}
+
+// The cap is a ceiling, not a target, but it has to be roomy enough for a
+// sentence breakdown plus a reasoning model's thinking.
+func TestMaxTokensIsRoomy(t *testing.T) {
+	cap := &capture{}
+	srv := fakeProvider(t, 200, `{"choices":[{"message":{"content":"ok"}}]}`, cap)
+
+	c := NewClient(Config{BaseURL: srv.URL, Model: "m"})
+	if _, err := c.Chat(context.Background(), "s", "u"); err != nil {
+		t.Fatalf("Chat: %v", err)
+	}
+	got, _ := cap.body["max_tokens"].(float64)
+	if int(got) != DefaultMaxTokens {
+		t.Errorf("max_tokens = %v, want %d", cap.body["max_tokens"], DefaultMaxTokens)
+	}
+	if DefaultMaxTokens < 2048 {
+		t.Errorf("DefaultMaxTokens = %d, too tight for a sentence parse", DefaultMaxTokens)
+	}
+}

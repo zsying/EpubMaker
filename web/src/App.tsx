@@ -1,5 +1,5 @@
 import { useEffect } from 'react';
-import { Link, Route, Routes, useLocation } from 'react-router-dom';
+import { Link, Navigate, Route, Routes, useLocation } from 'react-router-dom';
 import Library from './pages/Library';
 import Reader from './pages/Reader';
 import Editor from './pages/Editor';
@@ -15,6 +15,7 @@ import Me from './pages/Me';
 import About from './pages/About';
 import WifiShare from './pages/WifiShare';
 import Settings from './pages/Settings';
+import Logs from './pages/Logs';
 import { initFileDrop } from './filedrop';
 import { clearBackClosers } from './backNav';
 import { api, onSharedImport } from './api';
@@ -31,9 +32,14 @@ export default function App() {
 
   // Overlay closers are page-scoped: once the route changes, a closer left by
   // the previous page must never eat a back press on the new one.
+  //
+  // Every route change is also written to the diagnostic log. When a back
+  // gesture lands somewhere unexpected, the sequence of paths is the only
+  // evidence of how the reader got there — the WebView keeps no history dump.
   useEffect(() => {
     clearBackClosers();
-  }, [loc.pathname]);
+    void api.logClient('info', 'nav', loc.pathname + loc.search, '').catch(() => {});
+  }, [loc.pathname, loc.search]);
 
   // A book shared to EpubMaker from another app (WeChat, browser, file
   // manager) arrives as a copied cache path. Import it wherever the user
@@ -105,6 +111,10 @@ export default function App() {
           <Routes>
             <Route path="/books/:id/read" element={<Reader />} />
             <Route path="/books/:id/read/:chapterId" element={<Reader />} />
+            {/* A reader URL that no longer matches must still land somewhere:
+                an empty <Routes> renders nothing at all, which on the reader's
+                dark background is the "black screen, nothing responds" state. */}
+            <Route path="*" element={<Navigate to="/" replace />} />
           </Routes>
         ) : (
           <Routes>
@@ -120,6 +130,7 @@ export default function App() {
             <Route path="/about" element={<About />} />
             <Route path="/wifi" element={<WifiShare />} />
             <Route path="/settings" element={<Settings />} />
+            <Route path="/logs" element={<Logs />} />
             <Route path="/books/:id/edit" element={<Editor />} />
             <Route path="/books/:id/split" element={<Split />} />
             <Route path="*" element={<div className="page empty">页面不存在</div>} />

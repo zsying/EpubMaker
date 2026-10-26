@@ -6,19 +6,27 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 ## [Unreleased]
 
 AI comes to the phone — three capabilities, each hanging off data the app
-already has. A word is explained against the dictionary senses it actually
-has, a sentence is broken down where it was selected, and a chapter gets a
-guide before you commit to reading it. Keys are yours (BYOK): nothing is
-proxied, nothing is phoned home, and without a key every existing feature
-works exactly as before.
+already has. A word is explained in the sentence it sits in (and that sentence
+is translated with it), a sentence is broken down where it was selected, and a
+chapter gets a guide before you commit to reading it. Keys are yours (BYOK):
+nothing is proxied, nothing is phoned home, and without a key every existing
+feature works exactly as before. Everything either feature sends and receives
+is recorded in a local diagnostic log, so a failure can be handed over instead
+of described.
 
 ### Added
 
-- **Contextual gloss「✦ AI 释义」** — a new button on the word card asks the
-  model which of the word's *own* dictionary senses the sentence uses, plus a
-  one-line Chinese note. The model only ever picks from the numbered senses
-  ECDICT already returned for that word: no invented definitions, no second
-  source of truth. Hidden when the word has no senses to choose from.
+- **Contextual gloss「✦ AI 释义」** — the word card's ✦ AI asks the model what
+  the word means *in this sentence*, how the sentence reads in Chinese, and one
+  thing worth noticing about its use. The sentence is the grounding: the word
+  and the line it came from are the entire request, so the answer cannot wander
+  into a different book, and a word the dictionary does not know can still be
+  asked about.
+  (It originally had the model pick among the dictionary's numbered senses.
+  That worked worse in practice: ECDICT folds a word's meanings into one line —
+  `n. 1.儿童 2.婴儿 3.子女 …` — which is not something a model can choose from,
+  and it kept answering "none of these fit" with the right sense sitting in the
+  middle of the line.)
 - **Sentence parse「✦ AI 拆句」** — the selection toolbar's ✦ AI opens one
   merged view: the translation on top, then the sentence sliced into segments
   with their roles and glosses, then grammar notes. The original sentence is
@@ -40,6 +48,16 @@ works exactly as before.
   with 重试 and 去设置; the answer lands above the word card and the selection
   toolbar, and a drag inside the panel scrolls the panel — never the page
   behind it (the swipe exemption list learned two new surfaces).
+- **Diagnostic log「设置 → 诊断日志」** — a local, switchable record of what the
+  app did: every AI request (the system and user text in full, model, endpoint),
+  every answer (finish reason, elapsed time, tokens, the text), why an empty one
+  was empty, cache hits, settings saves, frontend errors and every route change.
+  Readable in the app, copyable as plain text, clearable, and off with one
+  switch. It stays on the device — the app still sends nothing anywhere but to
+  the provider the reader configured. Two sinks, because the failures that
+  matter most (a blank screen, a killed WebView) take the in-memory copy with
+  them: a 300-entry ring for the page and a rotated file (`logs/app.log`) for
+  afterwards.
 - **An answer cache that cannot lie** — completed answers are cached in
   SQLite (`ai_cache`), keyed by the hash of the *exact prompt*, so improving a
   prompt retires its old answers instead of serving stale ones. Empty
@@ -61,9 +79,36 @@ works exactly as before.
   where every other chapter-scale action already lives, and it is reachable
   from any page. The chip and its scroll tracking are gone, so nothing floats
   over the text at all.
+- The word card's ✦ AI closes the card as the panel opens. Both answer the same
+  question and the panel answers it in full; leaving the card up parked a
+  duplicate over the page the panel is meant to leave readable.
+- An AI failure now says *which* failure it was. "AI 没有返回内容" was the single
+  wording for four different things; the provider's `finish_reason`, its
+  `reasoning_content` and the answer's shape now separate a truncated answer
+  ("被截断，请重试或换一个模型") from a reasoning model that only thought, from a
+  content filter, from a genuinely empty reply. The output budget went from 1024
+  to 4096 tokens, which is a ceiling rather than a target — but 1024 could not
+  fit a segmented sentence plus a reasoning model's thinking, and the whole
+  budget going to the thinking is exactly how a successful request looked like
+  "no content".
 
 ### Fixed
 
+- **A back gesture out of a long reading session could leave a blank screen** —
+  the reader itself was fine; the history bookkeeping behind the hardware back
+  button was not. Every overlay pushed its own history entry and, on unmount,
+  decided "was that pop mine?" by looking at `history.state`. With two overlays
+  stacked (word card → AI panel) they could drop each other's entry, so the next
+  back consumed a real page entry while the guard swallowed it to close an
+  overlay: the URL and the screen ended up on different pages, and a few more
+  swipes produced an empty screen and then Android's exit prompt. Any number of
+  open overlays now owns exactly one history entry; the drop is deferred to the
+  end of the effect flush (so closing one overlay while opening another cannot
+  drop the wrong one) and only fires when the current entry is still ours. Two
+  safety nets were added with it: an error boundary (an uncaught render error
+  used to unmount the whole tree, which on the reader's dark background is
+  indistinguishable from a frozen app) and a catch-all route for reader URLs, so
+  a desynced history can land on the shelf instead of on nothing.
 - **Tapping a word on the line after a hyphenated wrap looks up that word** —
   it used to look up the word that was split. Print-converted EPUBs carry a
   soft hyphen (U+00AD) inside words, so a line can end "ac-" and start

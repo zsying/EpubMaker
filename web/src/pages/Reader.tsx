@@ -299,25 +299,10 @@ type LookupCardState = {
 // carries exactly the grounded inputs its Backend call needs — the model never
 // invents a word, a sentence or a chapter, it only re-reads what is on screen.
 type AIPanelState =
-  | { kind: 'explain'; word: string; sentence: string; senses: string[] }
+  | { kind: 'explain'; word: string; sentence: string }
   | { kind: 'parse'; sentence: string }
   | { kind: 'summary' }
   | null;
-
-// The dictionary's own translation lines, numbered — the only senses the model
-// is allowed to choose from. Entry first, then the base form, capped so a word
-// with forty senses cannot blow up the prompt budget.
-function sensesOf(res: LookupResult): string[] {
-  const out: string[] = [];
-  for (const d of [res.entry, res.base]) {
-    if (!d) continue;
-    for (const line of (d.translation || '').split('\n')) {
-      const t = line.trim();
-      if (t) out.push(t);
-    }
-  }
-  return out.slice(0, 12);
-}
 
 // Echoes the sentence the word came from with the word itself marked. The
 // sentence is plain text lifted off the page, so the only markup in it is the
@@ -3039,9 +3024,7 @@ export default function Reader() {
   // Overlays live outside both reading layouts: they are viewport-anchored, and
   // keeping one copy is what makes "select a word, look it up" work while
   // scrolling as well as while paging.
-  // The dictionary senses the word card can offer AI: computed once here so the
-  // button's visibility and its payload can never disagree.
-  const dictSenses = lookupCard ? sensesOf(lookupCard.res) : [];
+
   // A failed AI ask is very often a settings problem, so the error state offers
   // a way there — which first has to close the panel, or it would cover the
   // settings page it just navigated to.
@@ -3187,25 +3170,24 @@ export default function Reader() {
                     </button>
                   </>
                 )}
-                {/* Hidden without senses: with nothing to choose from the model
-                    would only be guessing, which is exactly what the grounding
-                    rule forbids. */}
-                {dictSenses.length > 0 && (
-                  <button
-                    className="ai-chip"
-                    title="结合当前句子，让 AI 挑出贴合语境的释义"
-                    onClick={() =>
-                      setAIPanel({
-                        kind: 'explain',
-                        word: lookupCard.res.entry?.word || lookupCard.res.query,
-                        sentence: lookupCard.context,
-                        senses: dictSenses,
-                      })
-                    }
-                  >
-                    ✦ AI
-                  </button>
-                )}
+                {/* Always offered: the model explains the word from the
+                    sentence, so it does not need the dictionary to have found
+                    anything. Opening the panel closes the card — the card is
+                    the smaller answer to the question the panel answers in
+                    full, and leaving it up would park a duplicate over the
+                    page the panel is meant to leave readable. */}
+                <button
+                  className="ai-chip"
+                  title="结合当前句子，让 AI 解释这个词，并翻译整句"
+                  onClick={() => {
+                    const word = lookupCard.res.entry?.word || lookupCard.res.query;
+                    const sentence = lookupCard.context;
+                    setLookupCard(null);
+                    setAIPanel({ kind: 'explain', word, sentence });
+                  }}
+                >
+                  ✦ AI
+                </button>
               </div>
             </>
           )}
@@ -3377,25 +3359,27 @@ export default function Reader() {
       {aiPanel?.kind === 'explain' && (
         <AIPanel<ExplainResult>
           title="✦ AI 释义"
-          run={() => api.explainInContext(aiPanel.word, aiPanel.sentence, aiPanel.senses)}
+          run={() => api.explainInContext(aiPanel.word, aiPanel.sentence)}
           render={(r) => (
             <>
               {r.cached && <span className="ai-cache-badge">缓存结果</span>}
               <p className="ai-sentence">{highlightWord(aiPanel.sentence, aiPanel.word)}</p>
-              {aiPanel.senses.length > 0 && (
+              {r.meaning && (
                 <>
-                  <div className="ai-label">词典义项</div>
-                  <ol className="ai-senses">
-                    {aiPanel.senses.map((s, i) => (
-                      <li key={i} className={r.sense === i + 1 ? 'on' : ''}>
-                        <b>{i + 1}.</b> {s}
-                      </li>
-                    ))}
-                  </ol>
+                  <div className="ai-label">
+                    在本句中
+                    {r.pos && <span className="ai-pos">{r.pos}</span>}
+                  </div>
+                  <p className="ai-explain">{r.meaning}</p>
                 </>
               )}
-              {r.sense < 0 && <p className="ai-note">AI 认为这些义项都不贴合这个句子。</p>}
               {r.note && <p className="ai-note">{r.note}</p>}
+              {r.translation && (
+                <>
+                  <div className="ai-label">整句翻译</div>
+                  <p className="ai-trans">{r.translation}</p>
+                </>
+              )}
             </>
           )}
           onClose={() => setAIPanel(null)}

@@ -146,14 +146,15 @@ export interface AIConfigView {
 }
 
 /**
- * The contextual gloss for one word: which of the dictionary's own senses the
- * sentence uses, plus a one-line Chinese explanation. `sense` is 1-based,
- * matching the numbered list the model was shown; -1 means none fit.
+ * The contextual gloss for one word: what it means in this sentence, plus the
+ * sentence's own translation. `pos`/`note` are best-effort colour — either may
+ * be empty.
  */
 export interface ExplainResult {
   word: string;
-  sense: number;
-  senseText: string;
+  meaning: string;
+  translation: string;
+  pos: string;
   note: string;
   cached: boolean;
 }
@@ -186,6 +187,28 @@ export interface SummaryResult {
   terms: SummaryTerm[];
   truncated: boolean;
   cached: boolean;
+}
+
+/* ----------------------------- diagnostics (0.4) ----------------------------- */
+
+/**
+ * One line of the local diagnostic log. `data` is a flat map — the settings
+ * page renders it as key/value rows without knowing any particular event.
+ */
+export interface LogEntry {
+  time: string;
+  level: 'debug' | 'info' | 'warn' | 'error' | string;
+  cat: string;
+  msg: string;
+  data?: Record<string, string>;
+}
+
+/** The log's state: the switch, the file, and how much is buffered. */
+export interface LogState {
+  enabled: boolean;
+  path: string;
+  size: number;
+  count: number;
 }
 
 /**
@@ -792,9 +815,9 @@ export const api = {
   /** One tiny real call against the stored settings; reports, never throws. */
   aiTestConnection: () => call<{ ok: boolean; reply?: string; error?: string }>('AITestConnection'),
 
-  /** Picks the sense a word carries in its sentence, from the dictionary's own senses. */
-  explainInContext: (word: string, sentence: string, senses: string[]) =>
-    call<ExplainResult>('ExplainInContext', word, sentence, senses),
+  /** Explains a word in the sentence it appeared in, and translates that sentence. */
+  explainInContext: (word: string, sentence: string) =>
+    call<ExplainResult>('ExplainInContext', word, sentence),
 
   /** Translation + breakdown of one sentence, in a single result. */
   parseSentence: (sentence: string) => call<ParseResult>('ParseSentence', sentence),
@@ -802,4 +825,21 @@ export const api = {
   /** A short guide for one chapter, from the chapter's own text. */
   summarizeChapter: (bookId: string, chapterId: string) =>
     call<SummaryResult>('SummarizeChapter', bookId, chapterId),
+
+  /* ---------------- diagnostics: the local log ---------------- */
+
+  /** Whether logging is on, where the file is, and how many entries are buffered. */
+  logState: () => call<LogState>('GetLogState'),
+
+  /** Newest entries, oldest first. `level` is a minimum ("warn" keeps errors). */
+  logEntries: (limit: number, cat: string, level: string) =>
+    call<LogEntry[]>('ListLogEntries', limit, cat, level),
+
+  setLogEnabled: (enabled: boolean) => call<boolean>('SetLogEnabled', enabled),
+
+  clearLog: () => call<boolean>('ClearLog'),
+
+  /** Records something the WebView saw — a JS error, a route change. Never throws. */
+  logClient: (level: string, cat: string, message: string, detail: string) =>
+    call<boolean>('LogClient', level, cat, message, detail),
 };

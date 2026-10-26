@@ -7,8 +7,8 @@ import (
 	"strings"
 	"testing"
 
-	"epubmaker-desktop/internal/aiconfig"
 	"epubmaker-desktop/internal/ai"
+	"epubmaker-desktop/internal/aiconfig"
 	"epubmaker-desktop/internal/db"
 	"epubmaker-desktop/internal/storage"
 )
@@ -21,19 +21,29 @@ type aiRecorder struct {
 	users   []string
 }
 
-// stubAI points aiChat at a fake reply and restores the real one afterwards.
+// stubAI points aiAsk at a fake reply and restores the real one afterwards.
 // The suite must never touch the network.
 func stubAI(t *testing.T, reply func(system, user string) (string, error)) *aiRecorder {
 	t.Helper()
-	old := aiChat
+	return stubAIWith(t, func(system, user string) (ai.Reply, error) {
+		s, err := reply(system, user)
+		return ai.Reply{Content: s, Finish: "stop"}, err
+	})
+}
+
+// stubAIWith is stubAI for the tests that care about finish_reason or the
+// reasoning channel rather than the text alone.
+func stubAIWith(t *testing.T, reply func(system, user string) (ai.Reply, error)) *aiRecorder {
+	t.Helper()
+	old := aiAsk
 	rec := &aiRecorder{}
-	aiChat = func(ctx context.Context, cfg ai.Config, system, user string) (string, error) {
+	aiAsk = func(ctx context.Context, cfg ai.Config, system, user string) (ai.Reply, error) {
 		rec.calls++
 		rec.systems = append(rec.systems, system)
 		rec.users = append(rec.users, user)
 		return reply(system, user)
 	}
-	t.Cleanup(func() { aiChat = old })
+	t.Cleanup(func() { aiAsk = old })
 	return rec
 }
 
@@ -73,44 +83,48 @@ func TestExplainInContext(t *testing.T) {
 	resetAI(t)
 	saveAIConfig(t, ai.Config{BaseURL: "http://ai.test/v1", APIKey: "sk-test", Model: "m"})
 	rec := stubAI(t, func(system, user string) (string, error) {
-		return `{"sense":2,"note":"这里指翻动书页"}`, nil
+		return `{"meaning":"这里指翻动书页","translation":"她翻过书页，笑了。",
+		         "pos":"v.","note":"turn the page 是固定搭配"}`, nil
 	})
 	b := &Backend{}
 
-	senses := []string{"vt. 转动；旋转", "vt. 翻；翻转", "vi. 变成；变得"}
-	out, err := b.ExplainInContext("turn", "She turned the page and smiled.", senses)
+	out, err := b.ExplainInContext("turn", "She turned the page and smiled.")
 	if err != nil {
 		t.Fatalf("ExplainInContext: %v", err)
 	}
-	if out.Sense != 2 || out.SenseText != "vt. 翻；翻转" {
-		t.Errorf("sense = %d (%q), want 2 (vt. 翻；翻转)", out.Sense, out.SenseText)
+	if out.Meaning != "这里指翻动书页" {
+		t.Errorf("meaning = %q", out.Meaning)
 	}
-	if out.Note != "这里指翻动书页" {
-		t.Errorf("note = %q", out.Note)
+	if out.Translation != "她翻过书页，笑了。" {
+		t.Errorf("translation = %q", out.Translation)
+	}
+	if out.POS != "v." || out.Note != "turn the page 是固定搭配" {
+		t.Errorf("pos/note = %q / %q", out.POS, out.Note)
 	}
 	if out.Cached {
 		t.Error("first answer should not be cached")
 	}
-	// Grounding: the prompt must carry the word, the sentence and every
-	// numbered sense — the model chooses between them, it is not asked to
-	// remember anything.
+	// Grounding: the prompt carries the word and the sentence, and nothing else
+	// is sent — the model explains from the sentence rather than choosing among
+	// dictionary lines.
 	if rec.calls != 1 {
 		t.Fatalf("calls = %d, want 1", rec.calls)
 	}
 	if !strings.Contains(rec.users[0], "She turned the page and smiled.") {
 		t.Errorf("user prompt missing the sentence: %q", rec.users[0])
 	}
-	for i, s := range senses {
-		if !strings.Contains(rec.users[0], s) {
-			t.Errorf("user prompt missing sense %d (%q)", i+1, s)
-		}
+	if !strings.Contains(rec.users[0], "turn") {
+		t.Errorf("user prompt missing the word: %q", rec.users[0])
 	}
-	if !strings.Contains(rec.users[0], "2. vt. 翻；翻转") {
-		t.Errorf("senses should be numbered: %q", rec.users[0])
+	if strings.Contains(rec.users[0], "义项") || strings.Contains(rec.users[0], "n. 1.") {
+		t.Errorf("the prompt must not carry dictionary senses any more: %q", rec.users[0])
+	}
+	if !strings.Contains(rec.systems[0], "整句") {
+		t.Errorf("the system prompt should also ask for a translation: %q", rec.systems[0])
 	}
 
 	// The second ask of the same question must be free.
-	out2, err := b.ExplainInContext("turn", "She turned the page and smiled.", senses)
+	out2, err := b.ExplainInContext("turn", "She turned the page and smiled.")
 	if err != nil {
 		t.Fatalf("ExplainInContext (2nd): %v", err)
 	}
@@ -122,10 +136,31 @@ func TestExplainInContext(t *testing.T) {
 	}
 }
 
+// A model that answers in prose instead of JSON is still answering: show it as
+// the explanation rather than reporting a parse failure.
+func TestExplainInContextProseFallback(t *testing.T) {
+	resetAI(t)
+	saveAIConfig(t, ai.Config{BaseURL: "http://ai.test/v1", APIKey: "sk-test", Model: "m"})
+	stubAI(t, func(system, user string) (string, error) {
+		return "turn 在这里是「翻（页）」的意思，整句：她翻过书页，笑了。", nil
+	})
+	b := &Backend{}
+	out, err := b.ExplainInContext("turn", "She turned the page and smiled.")
+	if err != nil {
+		t.Fatalf("ExplainInContext: %v", err)
+	}
+	if !strings.Contains(out.Meaning, "翻") {
+		t.Errorf("meaning = %q", out.Meaning)
+	}
+	if out.Translation != "" {
+		t.Errorf("translation = %q, want empty for a prose reply", out.Translation)
+	}
+}
+
 func TestExplainInContextNotConfigured(t *testing.T) {
 	resetAI(t)
 	b := &Backend{}
-	_, err := b.ExplainInContext("turn", "She turned the page.", []string{"vt. 翻"})
+	_, err := b.ExplainInContext("turn", "She turned the page.")
 	if err == nil || !strings.Contains(err.Error(), "未配置") {
 		t.Fatalf("error = %v, want the not-configured message", err)
 	}
@@ -141,15 +176,14 @@ func TestExplainInContextEmptyReplyNotCached(t *testing.T) {
 		if rec.calls == 1 {
 			return "  ", nil
 		}
-		return `{"sense":1,"note":"翻页"}`, nil
+		return `{"meaning":"翻页","translation":"她翻过书页。"}`, nil
 	})
 	b := &Backend{}
-	senses := []string{"vt. 翻"}
 
-	if _, err := b.ExplainInContext("turn", "She turned the page.", senses); err == nil {
+	if _, err := b.ExplainInContext("turn", "She turned the page."); err == nil {
 		t.Fatal("an empty reply should fail")
 	}
-	out, err := b.ExplainInContext("turn", "She turned the page.", senses)
+	out, err := b.ExplainInContext("turn", "She turned the page.")
 	if err != nil {
 		t.Fatalf("retry: %v", err)
 	}
@@ -161,22 +195,48 @@ func TestExplainInContextEmptyReplyNotCached(t *testing.T) {
 	}
 }
 
-func TestExplainInContextSenseOutOfRange(t *testing.T) {
+// The reader needs to know which kind of nothing they got: a cut-off answer and
+// a genuinely empty one have different fixes.
+func TestEmptyReplySaysWhy(t *testing.T) {
+	cases := []struct {
+		name string
+		r    ai.Reply
+		want string
+	}{
+		{"cut off", ai.Reply{Content: "", Finish: "length"}, "截断"},
+		{"thinking only", ai.Reply{Content: "", Reasoning: "先分析句子结构……"}, "思考过程"},
+		{"content filter", ai.Reply{Content: "", Finish: "content_filter"}, "content_filter"},
+		{"plain empty", ai.Reply{Content: "   ", Finish: "stop"}, "没有返回内容"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			resetAI(t)
+			saveAIConfig(t, ai.Config{BaseURL: "http://ai.test/v1", Model: "m"})
+			stubAIWith(t, func(system, user string) (ai.Reply, error) {
+				return tc.r, nil
+			})
+			b := &Backend{}
+			_, err := b.ExplainInContext("turn", "She turned the page.")
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("error = %v, want it to mention %q", err, tc.want)
+			}
+		})
+	}
+}
+
+// A JSON answer that was cut in half (the classic reason for "无法解析") must
+// be reported as truncation, not as a parse failure.
+func TestTruncatedJSONSaysTruncated(t *testing.T) {
 	resetAI(t)
-	saveAIConfig(t, ai.Config{BaseURL: "http://ai.test/v1", APIKey: "sk-test", Model: "m"})
-	stubAI(t, func(system, user string) (string, error) {
-		return `{"sense":99,"note":"这些义项都不贴合本句"}`, nil
+	saveAIConfig(t, ai.Config{BaseURL: "http://ai.test/v1", Model: "m"})
+	stubAIWith(t, func(system, user string) (ai.Reply, error) {
+		return ai.Reply{Content: `{"translation":"她翻过书页","segments":[{"text":"She","role":"主语"`,
+			Finish: "length"}, nil
 	})
 	b := &Backend{}
-	out, err := b.ExplainInContext("turn", "a turn of events", []string{"vt. 翻"})
-	if err != nil {
-		t.Fatalf("ExplainInContext: %v", err)
-	}
-	if out.Sense != -1 || out.SenseText != "" {
-		t.Errorf("sense = %d (%q), want -1 with no text", out.Sense, out.SenseText)
-	}
-	if out.Note == "" {
-		t.Error("the note should survive an out-of-range sense")
+	_, err := b.ParseSentence("She turned the page.")
+	if err == nil || !strings.Contains(err.Error(), "截断") {
+		t.Fatalf("error = %v, want the truncation message", err)
 	}
 }
 
@@ -184,8 +244,11 @@ func TestExplainInContextRejectsMissingGrounding(t *testing.T) {
 	resetAI(t)
 	saveAIConfig(t, ai.Config{BaseURL: "http://ai.test/v1", APIKey: "sk-test", Model: "m"})
 	b := &Backend{}
-	if _, err := b.ExplainInContext("turn", "She turned the page.", nil); err == nil {
-		t.Error("no senses means nothing to ground on; the call must be refused")
+	if _, err := b.ExplainInContext("turn", "  "); err == nil {
+		t.Error("without a sentence there is nothing to explain the word against")
+	}
+	if _, err := b.ExplainInContext("", "She turned the page."); err == nil {
+		t.Error("a missing word must be refused")
 	}
 }
 
