@@ -3075,7 +3075,14 @@ export default function Reader() {
           <button
             className="ai-chip"
             title="AI 翻译并拆解这个句子"
-            onClick={() => setAIPanel({ kind: 'parse', sentence: sel.text })}
+            onClick={() => {
+              // The panel takes over the screen: leaving the selection toolbar
+              // and the highlighted range up would park a floating strip of
+              // buttons over the chapter heading while the reader reads the
+              // answer (seen on the phone).
+              setAIPanel({ kind: 'parse', sentence: sel.text });
+              clearSelectionUI();
+            }}
           >
             ✦ AI
           </button>

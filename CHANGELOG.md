@@ -101,6 +101,12 @@ works exactly as before.
   The not-configured error itself now names the settings file the app actually
   read, because "but I DID configure it" is nearly always a second `ai.json`
   under another `AppHome`.
+- **The selection toolbar leaves when the AI panel arrives** — tapping ✦ AI on
+  a selection opened the answer but left the little strip of buttons (查词 /
+  ✦ AI / the three colours) parked above the highlighted sentence. On a phone
+  that strip sits near the top of the page, so it ended up over the chapter
+  heading while the reader was reading the answer. Opening the panel now clears
+  the selection and the bar, the way 划线 already did.
 
 ## [0.3.0] — 2026-10-25
 
