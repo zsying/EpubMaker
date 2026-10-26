@@ -449,6 +449,33 @@ function selectionEndRects(range: Range): { first: DOMRect; last: DOMRect } | nu
   return { first: list[0], last: list[list.length - 1] };
 }
 
+// The line fragment of `rects` that a point falls on, if any.
+//
+// getBoundingClientRect() is the UNION of those fragments, and one range in
+// particular lies about itself: the character right after a soft-hyphen (U+00AD)
+// line break — print-converted EPUBs ship them inside words — reports an empty
+// run at the end of the previous line plus its own glyph, so the union is a box
+// as wide as the column and two lines tall. Every point on the following line
+// then looks like it sits on that one character, and every tap there resolves
+// to the hyphenated word. Matching fragment by fragment keeps the answer local
+// to where the glyph is actually painted.
+function fragmentAt(
+  rects: ArrayLike<DOMRect>,
+  x: number,
+  y: number,
+  padX: number,
+  padY: number,
+): DOMRect | null {
+  for (let i = 0; i < rects.length; i++) {
+    const r = rects[i];
+    if (r.width <= 0) continue;
+    if (x >= r.left - padX && x <= r.right + padX && y >= r.top - padY && y <= r.bottom + padY) {
+      return r;
+    }
+  }
+  return null;
+}
+
 // The word a notebook jump points at. Offsets are stored as "where the
 // selection started", so the stored surface text is trusted while it still
 // matches and a word run is used when it has gone stale or was never stored.
@@ -1077,8 +1104,19 @@ export default function Reader() {
       const range = document.createRange();
       range.setStart(node, lo);
       range.setEnd(node, Math.min(lo + 1, len));
-      const r = range.getBoundingClientRect();
-      if (r.width > 0) {
+      // A character right after a soft-hyphen break reports two fragments: the
+      // hyphen at the end of the previous line and its own glyph on the next
+      // one. The glyph is the last one, and that is where the offset lands — the
+      // union of the two would average into a column the text is not in.
+      const frags = range.getClientRects();
+      let r: DOMRect | null = null;
+      for (let i = frags.length - 1; i >= 0; i--) {
+        if (frags[i].width > 0) {
+          r = frags[i];
+          break;
+        }
+      }
+      if (r) {
         const cx = r.left + r.width / 2;
         let page = Math.floor((cx - colLeft) / stride);
         if (page < 0) page = 0;
@@ -2531,9 +2569,9 @@ export default function Reader() {
         if (!ch || !ch.trim()) continue;
         probe.setStart(node, i);
         probe.setEnd(node, i + 1);
-        const r = probe.getBoundingClientRect();
-        if (r.width <= 0) continue;
-        if (x >= r.left - 3 && x <= r.right + 3 && y >= r.top - 5 && y <= r.bottom + 5) {
+        // Fragment by fragment: the character after a hyphenation break unions
+        // its glyph with the end of the previous line (see fragmentAt).
+        if (fragmentAt(probe.getClientRects(), x, y, 3, 5)) {
           idx = i;
           break;
         }
@@ -2582,7 +2620,9 @@ export default function Reader() {
             const r2 = document.createRange();
             r2.setStart(s.node, Math.min(s.offset, (s.node.textContent || '').length));
             r2.setEnd(e.node, Math.min(e.offset + 1, (e.node.textContent || '').length));
-            const rect2 = r2.getBoundingClientRect();
+            // Prefer the fragment under the finger; a word broken across
+            // inline boundaries can still report a union box.
+            const rect2 = fragmentAt(r2.getClientRects(), x, y, 4, 4) ?? r2.getBoundingClientRect();
             if (rect2.width > 0) {
               return { word: rspan.word, offset: rspan.start, rect: rect2, range: r2 };
             }
@@ -2593,20 +2633,13 @@ export default function Reader() {
     const range = document.createRange();
     range.setStart(node, span.start);
     range.setEnd(node, span.end);
-    const rect = range.getBoundingClientRect();
-    if (rect.width <= 0) return null;
-    // Trust the snap only when the point actually sits on the word's box (a
-    // little slack for glyph edges). A word wrapped across lines yields the
-    // union box, so either of its lines accepts the tap — which is correct.
-    const SLACK = 4;
-    if (
-      x < rect.left - SLACK ||
-      x > rect.right + SLACK ||
-      y < rect.top - SLACK ||
-      y > rect.bottom + SLACK
-    ) {
-      return null;
-    }
+    // Trust the snap only when the point actually sits on the word (a little
+    // slack for glyph edges) — and on the FRAGMENT of it that was tapped. A
+    // word wrapped across lines has one fragment per line, and the union of
+    // them is not a place any glyph is painted: anchoring the card to it put
+    // the card over the wrong line.
+    const rect = fragmentAt(range.getClientRects(), x, y, 4, 4);
+    if (!rect) return null;
     return { word: span.word, offset: charOffset(root, node, span.start), rect, range };
   }
 

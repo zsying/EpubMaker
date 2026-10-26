@@ -57,6 +57,21 @@ works exactly as before.
   the flow would shift every character offset after it — progress,
   highlights and lookups all count text nodes.
 
+### Fixed
+
+- **Tapping a word on the line after a hyphenated wrap looks up that word** —
+  it used to look up the word that was split. Print-converted EPUBs carry a
+  soft hyphen (U+00AD) inside words, so a line can end "ac-" and start
+  "cused". For the character right after such a break the browser reports a
+  rect that unions an empty run at the end of the previous line with the glyph
+  on the next one — a box as wide as the column and two lines tall — and the
+  hit test trusted it, so every point on the following line resolved to that
+  one character and the whole line looked up the hyphenated word. Hit testing
+  now matches line fragment by line fragment and anchors the card to the
+  fragment that was actually tapped; the offset→page map takes the glyph
+  fragment too, so restoring into a hyphenated line no longer lands on the
+  page before it.
+
 ## [0.3.0] — 2026-10-25
 
 EpubMaker runs on a phone. A second entry point (Wails v3) binds the same
