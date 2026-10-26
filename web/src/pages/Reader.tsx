@@ -292,6 +292,11 @@ type LookupCardState = {
   res: LookupResult;
   offset: number;
   context: string;
+  /** The word as it appears on the page (invisibles stripped). The dictionary
+   * normalises case, so `query` comes back as "melissa" for a name the reader
+   * tapped as "Melissa" — fine for a lookup key, wrong for a card that quotes
+   * the text back. */
+  surface: string;
 } | null;
 
 // The AI panel is one surface with three callers (0.4, C 方案): the word card's
@@ -2031,13 +2036,18 @@ export default function Reader() {
   // deliberate exit must never be resurrectable by the back button.
   function goUp(fallback: string) {
     const st = window.history.state as { idx?: number } | null;
+    const idx = st && typeof st.idx === 'number' ? st.idx : 0;
     // An open overlay must not turn this button into a no-op: the pop would be
     // swallowed by the overlay guard and the reader would stay on screen, which
     // reads as a dead button. Close the overlays and step over them as well, so
     // one press still means one level.
-    const depth = navigationDepth();
+    //
+    // Capped at what actually exists: `idx` counts the entries ABOVE the root,
+    // so this page plus everything behind it is idx+1, and asking for more is a
+    // silent no-op that leaves the button looking dead.
+    const depth = Math.min(navigationDepth(), idx + 1);
     closeForNavigation();
-    if (st && typeof st.idx === 'number' && st.idx > 0) nav(-depth);
+    if (idx > 0) nav(-depth);
     else nav(fallback, { replace: true });
   }
 
@@ -2516,7 +2526,13 @@ export default function Reader() {
     setLookupBusy(true);
     try {
       const res = await api.lookupWord(id, current, start, word, context);
-      setLookupCard({ ...at, res, offset: start, context });
+      setLookupCard({
+        ...at,
+        res,
+        offset: start,
+        context,
+        surface: word.replace(/[\u00AD\u200B-\u200D\uFEFF]/g, ''),
+      });
     } catch (e) {
       toastError(e);
     } finally {
@@ -3038,6 +3054,26 @@ export default function Reader() {
     setAIPanel(null);
     nav('/settings');
   };
+  // One way into the AI for a word, shared by the card's ✦ and by the "not in
+  // the dictionary" state — where the model is the only answer there is, so the
+  // entry has to be as easy to find there as on a word that was found.
+  //
+  // Opening the panel closes the card: the card is the smaller answer to the
+  // question the panel answers in full, and leaving it up would park a
+  // duplicate over the page the panel is meant to leave readable.
+  const explainThis = () => {
+    if (!lookupCard) return;
+    // The dictionary's headword when it found one (a lemma explains better than
+    // an inflected form), otherwise the word as printed — which is also what
+    // the card shows, so the panel and the tap agree.
+    const word = lookupCard.res.entry?.word || lookupCard.surface || lookupCard.res.query;
+    const sentence = lookupCard.context;
+    setLookupCard(null);
+    setAIPanel({ kind: 'explain', word, sentence });
+  };
+  // The word as the reader sees it on the page. Falls back to the dictionary's
+  // normalised query for an older card state.
+  const cardWord = lookupCard ? lookupCard.surface || lookupCard.res.query : '';
   const overlayLayer = (
     <>
       {/* selection toolbar — stays up while a handle is dragged: the drag is
@@ -3120,14 +3156,30 @@ export default function Reader() {
             <div className="dict-miss">
               {!dictReady ? (
                 <>
-                  词库未安装
+                  <div className="dict-miss-title">词库未安装</div>
                   <div className="dict-miss-hint">在「我的 → 查词词库」可在线下载</div>
                 </>
               ) : (
                 <>
-                  词库未收录 <b>{lookupCard.res.query}</b>
+                  <div className="dict-miss-title">
+                    词库未收录 <b>{cardWord}</b>
+                  </div>
+                  {/* A word the dictionary does not have is usually a name, a
+                      coinage or a domain term — which is exactly the word a
+                      reader needs help with. Ending the answer at "未收录" is
+                      the least useful thing the card could do, so the model is
+                      offered right here, at full size. */}
+                  <div className="dict-miss-hint">
+                    人名、地名、专业词常不在词库里。AI 可以结合这一句解释它，并把整句翻成中文。
+                  </div>
                 </>
               )}
+              <button className="ai-fallback" onClick={explainThis}>
+                <span className="ai-fallback-star" aria-hidden="true">
+                  ✦
+                </span>
+                让 AI 解释「{cardWord}」
+              </button>
             </div>
           ) : (
             <>
@@ -3178,19 +3230,11 @@ export default function Reader() {
                 )}
                 {/* Always offered: the model explains the word from the
                     sentence, so it does not need the dictionary to have found
-                    anything. Opening the panel closes the card — the card is
-                    the smaller answer to the question the panel answers in
-                    full, and leaving it up would park a duplicate over the
-                    page the panel is meant to leave readable. */}
+                    anything. */}
                 <button
                   className="ai-chip"
                   title="结合当前句子，让 AI 解释这个词，并翻译整句"
-                  onClick={() => {
-                    const word = lookupCard.res.entry?.word || lookupCard.res.query;
-                    const sentence = lookupCard.context;
-                    setLookupCard(null);
-                    setAIPanel({ kind: 'explain', word, sentence });
-                  }}
+                  onClick={explainThis}
                 >
                   ✦ AI
                 </button>

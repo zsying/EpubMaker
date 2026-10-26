@@ -32,9 +32,13 @@ export default function SubHeader({
           // shrinks, so it says "there is something behind me" long after the
           // stack is empty. A sheet left open is stepped over, not swallowed.
           const st = window.history.state as { idx?: number } | null;
-          const depth = navigationDepth();
+          const idx = st && typeof st.idx === 'number' ? st.idx : 0;
+          // Never step past what exists: idx counts the entries above the root,
+          // so this page plus its past is idx+1. go(-3) with two entries behind
+          // is a no-op, and the button simply stops working.
+          const depth = Math.min(navigationDepth(), idx + 1);
           closeForNavigation();
-          if (st && typeof st.idx === 'number' && st.idx > 0) nav(-depth);
+          if (idx > 0) nav(-depth);
           else nav(backTo, { replace: true });
         }}
       >

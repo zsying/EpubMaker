@@ -27,6 +27,13 @@ of described.
   `n. 1.儿童 2.婴儿 3.子女 …` — which is not something a model can choose from,
   and it kept answering "none of these fit" with the right sense sitting in the
   middle of the line.)
+- **The card offers the AI when the dictionary has nothing** —「词库未收录」used
+  to be the end of the answer, which is backwards: a word no dictionary has is
+  usually a name, a coinage or a domain term, and that is exactly the word a
+  reader needs help with. The card now says why the word is missing and puts a
+  full-width 「✦ 让 AI 解释「…」」 button in the same box, so the model is one tap
+  away instead of hidden behind a small chip. It is offered with no dictionary
+  installed as well, since the model never needed one.
 - **Sentence parse「✦ AI 拆句」** — the selection toolbar's ✦ AI opens one
   merged view: the translation on top, then the sentence sliced into segments
   with their roles and glosses, then grammar notes. The original sentence is
@@ -124,6 +131,19 @@ of described.
   used to be swallowed, which read as a dead button), a marked entry that nobody
   is tracking is skipped rather than rendered, and tapping the tab you are
   already on no longer pushes a second copy of it.
+- **Tabs no longer leave copies behind them** — reported as 生词本 → 书架 → 生词本
+  → 书架 → 退出: from 生词本, one back reached the shelf, and the *next* back went
+  into the notebook again instead of leaving. Every tab switch pushed a history
+  entry, so walking 书架 → 生词本 → 书架 → 生词本 produced
+  `[/, /vocab, /, /vocab]` — the third press landed on the second entry, which
+  is a copy of the notebook. The three tabs are siblings, not steps, so they now
+  behave that way: from the shelf a tab is pushed once (so it sits directly on
+  the shelf), from a sibling tab it replaces it (so the depth stays 2), and the
+  shelf tab pops straight back to the root however deep the page is. One back
+  from 生词本 is therefore always the shelf, and the next one is the exit
+  prompt. The header chevron and the reader's 返回 step over at most what
+  exists — asking for one entry more used to be a silent no-op, which is how a
+  back button could look dead.
 - **Tapping a word on the line after a hyphenated wrap looks up that word** —
   it used to look up the word that was split. Print-converted EPUBs carry a
   soft hyphen (U+00AD) inside words, so a line can end "ac-" and start

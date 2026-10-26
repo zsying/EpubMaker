@@ -1752,10 +1752,42 @@ a {
   padding-right: 18px;
   color: var(--text-2);
 }
+.dict-miss-title b {
+  color: var(--text);
+  font-size: 15px;
+  font-weight: 600;
+}
 .dict-miss-hint {
   margin-top: 4px;
   font-size: 12px;
   color: var(--text-3);
+}
+/* A word the dictionary does not have is the one case where the model is the
+   only answer, so its entry here is a full-width button — not the small ✦ chip
+   the card uses when the word was found. */
+.ai-fallback {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  margin-top: 10px;
+  padding: 9px 11px;
+  border: none;
+  border-radius: 9px;
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-size: 13px;
+  font-weight: 600;
+  text-align: left;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+.ai-fallback:active {
+  filter: brightness(0.96);
+}
+.ai-fallback-star {
+  font-size: 14px;
+  line-height: 1;
 }
 .swatch {
   width: 22px;

@@ -1,11 +1,45 @@
-import { NavLink, useLocation } from 'react-router-dom';
+import { useEffect, useState } from 'react';
+import { NavLink, useLocation, useNavigate } from 'react-router-dom';
 
 /**
  * Bottom tab bar for phones. Rendered by App.tsx on every non-reader route;
  * CSS keeps it off the desktop (display:none outside the 640px breakpoint) and
  * hides the desktop top bar in return. Icons are inline SVG stroked with
  * currentColor so the active state is one CSS color away.
+ *
+ * Tabs are siblings, not steps (2026-10-26)
+ * ----------------------------------------
+ * 书架 / 生词本 / 我的 are three views of the same level, so switching between
+ * them must not add history — yet every switch used to push, and the copies
+ * piled up behind each other. Walk 书架 → 生词本 → 书架 → 生词本 and the stack
+ * is [/, /vocab, /, /vocab]: the first back lands on the third entry, which is
+ * the shelf, so it looks fine; the next back lands on the SECOND entry and the
+ * reader is inside the notebook again — 生词本 appearing after 书架, which is
+ * exactly the sequence that reads as "the app is going backwards on its own".
+ *
+ * The rule is therefore positional rather than additive:
+ *
+ *   - at the root (idx 0) a non-shelf tab is pushed once, so the shelf stays
+ *     underneath and one back returns to it;
+ *   - from a sibling tab it REPLACES, so the depth stays 2 and one back still
+ *     returns to the shelf — the notebook can never end up under the shelf;
+ *   - from a second-level page (设置 / 书签 …) the stack is collapsed to the
+ *     root first, then the tab is entered from there, so the same invariant
+ *     holds no matter where the reader came from;
+ *   - the shelf tab pops straight back to the root, however many levels are
+ *     up, because the shelf IS the root.
+ *
+ * Net effect: at any moment 生词本 and 我的 sit directly on 书架, so one back
+ * from either always reaches the shelf and the next one leaves the app.
  */
+
+/** The router's own depth counter. `history.length` is useless here: it never
+ * shrinks, so it keeps claiming there is something behind a page whose stack
+ * has already been emptied. */
+function depthIndex(): number {
+  const st = window.history.state as { idx?: number } | null;
+  return st && typeof st.idx === 'number' ? st.idx : 0;
+}
 const TABS = [
   {
     to: '/',
@@ -59,6 +93,18 @@ const TABS = [
 
 export default function MobileTabs() {
   const { pathname } = useLocation();
+  const nav = useNavigate();
+  // A tab that had to wait for the stack to collapse. Set when the reader taps
+  // a tab from a second-level page; consumed by the effect below once the root
+  // is actually on screen.
+  const [afterRoot, setAfterRoot] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!afterRoot || pathname !== '/') return; // still unwinding
+    setAfterRoot(null);
+    nav(afterRoot);
+  }, [afterRoot, pathname, nav]);
+
   return (
     <nav className="tabbar" aria-label="主导航">
       {TABS.map((t) => {
@@ -72,7 +118,29 @@ export default function MobileTabs() {
             to={t.to}
             end={t.end}
             onClick={(e) => {
-              if (here) e.preventDefault();
+              // Every case below navigates by hand: the default link behaviour
+              // is the push that used to pile copies up.
+              e.preventDefault();
+              if (here) return;
+              const idx = depthIndex();
+              if (t.to === '/') {
+                // The shelf is the root. Coming back to it means putting away
+                // whatever stands on top, however many levels that is.
+                if (idx > 0) nav(-idx);
+                return;
+              }
+              if (idx <= 1) {
+                // From the shelf: one level up, so a back press returns there.
+                // From a sibling tab: in place, so the shelf stays underneath.
+                nav(t.to, { replace: idx === 1 });
+                return;
+              }
+              // The bar is only drawn on the three top-level routes today, so
+              // this is a guard rather than a path in use: if it ever grows to
+              // a second-level page, collapse to the root first and enter from
+              // there, instead of stacking a tab on top of a sub-page.
+              setAfterRoot(t.to);
+              nav(-(idx - 1));
             }}
             className={({ isActive }) => `tabbar-item${isActive ? ' active' : ''}`}
           >
