@@ -10,9 +10,9 @@
 //
 //   - A ring buffer in memory (RingSize entries) that the settings page reads
 //     back. Bounded, so a long session cannot grow the process.
-//   - A JSONL file next to the other app data (RotateBytes, one generation
-//     kept). This is the one that survives a crash or a WebView restart, which
-//     is exactly when the in-memory copy is gone.
+//   - A JSONL file next to the other app data (MaxBytes, oldest 30 MB dropped
+//     when it crosses it). This is the one that survives a crash or a WebView
+//     restart, which is exactly when the in-memory copy is gone.
 //
 // Logging is switchable and defaults to ON: a diagnostic log that is off when
 // the bug happens is worth nothing. It stays on the device, the settings page
@@ -44,9 +44,15 @@ const (
 	// Big enough for a reading session with a dozen AI calls, small enough that
 	// the whole buffer is a few hundred KB with the longest prompts in it.
 	RingSize = 300
-	// RotateBytes bounds the file. At ~1 KB an entry this is a few thousand
-	// lines — several sessions — before the older generation is dropped.
-	RotateBytes = 512 << 10
+	// MaxBytes is the ceiling for the file on disk. Beyond it the oldest part is
+	// dropped (see TrimBytes), so an app that runs for months cannot fill the
+	// phone with its own diary.
+	MaxBytes = 50 << 20
+	// TrimBytes is how much is deleted each time the file crosses MaxBytes:
+	// dropping the oldest 30 MB leaves about 20 MB — enough room to keep writing
+	// for a long time before the next trim, so trimming is rare rather than
+	// something that happens on every write.
+	TrimBytes = 30 << 20
 	// valueLimit caps one field. A chapter prompt is 6,000 characters; keeping
 	// all of it in every copy would make the log useless to read and expensive
 	// to keep. The head is what identifies the request, so that is what stays.
@@ -55,8 +61,7 @@ const (
 	// startup — enough for the last few sessions, never the whole file.
 	tailBytes = 128 << 10
 
-	logFileName  = "app.log"
-	rotateSuffix = ".1"
+	logFileName = "app.log"
 	// settingsFile keeps the on/off choice. It lives beside the log rather than
 	// in config.json so that turning logging off never rewrites a file meant to
 	// travel with backups.
@@ -80,6 +85,10 @@ type Status struct {
 	Path    string `json:"path"`
 	Size    int64  `json:"size"`
 	Count   int    `json:"count"`
+	// Max and Trim travel with the status so the page can say what the file is
+	// allowed to grow to, and what will be dropped when it gets there.
+	Max  int64 `json:"max"`
+	Trim int64 `json:"trim"`
 }
 
 type settings struct {
@@ -244,15 +253,44 @@ func withEnv(d map[string]string) map[string]string {
 	return d
 }
 
+var (
+	// The trim thresholds, as variables only so a test can lower them: proving
+	// the ceiling works should not mean writing 50 MB in a unit test. Nothing
+	// outside a test assigns them.
+	limitBytes = int64(MaxBytes)
+	dropBytes  = int64(TrimBytes)
+)
+
 func writeLocked(e Entry) {
 	if dir == "" {
 		return
 	}
 	p := filepath.Join(dir, logFileName)
-	if st, err := os.Stat(p); err == nil && st.Size() > RotateBytes {
-		_ = os.Remove(p + rotateSuffix)
-		_ = os.Rename(p, p+rotateSuffix)
+	if st, err := os.Stat(p); err == nil && st.Size() > limitBytes {
+		if dropped, ok := trimOldest(p, dropBytes); ok {
+			// Say so in the file itself: a log that silently begins mid-session
+			// reads like data loss when someone inspects it later.
+			marker := Entry{
+				Time:  time.Now().Format("2006-01-02 15:04:05.000"),
+				Level: LevelInfo,
+				Cat:   "app",
+				Msg:   "日志超过上限，已删除最早的部分",
+				Data: map[string]string{
+					"droppedBytes": itoa(dropped),
+					"maxBytes":     itoa(MaxBytes),
+					"trimBytes":    itoa(TrimBytes),
+				},
+			}
+			appendRingLocked(marker)
+			writeLine(p, marker)
+		}
 	}
+	writeLine(p, e)
+}
+
+// writeLine appends one JSONL entry. Split out so the trim marker and the
+// caller's entry go through the same path.
+func writeLine(p string, e Entry) {
 	raw, err := json.Marshal(e)
 	if err != nil {
 		return
@@ -263,6 +301,77 @@ func writeLocked(e Entry) {
 	}
 	defer f.Close()
 	_, _ = f.Write(append(raw, '\n'))
+}
+
+// trimOldest drops the oldest dropBytes of the log, starting at the first line
+// boundary after the cut, so what survives begins with a whole entry instead of
+// the tail of one. The remainder is shifted down in place (read and write
+// positions never cross, so no second copy of the file is needed) and the file
+// is truncated, which is what actually gives the space back.
+//
+// Returns how many bytes went away.
+func trimOldest(p string, dropBytes int64) (int64, bool) {
+	f, err := os.OpenFile(p, os.O_RDWR, 0o644)
+	if err != nil {
+		return 0, false
+	}
+	defer f.Close()
+	st, err := f.Stat()
+	if err != nil || st.Size() <= dropBytes {
+		return 0, false
+	}
+	size := st.Size()
+	off := dropBytes
+	// Skip the partial line the cut landed in.
+	probe := make([]byte, 64<<10)
+	for off < size {
+		n, rerr := f.ReadAt(probe, off)
+		if i := indexNewline(probe[:n]); i >= 0 {
+			off += int64(i) + 1
+			break
+		}
+		if rerr != nil {
+			// No newline left in the whole tail: nothing worth keeping.
+			off = size
+			break
+		}
+		off += int64(n)
+	}
+	if off >= size {
+		// Nothing survives — start over rather than leave a torn fragment.
+		if err := f.Truncate(0); err != nil {
+			return 0, false
+		}
+		return size, true
+	}
+	buf := make([]byte, 1<<20)
+	var rp, wp int64 = off, 0
+	for {
+		n, rerr := f.ReadAt(buf, rp)
+		if n > 0 {
+			if _, werr := f.WriteAt(buf[:n], wp); werr != nil {
+				return 0, false
+			}
+			rp += int64(n)
+			wp += int64(n)
+		}
+		if rerr != nil {
+			break
+		}
+	}
+	if err := f.Truncate(wp); err != nil {
+		return 0, false
+	}
+	return off, true
+}
+
+func indexNewline(b []byte) int {
+	for i, c := range b {
+		if c == '\n' {
+			return i
+		}
+	}
+	return -1
 }
 
 // Entries returns the newest entries, oldest first. cat filters by category
@@ -294,7 +403,7 @@ func State() Status {
 	mu.Lock()
 	defer mu.Unlock()
 	ensureLocked()
-	s := Status{Enabled: enabled, Count: len(entries)}
+	s := Status{Enabled: enabled, Count: len(entries), Max: MaxBytes, Trim: TrimBytes}
 	if dir == "" {
 		return s
 	}
@@ -316,7 +425,6 @@ func Clear() error {
 		return nil
 	}
 	p := filepath.Join(dir, logFileName)
-	_ = os.Remove(p + rotateSuffix)
 	if err := os.Truncate(p, 0); err != nil && !os.IsNotExist(err) {
 		return err
 	}
@@ -334,10 +442,10 @@ func clip(s string, n int) string {
 	if len(r) <= n {
 		return s
 	}
-	return string(r[:n]) + "…(已截断，原长 " + itoa(len(r)) + " 字)"
+	return string(r[:n]) + "…(已截断，原长 " + itoa(int64(len(r))) + " 字)"
 }
 
-func itoa(n int) string {
+func itoa(n int64) string {
 	if n == 0 {
 		return "0"
 	}

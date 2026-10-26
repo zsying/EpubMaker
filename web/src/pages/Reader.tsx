@@ -49,7 +49,7 @@ import {
   type ReadMode,
 } from '../readingPrefs';
 import { isTouchPrimary } from '../device';
-import { useBackClose } from '../backNav';
+import { closeForNavigation, navigationDepth, useBackClose } from '../backNav';
 import FontPicker, { CUSTOM_FONT_FAMILY } from '../components/FontPicker';
 import AIPanel from '../components/AIPanel';
 
@@ -2031,7 +2031,13 @@ export default function Reader() {
   // deliberate exit must never be resurrectable by the back button.
   function goUp(fallback: string) {
     const st = window.history.state as { idx?: number } | null;
-    if (st && typeof st.idx === 'number' && st.idx > 0) nav(-1);
+    // An open overlay must not turn this button into a no-op: the pop would be
+    // swallowed by the overlay guard and the reader would stay on screen, which
+    // reads as a dead button. Close the overlays and step over them as well, so
+    // one press still means one level.
+    const depth = navigationDepth();
+    closeForNavigation();
+    if (st && typeof st.idx === 'number' && st.idx > 0) nav(-depth);
     else nav(fallback, { replace: true });
   }
 

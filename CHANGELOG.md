@@ -56,8 +56,12 @@ of described.
   switch. It stays on the device — the app still sends nothing anywhere but to
   the provider the reader configured. Two sinks, because the failures that
   matter most (a blank screen, a killed WebView) take the in-memory copy with
-  them: a 300-entry ring for the page and a rotated file (`logs/app.log`) for
-  afterwards.
+  them: a 300-entry ring for the page and a rotating file (`logs/app.log`) for
+  afterwards. The file is capped at 50 MB — past that the oldest 30 MB is
+  dropped at a line boundary, and the trim leaves a note in the log saying how
+  much went — so months of use cannot fill the phone. Logging is on by default:
+  the log is only worth anything if it was already running when the bug
+  happened, and one switch in the same panel turns it off.
 - **An answer cache that cannot lie** — completed answers are cached in
   SQLite (`ai_cache`), keyed by the hash of the *exact prompt*, so improving a
   prompt retires its old answers instead of serving stale ones. Empty
@@ -109,6 +113,17 @@ of described.
   used to unmount the whole tree, which on the reader's dark background is
   indistinguishable from a frozen app) and a catch-all route for reader URLs, so
   a desynced history can land on the shelf instead of on nothing.
+- **Backing out of a book no longer walks through it twice** — reported as
+  生词本 → 书籍正文 → 生词本 → 书架 → 退出. Leaving a page while an overlay was
+  open (the word card, the AI panel, the selection toolbar) pushed the new page
+  *on top of* the overlay's single history entry, burying it; the next back press
+  then popped that buried copy and re-rendered the page the reader had just left.
+  Four rules now keep the stack honest: a navigation taken with an overlay open
+  replaces that entry instead of stacking on it, an in-app 返回 with a card on
+  screen closes the overlays and steps over them in the same press (the press
+  used to be swallowed, which read as a dead button), a marked entry that nobody
+  is tracking is skipped rather than rendered, and tapping the tab you are
+  already on no longer pushes a second copy of it.
 - **Tapping a word on the line after a hyphenated wrap looks up that word** —
   it used to look up the word that was split. Print-converted EPUBs carry a
   soft hyphen (U+00AD) inside words, so a line can end "ac-" and start

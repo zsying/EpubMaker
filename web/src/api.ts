@@ -209,6 +209,10 @@ export interface LogState {
   path: string;
   size: number;
   count: number;
+  /** How large the file may get before the oldest part is dropped. */
+  max: number;
+  /** How much is dropped when it gets there. */
+  trim: number;
 }
 
 /**

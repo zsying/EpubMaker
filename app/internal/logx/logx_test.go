@@ -170,3 +170,149 @@ func TestFirstEntryCarriesEnvironment(t *testing.T) {
 		t.Errorf("the first entry should name the host OS: %v", e.Data)
 	}
 }
+
+// The file is allowed to grow to MaxBytes; past that the oldest TrimBytes go,
+// so the log rolls instead of filling the phone.
+func TestTrimDropsTheOldestWholeLines(t *testing.T) {
+	dir := t.TempDir()
+	p := filepath.Join(dir, logFileName)
+	var sb strings.Builder
+	for i := 0; i < 200; i++ {
+		sb.WriteString(`{"time":"t","level":"info","cat":"app","msg":"line-` + string(rune('a'+i%26)) + `"}` + "\n")
+	}
+	if err := os.WriteFile(p, []byte(sb.String()), 0o644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	before, _ := os.Stat(p)
+
+	dropped, ok := trimOldest(p, 2000)
+	if !ok {
+		t.Fatal("trim reported no work")
+	}
+	after, err := os.Stat(p)
+	if err != nil {
+		t.Fatalf("stat: %v", err)
+	}
+	if after.Size() != before.Size()-dropped {
+		t.Errorf("size = %d, want %d", after.Size(), before.Size()-dropped)
+	}
+	if dropped < 2000 {
+		t.Errorf("dropped = %d, want at least the requested 2000", dropped)
+	}
+	raw, err := os.ReadFile(p)
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	lines := strings.Split(strings.TrimRight(string(raw), "\n"), "\n")
+	// Every surviving line must be a whole JSON object: a cut through the middle
+	// of one would make the tail loader drop it and hide real history.
+	for i, ln := range lines {
+		if !strings.HasPrefix(ln, "{") || !strings.HasSuffix(ln, "}") {
+			t.Fatalf("line %d is not a whole entry: %q", i, ln)
+		}
+	}
+	if len(lines) < 50 {
+		t.Errorf("kept only %d lines, expected most of the file to survive", len(lines))
+	}
+}
+
+// A log that lost its newlines (a torn write, a hand-edited file) has no whole
+// entry to keep past the cut — the file must be emptied rather than left
+// holding a fragment that the tail loader silently drops.
+func TestTrimWithNoWholeLineLeftEmptiesTheFile(t *testing.T) {
+	dir := t.TempDir()
+	p := filepath.Join(dir, logFileName)
+	if err := os.WriteFile(p, []byte(strings.Repeat("x", 200)), 0o644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	dropped, ok := trimOldest(p, 50)
+	if !ok {
+		t.Fatal("trim reported no work on a file with no newline")
+	}
+	if dropped != 200 {
+		t.Errorf("dropped = %d, want the whole 200", dropped)
+	}
+	st, err := os.Stat(p)
+	if err != nil {
+		t.Fatalf("stat: %v", err)
+	}
+	if st.Size() != 0 {
+		t.Errorf("size = %d, want 0", st.Size())
+	}
+}
+
+// Asking to drop more than the file holds is a no-op, not a wipe.
+func TestTrimDoesNothingWhenAskExceedsTheFile(t *testing.T) {
+	dir := t.TempDir()
+	p := filepath.Join(dir, logFileName)
+	body := "{\"msg\":\"one\"}\n{\"msg\":\"two\"}\n"
+	if err := os.WriteFile(p, []byte(body), 0o644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	if _, ok := trimOldest(p, 1<<20); ok {
+		t.Fatal("trim should decline to drop more than the file holds")
+	}
+	raw, err := os.ReadFile(p)
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	if string(raw) != body {
+		t.Errorf("file changed: %q", raw)
+	}
+}
+
+// Status carries the ceiling so the settings page can say what it is.
+func TestStatusReportsTheCap(t *testing.T) {
+	reset(t)
+	s := State()
+	if s.Max != MaxBytes || s.Trim != TrimBytes {
+		t.Errorf("status = %+v, want max=%d trim=%d", s, MaxBytes, TrimBytes)
+	}
+}
+
+// Crossing the ceiling must trim the file, keep writing into it, and leave a
+// note that history was dropped — end to end, through Event().
+func TestCrossingTheCeilingTrimsAndSaysSo(t *testing.T) {
+	dir := reset(t)
+	limitBytes, dropBytes = 4<<10, 3<<10
+	t.Cleanup(func() { limitBytes, dropBytes = int64(MaxBytes), int64(TrimBytes) })
+
+	// ~200 bytes a line, so a few dozen events cross 4 KB.
+	pad := strings.Repeat("x", 150)
+	for i := 0; i < 60; i++ {
+		Event(LevelInfo, "app", "tick", "pad", pad)
+	}
+	p := filepath.Join(dir, logFileName)
+	st, err := os.Stat(p)
+	if err != nil {
+		t.Fatalf("stat: %v", err)
+	}
+	if st.Size() > limitBytes {
+		t.Errorf("file is %d bytes, over the %d ceiling", st.Size(), limitBytes)
+	}
+	raw, err := os.ReadFile(p)
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	if !strings.Contains(string(raw), "已删除最早的部分") {
+		t.Error("the trim left no note in the file")
+	}
+	// The log keeps working afterwards, and the ring carries the note too.
+	Event(LevelError, "app", "after the trim")
+	last := Entries(1, "", "")
+	if len(last) != 1 || last[0].Msg != "after the trim" {
+		t.Errorf("writing after a trim: %+v", last)
+	}
+	found := false
+	for _, e := range Entries(0, "", "") {
+		if strings.Contains(e.Msg, "已删除最早的部分") {
+			found = true
+			if e.Data["droppedBytes"] == "" || e.Data["maxBytes"] == "" {
+				t.Errorf("the note should carry the sizes: %v", e.Data)
+			}
+		}
+	}
+	if !found {
+		t.Error("the trim note never reached the ring buffer")
+	}
+}

@@ -123,7 +123,7 @@ export default function Settings() {
       <div className="settings-log">
         <div className="settings-log-text">
           <b>诊断日志</b>
-          <small>记录 AI 请求与回答、错误和页面跳转，只保存在本机</small>
+          <small>记录 AI 请求与回答、错误和页面跳转，只保存在本机，最多 50 MB</small>
         </div>
         <button
           role="switch"

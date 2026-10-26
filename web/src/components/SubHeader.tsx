@@ -1,5 +1,6 @@
 import type { ReactNode } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { closeForNavigation, navigationDepth } from '../backNav';
 
 /**
  * Header for second-level pages (书签/划线/回收站/WebDAV/整理/拆分/设置). The
@@ -27,8 +28,14 @@ export default function SubHeader({
         className="sub-back"
         aria-label="返回"
         onClick={() => {
-          if (window.history.length > 1) nav(-1);
-          else nav(backTo);
+          // The number the router keeps, not history.length: the latter never
+          // shrinks, so it says "there is something behind me" long after the
+          // stack is empty. A sheet left open is stepped over, not swallowed.
+          const st = window.history.state as { idx?: number } | null;
+          const depth = navigationDepth();
+          closeForNavigation();
+          if (st && typeof st.idx === 'number' && st.idx > 0) nav(-depth);
+          else nav(backTo, { replace: true });
         }}
       >
         <svg width="18" height="18" viewBox="0 0 18 18" aria-hidden="true">

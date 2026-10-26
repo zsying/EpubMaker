@@ -121,7 +121,15 @@ export default function Logs() {
     }
   }
 
-  const sizeText = state ? `${(state.size / 1024).toFixed(1)} KB` : '';
+  // Sizes are read by a human here, so the ceiling is shown in the same unit as
+  // the file: "512.0 KB / 50 MB" says more than a byte count.
+  const human = (n: number) =>
+    !n || n < 0
+      ? '—'
+      : n >= 1 << 20
+        ? `${(n / (1 << 20)).toFixed(0)} MB`
+        : `${(n / 1024).toFixed(1)} KB`;
+  const sizeText = state ? `${human(state.size)} / ${human(state.max)}` : '';
 
   return (
     <div className="page logs-page">
@@ -154,6 +162,11 @@ export default function Logs() {
           <span className="logs-dot">·</span>
           <span>{sizeText}</span>
           {state?.path && <div className="logs-path">{state.path}</div>}
+          {state && state.max > 0 && (
+            <div className="logs-cap">
+              超过 {human(state.max)} 后自动删除最早的 {human(state.trim)}，不会无限增长
+            </div>
+          )}
         </div>
 
         <div className="logs-filters">

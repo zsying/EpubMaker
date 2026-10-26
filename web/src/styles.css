@@ -4776,6 +4776,12 @@ button.me-dict:disabled {
   word-break: break-all;
   opacity: 0.85;
 }
+.logs-cap {
+  width: 100%;
+  font-size: 11px;
+  line-height: 1.5;
+  opacity: 0.6;
+}
 .logs-filters {
   display: flex;
   flex-wrap: wrap;
