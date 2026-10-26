@@ -214,6 +214,15 @@ html[data-app-theme='midnight'] {
    its own :active feedback everywhere, so the browser's is pure noise. */
 html {
   -webkit-tap-highlight-color: transparent;
+  /* Until the browser can rule out a double-tap zoom it holds the click back
+     for ~300 ms, and that wait lands on the *first* thing a reader feels after
+     touching a tab or a button. Measured on the phone: touching 书架 on the tab
+     bar produced touchend at 457 ms and click at 749 ms — 292 ms of doing
+     nothing before the app could even start. `manipulation` keeps scrolling and
+     pinch zoom and drops the wait; the reader's drag surfaces still override it
+     with their own touch-action (pan-y for page turns, none for the selection
+     handles). */
+  touch-action: manipulation;
 }
 
 html,

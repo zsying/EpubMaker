@@ -184,6 +184,12 @@ func ImportEpub(filePath, originalName string) (*BookDTO, error) {
 		return nil, err
 	}
 
+	// Build the shelf preview now, while the import is still what the reader is
+	// waiting on: done later, the first visit to the shelf would pay for it.
+	if cover.Valid {
+		warmThumb(bookID, cover.String)
+	}
+
 	return GetBook(bookID)
 }
 
@@ -372,6 +378,9 @@ func UploadCover(bookID, name string, buf []byte) (*UploadedCover, error) {
 	if err := storage.WriteContent(bookID, href, buf); err != nil {
 		return nil, err
 	}
+	// A fresh cover invalidates the old preview: warmThumb writes the new one
+	// under the new href, and the stale thumbnail stays with the old file.
+	warmThumb(bookID, href)
 	d, err := db.Open()
 	if err != nil {
 		return nil, err

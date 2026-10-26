@@ -331,3 +331,48 @@ tab 规则仍成立）。
 回归：`dictmiss.cjs` 12/12（未收录有入口、按钮点名该词、点开词卡关闭、面板含释义/
 译文/词性、请求带的是整句、词库未安装时入口仍在）。
 
+## ADR-11 书架列表只传缩略图，封面不进列表
+
+**问题。** 用户报「切页面慢，回书架尤其明显，要 delay 一下」。真机量化（40 本、
+`ListBooks` 返回全部书籍）后确认不是架构缺陷，是一处数据体积失控：
+
+| 指标 | 修前 | 修后 |
+|---|---|---|
+| 列表体积 | 16.5 MB（其中 16.4 MB 是 base64 封面） | 1.4 MB（全为缩略图） |
+| `ListBooks` 耗时 | 1.5–2.1 s | ~220 ms |
+| 书架渲染里 `setAttribute('src')` | 22 次 / 866 ms | 11 次 / 82 ms |
+| 最长掉帧 | 1238 ms | 182 ms |
+| 点 tab → 书架进 DOM | 1.19 s | 0.23 s |
+| 阅读器 → 书架 | ~1.4 s | ~0.35 s |
+
+因果链有三段，都在同一份数据上：Go 侧每次列表都把所有封面读盘 + base64；16 MB 的
+JSON 过桥；WebView 把 12 个 ~400 KB 的 data URL 写进 `img.src`（每次约 39 ms）并解码
+——而卡片只画 ~120×170 CSS px。
+
+**决定。** 封面旁存一份 320×480 JPEG（quality 82，约 20–45 KB）：
+
+- 生成时机：导入时、换封面时同步生成；老书（本改动之前导入的）由第一次
+  `ListBooks` 顺手起一个后台 goroutine 补齐，**列表本身绝不生成**（否则页面加载会
+  变成图像转码任务，老库第一次进书架要等十几秒）。
+- `BookDTO` 分两种：`toBookListDTO`（列表：只给 `thumbUrl`）与 `toBookDTO`（单本：
+  `thumbUrl` + `coverUrl`，编辑页/拆分预览要原图）。
+- 缩略图为纯标准库实现（`image` + 手写 box filter），不引第三方依赖；`golang.org/x/image`
+  的缩放更好，但为一个小功能动依赖不值得。
+- 解不出的格式（WEBP/AVIF/SVG）回退到原封面——那是少数几本的旧行为，而不是坏书架。
+- 缩略图与封面同目录同名加后缀，跟着备份走，也不会进 `assets` 表（图片管理页看不到）。
+
+**顺带修的两处同类问题**（都是「一次切换的总时间」的组成部分）：
+
+1. **双指缩放等待 292 ms。** 全站只有 `.book-card` 设了
+   `touch-action: manipulation`，tab bar 没设，WebView 在 touchend 之后压着 click
+   不放（实测 touchend 457 ms → click 749 ms）。规则提到 `html`，读者自己的拖拽面
+   仍用更严格的 `touch-action`（翻页 `pan-y`、选区手柄 `none`）。
+2. **回到书架必然重绘一次。** 每次挂载都会重新 `ListBooks`，答案通常和缓存一模一样，
+   但新对象身份让 12 张卡连同 12 次图片解码重跑一遍。`sameShelf()` 比对卡片真正画的
+   字段（含 `thumbUrl`，因为换封面必须重绘），一致就保留旧数组。
+
+**回归：** `library` 缩略图测试 6 条（尺寸/色彩/体积/复用/不可解码回退/列表只带缩略图）、
+`shelfperf.cjs` 4/4（卡片用缩略图、无缩略图回退原图、无图显示书名、列表未变时封面只写
+一次）、`mobile.cjs` 184/184、`backstack.cjs` 33/33、`ai` 64、`logview` 18、
+`dictmiss` 12；真机 `device-hyphen` 7/7、`device-highlight` 5/5、`device-sel-ai` 4/4、
+`device-tabs` 7/7、`device-back` 11/11、`device-leavebtn` 2/2。

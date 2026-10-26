@@ -28,21 +28,25 @@ import (
 /* ----------------------------- types ----------------------------- */
 
 type BookDTO struct {
-	ID           string  `json:"id"`
-	Title        string  `json:"title"`
-	Author       string  `json:"author"`
-	Language     string  `json:"language"`
-	Publisher    string  `json:"publisher"`
-	Description  string  `json:"description"`
-	Identifier   string  `json:"identifier"`
-	CoverHref    *string `json:"coverHref"`
-	CoverURL     *string `json:"coverUrl"`
-	SourceName   *string `json:"sourceName"`
-	ChapterCount int     `json:"chapterCount"`
-	DeletedAt    *string `json:"deletedAt"`
+	ID          string  `json:"id"`
+	Title       string  `json:"title"`
+	Author      string  `json:"author"`
+	Language    string  `json:"language"`
+	Publisher   string  `json:"publisher"`
+	Description string  `json:"description"`
+	Identifier  string  `json:"identifier"`
+	CoverHref   *string `json:"coverHref"`
+	CoverURL    *string `json:"coverUrl"`
+	// ThumbURL is a ~20 KB JPEG of the cover, sized for the shelf's cards. The
+	// list answer carries this instead of CoverURL: a forty-book shelf used to
+	// ship 16 MB of base64 covers that no card could display at more than 170px.
+	ThumbURL     *string  `json:"thumbUrl"`
+	SourceName   *string  `json:"sourceName"`
+	ChapterCount int      `json:"chapterCount"`
+	DeletedAt    *string  `json:"deletedAt"`
 	Tags         []string `json:"tags"`
-	CreatedAt    string  `json:"createdAt"`
-	UpdatedAt    string  `json:"updatedAt"`
+	CreatedAt    string   `json:"createdAt"`
+	UpdatedAt    string   `json:"updatedAt"`
 }
 
 type ChapterDTO struct {
@@ -118,13 +122,13 @@ type ChapterSource struct {
 
 // BookPatch / ChapterPatch / ChapterCreateOpts map the JSON request bodies.
 type BookPatch struct {
-	Title       *string `json:"title"`
-	Author      *string `json:"author"`
-	Language    *string `json:"language"`
-	Publisher   *string `json:"publisher"`
-	Description *string `json:"description"`
-	Identifier  *string `json:"identifier"`
-	CoverHref   *string `json:"coverHref"`
+	Title       *string   `json:"title"`
+	Author      *string   `json:"author"`
+	Language    *string   `json:"language"`
+	Publisher   *string   `json:"publisher"`
+	Description *string   `json:"description"`
+	Identifier  *string   `json:"identifier"`
+	CoverHref   *string   `json:"coverHref"`
 	Tags        *[]string `json:"tags"`
 }
 
@@ -213,12 +217,45 @@ func DataURL(mediaType string, data []byte) string {
 	return "data:" + mediaType + ";base64," + base64.StdEncoding.EncodeToString(data)
 }
 
+// toBookDTO is the single-book answer (GetBook, UpdateBook, import, split):
+// the editor and the split preview draw the real cover, so both sizes are
+// filled in.
 func toBookDTO(r BookRow, chapterCount int) BookDTO {
-	var coverURL *string
+	return newBookDTO(r, chapterCount, true)
+}
+
+// toBookListDTO is the shelf answer. Cards draw the thumbnail; the full cover
+// is included only when no thumbnail could be made (an undecodable format such
+// as WEBP, or a book imported before thumbnails existed), so those books keep
+// their covers while everything else drops from ~400 KB to ~20 KB per card.
+func toBookListDTO(r BookRow, chapterCount int) BookDTO {
+	return newBookDTO(r, chapterCount, false)
+}
+
+func newBookDTO(r BookRow, chapterCount int, withCover bool) BookDTO {
+	var coverURL, thumbURL *string
 	if r.CoverHref.Valid && r.CoverHref.String != "" {
-		if buf, err := storage.ReadContent(r.ID, r.CoverHref.String); err == nil {
-			u := DataURL(mime.GuessMediaType(r.CoverHref.String), buf)
-			coverURL = &u
+		href := r.CoverHref.String
+		var b []byte
+		var ok bool
+		if withCover {
+			// One book on screen: build the preview if it is missing, the full
+			// cover is about to be read anyway.
+			b, ok = thumbFor(r.ID, href)
+		} else {
+			// Shelf: disk only. Missing previews are filled in by the background
+			// warmer, never inline — see warmMissingThumbs.
+			b, ok = readThumb(r.ID, href)
+		}
+		if ok {
+			u := DataURL(thumbMime, b)
+			thumbURL = &u
+		}
+		if withCover || thumbURL == nil {
+			if buf, err := storage.ReadContent(r.ID, href); err == nil {
+				u := DataURL(mime.GuessMediaType(href), buf)
+				coverURL = &u
+			}
 		}
 	}
 	return BookDTO{
@@ -231,6 +268,7 @@ func toBookDTO(r BookRow, chapterCount int) BookDTO {
 		Identifier:   r.Identifier,
 		CoverHref:    nullStr(r.CoverHref),
 		CoverURL:     coverURL,
+		ThumbURL:     thumbURL,
 		SourceName:   nullStr(r.SourceName),
 		ChapterCount: chapterCount,
 		DeletedAt:    nullStr(r.DeletedAt),
@@ -340,9 +378,32 @@ func ListBooks(keyword string) ([]BookDTO, error) {
 
 	out := make([]BookDTO, 0, len(books))
 	for _, b := range books {
-		out = append(out, toBookDTO(b, counts[b.ID]))
+		out = append(out, toBookListDTO(b, counts[b.ID]))
 	}
+	// Books imported before thumbnails existed have no preview yet, and each one
+	// that falls back to its full cover keeps the list as heavy as it was. Building
+	// them here would make the first list slow instead of the shelf; a background
+	// pass makes the next visit small, without anyone waiting for it.
+	warmMissingThumbs(books)
 	return out, nil
+}
+
+// warmMissingThumbs builds shelf thumbnails for the whole library once per
+// process, off the request path.
+func warmMissingThumbs(books []BookRow) {
+	thumbWarm.Do(func() {
+		missing := make([]BookRow, 0, len(books))
+		for _, b := range books {
+			if b.CoverHref.Valid && b.CoverHref.String != "" {
+				missing = append(missing, b)
+			}
+		}
+		go func() {
+			for _, b := range missing {
+				warmThumb(b.ID, b.CoverHref.String)
+			}
+		}()
+	})
 }
 
 func GetBook(id string) (*BookDTO, error) {

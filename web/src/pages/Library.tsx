@@ -38,6 +38,34 @@ function cacheShelf(patch: Partial<ShelfCache>) {
   shelfCache = { books: [], dict: null, ...shelfCache, ...patch };
 }
 
+/**
+ * Whether a fresh shelf answer says the same thing as the one on screen.
+ *
+ * Every field a card draws is checked, covers included: `thumbUrl` changes when
+ * a book gets a new jacket, which is exactly the case that must repaint. Sizes
+ * here are tens of KB, so the comparisons are microseconds next to a re-render.
+ */
+function sameShelf(a: Book[], b: Book[]): boolean {
+  if (a === b) return true;
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i++) {
+    const x = a[i];
+    const y = b[i];
+    if (
+      x.id !== y.id ||
+      x.title !== y.title ||
+      x.author !== y.author ||
+      x.updatedAt !== y.updatedAt ||
+      x.chapterCount !== y.chapterCount ||
+      x.thumbUrl !== y.thumbUrl ||
+      x.coverUrl !== y.coverUrl
+    ) {
+      return false;
+    }
+  }
+  return true;
+}
+
 /* ---- shelf ordering + paging (phone) ---- */
 
 const SORT_KEY = 'epubmaker.shelfSort';
@@ -277,7 +305,12 @@ export default function Library() {
   const load = useCallback(async (kw?: string) => {
     try {
       const next = await api.listBooks(kw);
-      setBooks(next);
+      // Coming back to the shelf re-fetches unconditionally, and the answer is
+      // usually the identical list as fresh object identities. Replacing it then
+      // repaints twelve cards and re-decodes twelve thumbnails for nothing —
+      // measured as the tail of the "delay" after leaving a book. Keep the old
+      // array when nothing actually changed.
+      setBooks((prev) => (sameShelf(prev, next) ? prev : next));
       // Only the unfiltered shelf is worth remembering: a search result shown
       // on the next visit, before the keyword is even typed, would be wrong.
       if (!kw) cacheShelf({ books: next });
@@ -653,8 +686,18 @@ export default function Library() {
                   {...holdProps(b)}
                 >
                   <div className="cover">
-                    {b.coverUrl ? (
-                      <img src={b.coverUrl} alt={b.title} loading="lazy" />
+                    {/* The thumbnail is what the list carries; the full cover is
+                        only here for books whose format cannot be thumbnailed.
+                        Cards draw at ~120×170, so the difference is invisible —
+                        but it is the difference between 20 KB and 400 KB of
+                        work per card on the way back from a book. */}
+                    {b.thumbUrl || b.coverUrl ? (
+                      <img
+                        src={b.thumbUrl || b.coverUrl!}
+                        alt={b.title}
+                        loading="lazy"
+                        decoding="async"
+                      />
                     ) : (
                       <div className="placeholder">{b.title}</div>
                     )}
@@ -827,8 +870,8 @@ export default function Library() {
             </label>
             <div className="edit-cover-row">
               <div className="edit-cover">
-                {editBook.coverUrl ? (
-                  <img src={editBook.coverUrl} alt="" />
+                {editBook.thumbUrl || editBook.coverUrl ? (
+                  <img src={editBook.thumbUrl || editBook.coverUrl!} alt="" />
                 ) : (
                   <span>{editBook.title.slice(0, 2)}</span>
                 )}

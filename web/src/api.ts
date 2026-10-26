@@ -266,6 +266,12 @@ export interface Book {
   coverHref: string | null;
   /** Inline base64 data URL (no HTTP). null when the book has no cover. */
   coverUrl: string | null;
+  /**
+   * Small JPEG of the cover (~20 KB, sized for a card). The shelf list ships
+   * this instead of `coverUrl`: a full cover is ~400 KB, and forty of them in
+   * one answer cost the phone about a second of frozen frames per visit.
+   */
+  thumbUrl: string | null;
   sourceName: string | null;
   chapterCount: number;
   /** User-managed tags; always an array (possibly empty). */

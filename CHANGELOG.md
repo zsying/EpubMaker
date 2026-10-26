@@ -77,6 +77,29 @@ of described.
 
 ### Changed
 
+- **Returning to the shelf is fast again** — the shelf's book list carried every
+  cover inline as base64, and the WebView had to write twelve of those ~400 KB
+  data URLs into `<img src>` on every visit. Measured on the phone with a
+  40-book library: a 16.5 MB list, 1.5–2.1 s to build it, 866 ms of
+  `setAttribute`, a 1.2 s frozen frame, and 1.2–1.5 s between the tap and the
+  shelf appearing. Each cover now gets a 320×480 JPEG thumbnail (~20–45 KB)
+  written next to it once — at import, at a cover change, or by a background
+  pass for books imported before this change — and the list ships that instead.
+  Same measurement after: 1.4 MB, ~220 ms, 82 ms, a 182 ms worst frame, and
+  ~230 ms from tap to shelf. Books whose cover cannot be decoded (WEBP, AVIF,
+  SVG) keep using the original image, which is the old behaviour for a handful
+  of books rather than a broken shelf.
+- **Taps no longer wait out the double-tap-to-zoom window.** Only the book card
+  had `touch-action: manipulation`; on the tab bar the browser held the click
+  back for ~292 ms (measured: touchend at 457 ms, click at 749 ms), which is the
+  first thing a thumb feels after touching 书架 or 生词本. The rule is on `html`
+  now, so every button, tab and row is immediate; the reader's drag surfaces
+  keep their stricter `touch-action` (`pan-y` for page turns, `none` for the
+  selection handles).
+- The shelf no longer repaints when a re-fetch returns the same books. Leaving a
+  book and coming back always re-reads the list, and the answer is usually
+  identical — replacing it parked twelve new `<img>` elements and twelve image
+  decodes at the end of the transition.
 - The reader's gesture exemption list covers the AI panel and the privacy
   dialog: a touch that starts inside either scrolls it, and a horizontal drag
   there can no longer turn the page behind the answer.
