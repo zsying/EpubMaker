@@ -26,7 +26,7 @@ import {
 import { Caret } from '../Caret';
 import { toast, toastError } from '../toast';
 import { Anchor, EDGE_GAP, placeOverlay } from '../overlay';
-import { wordAt, isCJK } from '../wordHit';
+import { wordAt, isCJK, stripInvisible } from '../wordHit';
 import {
   blockOf,
   charOffset,
@@ -670,8 +670,13 @@ export default function Reader() {
   const [aiPanel, setAIPanel] = useState<AIPanelState>(null);
   // The chapter-guide privacy confirmation, asked on every send (the chapter
   // text leaves the device). Kept apart from the panel so a cancel leaves no
-  // trace of the ask at all.
-  const [guideAsk, setGuideAsk] = useState<{ model: string; chars: number } | null>(null);
+  // trace of the ask at all. `configured` is the preflight: without a provider
+  // there is nothing to confirm, only a door to settings.
+  const [guideAsk, setGuideAsk] = useState<{
+    model: string;
+    chars: number;
+    configured: boolean;
+  } | null>(null);
 
   // Hardware back closes one overlay per press (newest first), never the page
   // underneath. The keyboard Escape path below peels the same layers on
@@ -685,6 +690,26 @@ export default function Reader() {
   useBackClose(annOpen, () => setAnnOpen(false));
   useBackClose(!!aiPanel, () => setAIPanel(null));
   useBackClose(!!guideAsk, () => setGuideAsk(null));
+
+  // The chapter guide lives in the top bar (0.4): reading it is a deliberate
+  // act about the whole chapter, so it belongs with 目录/书签 rather than
+  // floating over the first page. Reading the settings FIRST is deliberate —
+  // the confirmation can then name the provider that receives the text, and
+  // when nothing is configured yet it says so and offers the way there instead
+  // of letting the send fail afterwards.
+  function openGuide() {
+    api
+      .aiConfig()
+      .then((cfg) =>
+        setGuideAsk({
+          model: cfg.model,
+          chars: contentRef.current?.textContent?.length ?? 0,
+          configured: cfg.configured,
+        }),
+      )
+      .catch(() => toastError('读取 AI 设置失败'));
+  }
+
   // A jump from the notebook or an annotation list has to be visible, not just
   // correct: this is a transient highlight over the landed-on text.
   const [flash, setFlash] = useState<{
@@ -1448,22 +1473,6 @@ export default function Reader() {
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [mode, current, id, preview, safeHtml]);
-
-  /* ---- chapter-head tracking (where the AI guide chip lives) ---- */
-  // paged mode puts the chip on the chapter's first page; scroll mode keeps it
-  // while the pane is still at the top. Derived from where the reader actually
-  // is, so the chip can never disagree with the page on screen. A chapter jump
-  // resets the pane (openChapter scrolls to top), which fires the event.
-  const [scrollHead, setScrollHead] = useState(true);
-  useEffect(() => {
-    if (mode !== 'scroll') return;
-    const scroller = mainRef.current;
-    if (!scroller) return;
-    const onScroll = () => setScrollHead(scroller.scrollTop < 72);
-    onScroll();
-    scroller.addEventListener('scroll', onScroll, { passive: true });
-    return () => scroller.removeEventListener('scroll', onScroll);
-  }, [mode, safeHtml]);
 
   const idx = chapters.findIndex((c) => c.id === current);
   const prev = idx > 0 ? chapters[idx - 1] : null;
@@ -2280,7 +2289,12 @@ export default function Reader() {
       bottom: rect.bottom,
       start: offs.start,
       end: offs.end,
-      text: selection.toString(),
+      // `text` is TEXT from here on — it becomes a highlight's label, an AI
+      // prompt, a notebook context — so the invisible marks a print conversion
+      // left inside words are dropped at this boundary, exactly like the ones
+      // the sentence and lookup paths already drop. The offsets keep counting
+      // the characters that are really in the document.
+      text: stripInvisible(selection.toString()),
       firstRect: rects ? snapRect(rects.first) : undefined,
       lastRect: rects ? snapRect(rects.last) : undefined,
     });
@@ -2302,7 +2316,9 @@ export default function Reader() {
       bottom: rects.last.bottom,
       start: offs.start,
       end: offs.end,
-      text: range.toString(),
+      // Same boundary rule as syncSelectionFromDom: a reshaped selection is
+      // still text leaving the reader.
+      text: stripInvisible(range.toString()),
       firstRect: snapRect(rects.first),
       lastRect: snapRect(rects.last),
     });
@@ -2957,6 +2973,13 @@ export default function Reader() {
       </button>
       <div className="m-title">{currentChapter?.title || book.title}</div>
       <button
+        className="chrome-icon text ai-guide-btn"
+        onClick={openGuide}
+        title="让 AI 读一遍本章，生成导读"
+      >
+        ✦AI
+      </button>
+      <button
         className={`chrome-icon star${pageBookmark ? ' on' : ''}`}
         onClick={togglePageBookmark}
         aria-label={pageBookmark ? '移除本页书签' : '添加书签'}
@@ -3019,24 +3042,6 @@ export default function Reader() {
   // The dictionary senses the word card can offer AI: computed once here so the
   // button's visibility and its payload can never disagree.
   const dictSenses = lookupCard ? sensesOf(lookupCard.res) : [];
-  // The chapter-head guide chip: paged mode shows it on the chapter's first
-  // page, scroll mode while the pane is still at the top. It hides behind the
-  // chrome, the drawers and the docked TOC so it never floats over another
-  // surface — and it is a fixed chip rather than an injection into the text
-  // flow because this reader paginates by measuring the content (see below).
-  const guideVisible =
-    (mode === 'paged' ? pageIndex === 0 : scrollHead) &&
-    !chromeOpen &&
-    !tocOpen &&
-    !bmOpen &&
-    !annOpen &&
-    !tocDocked;
-  const guideChipPos: CSSProperties = touchPrimary
-    ? { top: 62, left: 12 }
-    : mode === 'paged'
-      ? { top: 18, left: 12 }
-      : // scroll: below the sticky head, centred between its two button groups
-        { top: 64, left: '50%', transform: 'translateX(-50%)' };
   // A failed AI ask is very often a settings problem, so the error state offers
   // a way there — which first has to close the panel, or it would cover the
   // settings page it just navigated to.
@@ -3303,59 +3308,57 @@ export default function Reader() {
         </div>
       )}
 
-      {/* Chapter-head guide chip. Fixed to the viewport and NOT injected into
-          the text flow: this reader paginates by measuring the content, so
-          anything that joined the flow would change the page count and shift
-          every character offset after it — progress, highlights and lookups
-          all count text nodes. */}
-      {guideVisible && (
-        <button
-          className="ai-guide-chip"
-          style={guideChipPos}
-          title="让 AI 读一遍本章，生成导读"
-          onClick={() => {
-            api
-              .aiConfig()
-              .then((cfg) =>
-                setGuideAsk({
-                  model: cfg.model,
-                  chars: contentRef.current?.textContent?.length ?? 0,
-                }),
-              )
-              .catch(() => toastError('读取 AI 设置失败'));
-          }}
-        >
-          ✦ AI 导读
-        </button>
-      )}
-
       {/* Per-send privacy confirmation (0.4 裁决：每次问). The chapter text is
           about to leave the device, so this says exactly what goes where before
-          anything is sent — and 6000 mirrors the backend's prompt budget. */}
+          anything is sent — and 6000 mirrors the backend's prompt budget.
+          Nothing configured yet? Then there is nothing to consent to: the same
+          dialog turns into a door to settings rather than a send that would
+          come back as an error. */}
       {guideAsk && (
         <div className="modal-backdrop" onClick={() => setGuideAsk(null)}>
           <div className="modal ai-confirm" onClick={(e) => e.stopPropagation()}>
             <div className="modal-body">
-              <p>
-                本章导读由 AI 生成：需要把本章正文（约 <b>{guideAsk.chars.toLocaleString()}</b> 字
-                {guideAsk.chars > 6000 ? '，较长章节仅发送开头部分' : ''}）发送到「
-                {guideAsk.model || 'AI 服务'}」。
-              </p>
-              <p>回答由模型生成，可能不准确，请以原文为准。</p>
+              {guideAsk.configured ? (
+                <>
+                  <p>
+                    本章导读由 AI 生成：需要把本章正文（约 <b>{guideAsk.chars.toLocaleString()}</b>{' '}
+                    字{guideAsk.chars > 6000 ? '，较长章节仅发送开头部分' : ''}）发送到「
+                    {guideAsk.model || 'AI 服务'}」。
+                  </p>
+                  <p>回答由模型生成，可能不准确，请以原文为准。</p>
+                </>
+              ) : (
+                <>
+                  <p>还没有配置 AI 服务，暂时无法生成导读。</p>
+                  <p>填写接口地址与模型（以及密钥）后即可使用；查词释义、句子拆解同样需要它。</p>
+                </>
+              )}
             </div>
             <div className="ai-confirm-actions">
               <button className="btn sm" onClick={() => setGuideAsk(null)}>
                 取消
               </button>
-              <button
-                className="btn sm primary"
-                onClick={() => {
-                  setGuideAsk(null);
-                  setAIPanel({ kind: 'summary' });
-                }}
-              >
-                生成导读
-              </button>
+              {guideAsk.configured ? (
+                <button
+                  className="btn sm primary"
+                  onClick={() => {
+                    setGuideAsk(null);
+                    setAIPanel({ kind: 'summary' });
+                  }}
+                >
+                  生成导读
+                </button>
+              ) : (
+                <button
+                  className="btn sm primary"
+                  onClick={() => {
+                    setGuideAsk(null);
+                    goAISettings();
+                  }}
+                >
+                  去设置
+                </button>
+              )}
             </div>
           </div>
         </div>
@@ -3583,6 +3586,13 @@ export default function Reader() {
               </button>
               <button className="btn sm" onClick={() => setMode('paged')}>
                 翻页模式
+              </button>
+              <button
+                className="btn sm ai-guide-btn"
+                onClick={openGuide}
+                title="让 AI 读一遍本章，生成导读"
+              >
+                ✦ AI 导读
               </button>
               <Link className="btn sm" to={`/books/${id}/edit`}>
                 整理
@@ -3857,6 +3867,13 @@ export default function Reader() {
                 </span>
                 <button className="btn sm" onClick={() => setFontSize((f) => Math.min(26, f + 1))}>
                   A+
+                </button>
+                <button
+                  className="btn sm ai-guide-btn"
+                  onClick={openGuide}
+                  title="让 AI 读一遍本章，生成导读"
+                >
+                  ✦ AI 导读
                 </button>
                 <button className="btn sm" onClick={() => setTocOpen(true)}>
                   目录

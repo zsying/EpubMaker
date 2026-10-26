@@ -108,10 +108,14 @@ func askCached(ctx context.Context, kind, system, user string) (string, bool, er
 	}
 	cfg, err := aiconfig.Load()
 	if err != nil {
-		return "", false, err
+		return "", false, fmt.Errorf("读取 AI 设置失败（%s）：%w", aiconfig.Path(), err)
 	}
 	if !cfg.Configured() {
-		return "", false, errAINotConfigured
+		// The path is part of the message on purpose: the usual cause of "but I
+		// DID configure it" is a second settings file somewhere else (another
+		// AppHome, a build run with a different EPUBMAKER_HOME), and the path
+		// settles that in one glance instead of a round trip.
+		return "", false, fmt.Errorf("%w（配置文件：%s）", errAINotConfigured, aiconfig.Path())
 	}
 	reply, err := aiChat(ctx, cfg, system, user)
 	if err != nil {

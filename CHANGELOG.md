@@ -23,12 +23,11 @@ works exactly as before.
   merged view: the translation on top, then the sentence sliced into segments
   with their roles and glosses, then grammar notes. The original sentence is
   echoed above it, so the answer reads against the text it came from.
-- **Chapter guide「✦ AI 导读」** — a chip at the head of every chapter (paged:
-  the first page; scroll: the top of the pane) offers a summary, the key
-  points and a few words worth remembering. Because the chapter text is about
-  to leave the device, every send asks first: the dialog names the model and
-  the size, and 取消 sends nothing. Long chapters are cut to the prompt
-  budget and the panel says so.
+- **Chapter guide「✦ AI 导读」** — a button in the reader's top bar, next to
+  目录 and 书签, offers a summary, the key points and a few words worth
+  remembering. Because the chapter text is about to leave the device, every
+  send asks first: the dialog names the model and the size, and 取消 sends
+  nothing. Long chapters are cut to the prompt budget and the panel says so.
 - **BYOK AI settings** —「我的 → 设置」gains an AI section: endpoint, model and
   key, with six presets (OpenAI / DeepSeek / Moonshot / 智谱 / 通义 / Ollama
   本地) and a 测试连接 button. The key lives in `<AppHome>/ai.json` at 0600 —
@@ -56,6 +55,12 @@ works exactly as before.
   text: this reader paginates by measuring the content, and anything joining
   the flow would shift every character offset after it — progress,
   highlights and lookups all count text nodes.
+- The chapter guide moved from a chip floating over the first page into the
+  reader's top bar. Read as a page element it looked like part of the text it
+  hovered above, and it only existed at the top of a chapter — the top bar is
+  where every other chapter-scale action already lives, and it is reachable
+  from any page. The chip and its scroll tracking are gone, so nothing floats
+  over the text at all.
 
 ### Fixed
 
@@ -83,6 +88,19 @@ works exactly as before.
   count the characters that are actually in the document, and rewriting the text
   would have shifted every annotation, bookmark and vocabulary pointer saved so
   far.
+- **A highlight no longer keeps the converter's invisible marks in its text** —
+  the label a highlight stores is text (it is what the 划线 drawer lists and
+  what a jump back searches for), so selection text is normalised at the point
+  it leaves the reader, exactly like lookup keys and sentences already were.
+  Long-pressing "psychiatrist" in a print-converted book used to store
+  `psy<SHY>chi<SHY>at<SHY>rist`.
+- **「✦ AI 导读」 says what is missing instead of failing after the fact** —
+  the guide checks the provider settings before it offers to send anything, so
+  an unconfigured install gets a dialog that says so with a 去设置 button,
+  rather than a privacy confirmation whose only possible outcome is an error.
+  The not-configured error itself now names the settings file the app actually
+  read, because "but I DID configure it" is nearly always a second `ai.json`
+  under another `AppHome`.
 
 ## [0.3.0] — 2026-10-25
 

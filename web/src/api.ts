@@ -140,6 +140,8 @@ export interface AIConfigView {
   keySet: boolean;
   /** Last four characters of the stored key, e.g. "…9f2a". */
   keyHint: string;
+  /** Whether a call can be made at all (address + model filled in). */
+  configured: boolean;
   presets: AIPreset[];
 }
 

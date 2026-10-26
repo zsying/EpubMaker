@@ -56,6 +56,10 @@ type View struct {
 	KeySet  bool     `json:"keySet"`
 	KeyHint string   `json:"keyHint"`
 	Presets []Preset `json:"presets"`
+	// Configured lets a caller check readiness up front (the reader's chapter
+	// guide asks before it offers to send anything) instead of starting a call
+	// that can only fail with "not configured".
+	Configured bool `json:"configured"`
 }
 
 // Path is the absolute path of the settings file.
@@ -128,9 +132,10 @@ func Validate(cfg ai.Config) error {
 // NewView builds the masked view for the settings page.
 func NewView(cfg ai.Config) View {
 	v := View{
-		BaseURL: cfg.BaseURL,
-		Model:   cfg.Model,
-		Presets: Presets(),
+		BaseURL:    cfg.BaseURL,
+		Model:      cfg.Model,
+		Presets:    Presets(),
+		Configured: cfg.Configured(),
 	}
 	if key := strings.TrimSpace(cfg.APIKey); key != "" {
 		v.KeySet = true

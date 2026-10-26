@@ -325,8 +325,39 @@ func TestSummarizeChapterNotConfigured(t *testing.T) {
 	resetAI(t)
 	seedChapterWithContent(t, "b-ai", "c-ai", "第一章", "<p>Some text.</p>")
 	b := &Backend{}
-	if _, err := b.SummarizeChapter("b-ai", "c-ai"); err == nil || !strings.Contains(err.Error(), "未配置") {
+	_, err := b.SummarizeChapter("b-ai", "c-ai")
+	if err == nil || !strings.Contains(err.Error(), "未配置") {
 		t.Fatalf("error = %v, want the not-configured message", err)
+	}
+	// "But I DID configure it" is almost always a second settings file (an
+	// older AppHome, a build with another EPUBMAKER_HOME). The message names
+	// the file the app actually read, so that is answerable without a round
+	// trip through the reader.
+	if !strings.Contains(err.Error(), aiconfig.Path()) {
+		t.Fatalf("error = %v, want it to name %s", err, aiconfig.Path())
+	}
+}
+
+func TestGetAIConfigReportsConfigured(t *testing.T) {
+	resetAI(t)
+	b := &Backend{}
+	v, err := b.GetAIConfig()
+	if err != nil {
+		t.Fatalf("GetAIConfig: %v", err)
+	}
+	if v.Configured {
+		t.Fatal("a fresh install must report not configured, so the guide can offer settings first")
+	}
+	saveAIConfig(t, ai.Config{BaseURL: "http://localhost:11434/v1", Model: "qwen2.5:7b"})
+	v, err = b.GetAIConfig()
+	if err != nil {
+		t.Fatalf("GetAIConfig: %v", err)
+	}
+	if !v.Configured {
+		t.Fatal("a provider with an address and a model (no key, local server) must report configured")
+	}
+	if v.KeySet {
+		t.Fatal("no key was stored, so KeySet must stay false")
 	}
 }
 

@@ -4612,26 +4612,12 @@ button.me-dict:disabled {
   font-weight: 600;
 }
 
-/* the chapter-head guide chip: visible only at the top of a chapter */
-.ai-guide-chip {
-  position: fixed;
-  z-index: 45;
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  padding: 7px 13px;
-  border: 1px solid var(--border-strong);
-  border-radius: 999px;
-  background: var(--chrome-bg);
+/* The chapter guide sits in the top bars (0.4). The class is both the colour
+   hook and the stable handle the acceptance suites click — the entry moved out
+   of the text area because a floating chip over the first page looked like a
+   page element, not a chapter action. */
+.ai-guide-btn {
   color: var(--accent);
-  font-size: 12.5px;
-  font-weight: 650;
-  cursor: pointer;
-  box-shadow: 0 2px 10px rgba(16, 24, 40, 0.1);
-  -webkit-tap-highlight-color: transparent;
-}
-.ai-guide-chip:active {
-  background: var(--accent-soft);
 }
 
 /* the per-send privacy confirmation for the chapter guide */
