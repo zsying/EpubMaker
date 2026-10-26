@@ -5,6 +5,7 @@
    single definition of "where in the chapter am I". */
 
 import DOMPurify from 'dompurify';
+import { stripInvisible } from './wordHit';
 
 /** How chapter markup is cleaned before the reader shows it — and before any
  *  text is measured off it, which is the same thing twice: the offsets only
@@ -186,10 +187,16 @@ export function sentenceAt(root: HTMLElement, start: number, end: number): strin
   while (s > from && start - s < SENTENCE_CAP && !isStop(text[s - 1])) s--;
   let e = Math.max(s, Math.min(end, to));
   while (e < to && e - end < SENTENCE_CAP && !isStop(text[e])) e++;
-  return text
-    .slice(s, Math.min(e + 1, to))
-    .replace(/\s+/g, ' ')
-    .trim();
+  // The sentence leaves the reader as TEXT (notebook row, AI prompt): drop the
+  // invisible marks the converter left inside words, so "ac\u00ADcused" is not
+  // stored as a word nothing can match. The offsets above are untouched — they
+  // count the characters that are in the document.
+  return stripInvisible(
+    text
+      .slice(s, Math.min(e + 1, to))
+      .replace(/\s+/g, ' ')
+      .trim(),
+  );
 }
 
 /**

@@ -55,10 +55,32 @@ func TestNormalize(t *testing.T) {
 		{"long-time", "long-time"},
 		{"", ""},
 		{"--", ""},
+		// Print-converted EPUBs hyphenate with a soft hyphen, and a selection
+		// that spans the break carries it: "ac\u00ADcused" must reach the same
+		// key as "accused", or the lookup misses a word that is right there on
+		// the page. Zero-width marks and the BOM come from the same converters.
+		{"ac\u00ADcused", "accused"},
+		{"\u200bword\u200c\u200d", "word"},
+		{"\ufeffPerceive.\u00AD", "perceive"},
 	}
 	for _, c := range cases {
 		if got := Normalize(c.in); got != c.want {
 			t.Errorf("Normalize(%q) = %q, want %q", c.in, got, c.want)
+		}
+	}
+}
+
+// A hyphenated word selected across the break must still be found: the soft
+// hyphen is a layout artifact, not part of the headword.
+func TestLookupIgnoresInvisibleMarks(t *testing.T) {
+	d := newTestDict(t)
+	for _, q := range []string{"per\u00ADceive", "PER\u00ADCEIVE", "perceive\u200b"} {
+		r, err := d.Lookup(q)
+		if err != nil {
+			t.Fatalf("Lookup(%q): %v", q, err)
+		}
+		if !r.Found || r.Entry == nil || r.Entry.Word != "perceive" {
+			t.Fatalf("Lookup(%q) = %+v, want a hit on perceive", q, r)
 		}
 	}
 }

@@ -15,7 +15,17 @@ export type WordSpan = { start: number; end: number; word: string };
  * width spaces from web-sourced text). They join the word for EXPANSION —
  * "conversa·tion" must expand as one word — but never reach the dictionary. */
 const JOINERS = "'’-\u00AD\u200B\u200C\u200D";
-const INVISIBLE = /[\u00AD\u200B\u200C\u200D]/g;
+const INVISIBLE = /[\u00AD\u200B\u200C\u200D\uFEFF]/g;
+
+/** Drops the invisible marks a print/web conversion leaves inside words.
+ *  They are layout artifacts, not content: the page reads "accused" whether or
+ *  not the typesetter put a soft hyphen between "ac" and "cused", so anything
+ *  leaving the reader as TEXT (a lookup key, a sentence shown in the notebook,
+ *  an AI prompt) should not carry them. Offsets keep them — an offset counts
+ *  the characters that are actually in the document. */
+export function stripInvisible(s: string): string {
+  return s.replace(INVISIBLE, '');
+}
 
 /** Kana + Han blocks: never part of a latin word. A run of Han is a sentence,
  * not a word — the reader selects a single character for those instead. */

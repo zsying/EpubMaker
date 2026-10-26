@@ -71,6 +71,18 @@ works exactly as before.
   fragment that was actually tapped; the offset→page map takes the glyph
   fragment too, so restoring into a hyphenated line no longer lands on the
   page before it.
+- **A word selected across a hyphen is still that word** — a long press on
+  "psychiatrist" in a print-converted book selects the word *with three soft
+  hyphens inside it* (that converter marked every hyphenation point), and the
+  raw selection reached the dictionary as-is, so the lookup missed a word
+  printed right there on the page.
+  Lookup keys now drop the invisible marks a print/web conversion leaves inside
+  words — U+00AD soft hyphen, the zero-width spaces and the BOM — and so does
+  the sentence stored as a notebook row's context and sent to the AI, which is
+  text rather than a position. Reading offsets are left alone on purpose: they
+  count the characters that are actually in the document, and rewriting the text
+  would have shifted every annotation, bookmark and vocabulary pointer saved so
+  far.
 
 ## [0.3.0] — 2026-10-25
 
