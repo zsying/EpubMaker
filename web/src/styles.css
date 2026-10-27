@@ -2948,19 +2948,32 @@ a {
   color: var(--text-3);
 }
 
-.vocab-sheet-actions {
+/* The two ways out of the sheet, as text: an underline on hover, nothing at rest.
+   They are footnotes to the card, not its call to action. */
+.vocab-sheet-links {
   flex: none;
   display: flex;
-  gap: 10px;
-  padding: 10px 18px 2px;
-  border-top: 1px solid var(--border);
+  align-items: center;
+  gap: 18px;
+  padding: 4px 18px 14px;
 }
-
-/* Both actions are thumb-sized and share the width: on a phone this row is the
-   only thing between the reader and leaving the sheet. */
-.vocab-sheet-actions .btn {
-  flex: 1;
-  height: 44px;
+.vocab-sheet-link {
+  margin: 0;
+  padding: 6px 0;
+  border: 0;
+  background: none;
+  color: var(--accent);
+  font-size: 14px;
+  font-weight: 600;
+  /* Thumb-sized without looking like a button: the hit area is the padding. */
+  min-height: 32px;
+}
+.vocab-sheet-link:hover {
+  text-decoration: underline;
+}
+.vocab-sheet-note {
+  color: var(--text-3);
+  font-size: 13px;
 }
 
 /* ------------------------------ lookup history ------------------------------ */
@@ -2975,12 +2988,19 @@ a {
   height: 34px;
 }
 
-/* The history row is not a link — there is nowhere to jump to — so it borrows
-   the notebook card's look without its button affordance. */
-.note-card-body {
+/* A history row is a card you can open now (it has a word card behind it), so it
+   uses the notebook's main button rather than a plain div. */
+.hist-body {
   flex: 1;
   min-width: 0;
   padding: 10px 12px;
+  border: 0;
+  background: transparent;
+  color: var(--text);
+  font-family: inherit;
+  text-align: left;
+  cursor: pointer;
+  border-radius: 8px;
 }
 
 .hist-meta {
@@ -2997,14 +3017,11 @@ a {
   min-width: 0;
 }
 
-/* The add button belongs at the end of the line, but it is what pushes the row
-   wide, so it wraps instead of shrinking the word. */
-.hist-meta .btn {
-  margin-left: auto;
-  flex: none;
-}
-
-.hist-in {
+/* Whether the word is already in the notebook — a fact about the row, stated at
+   the end of its line. Adding happens in the card, where it is one tap instead
+   of one tap in the way of opening the row. */
+.hist-in,
+.hist-out {
   margin-left: auto;
   font-size: 12px;
   color: var(--text-3);

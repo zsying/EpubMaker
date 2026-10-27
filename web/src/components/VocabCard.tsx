@@ -3,10 +3,10 @@ import { useNavigate } from 'react-router-dom';
 import { api, ExplainResult, VocabItem } from '../api';
 import { useBackClose } from '../backNav';
 import { emphasise } from '../highlight';
-import { speakWord } from '../speech';
 import { STATUS_HINT, STATUS_LABEL, scheduleLine } from '../vocabLabels';
 import AIPanel from './AIPanel';
 import AISentence from './AISentence';
+import WordSheet from './WordSheet';
 
 /**
  * One word, opened from the notebook list.
@@ -82,93 +82,40 @@ export default function VocabCard({
   };
 
   return (
-    <div className="sheet-mask" onClick={onClose}>
-      <div className="sheet vocab-sheet" onClick={(e) => e.stopPropagation()}>
-        <div className="vocab-sheet-head">
-          <span className="vocab-sheet-word">{item.term}</span>
-          {item.phonetic && <span className="dict-phon">/{item.phonetic}/</span>}
-          <button className="btn sm" onClick={() => speakWord(item.term)}>
-            发音
-          </button>
-          <span style={{ flex: 1 }} />
-          <button className="vocab-sheet-close" onClick={onClose} aria-label="关闭">
-            ✕
-          </button>
-        </div>
-
-        <div className="vocab-sheet-body">
-          <div className={`vocab-sheet-trans${item.translation ? '' : ' muted'}`}>
-            {item.translation || '（词库无释义）'}
-          </div>
-
-          {sentence && (
-            <div className="vocab-sheet-quote">
-              <div className="vocab-sheet-label">原文句子</div>
-              <p>{emphasise(sentence, [item.surface, item.term])}</p>
-            </div>
+    <WordSheet
+      word={item.term}
+      phonetic={item.phonetic}
+      onClose={onClose}
+      links={
+        <>
+          {/* Quiet links, not buttons. The payload of this sheet is the sentence;
+              a filled primary button at the bottom made the leaving tap look like
+              the important one. And once the answer is already in the card above,
+              "AI 解释" has nothing left to offer — so it goes away rather than
+              sitting there as a second door to the same room. */}
+          {atPage ? (
+            <button className="vocab-sheet-link" onClick={onLocate} title="回到这个词出现的地方">
+              定位原文
+            </button>
+          ) : (
+            <span className="vocab-sheet-note">原书已删除，无法定位原文</span>
           )}
-
-          <div className="vocab-sheet-meta">
-            <span className="vocab-sheet-origin">{origin}</span>
-            <span className="vocab-sheet-learn">{scheduleLine(item.dueAt)}</span>
-            {item.status !== 'new' && (
-              <span className={`vocab-status s-${item.status}`} title={STATUS_HINT[item.status]}>
-                {STATUS_LABEL[item.status]}
-              </span>
-            )}
-          </div>
-          {counts && <div className="vocab-sheet-counts">{counts}</div>}
-
-          {/* Already explained before? Then the answer is on the device and it
-              belongs on the card, not behind a button. */}
-          {cached && (
-            <div className="dict-ai">
-              <div className="dict-ai-head">
-                <span className="dict-ai-star" aria-hidden="true">
-                  ✦
-                </span>
-                AI 解释 · 本句
-              </div>
-              {cached.meaning && <div className="dict-ai-meaning">{cached.meaning}</div>}
-              {cached.translation && (
-                <div className="dict-ai-trans">整句：{cached.translation}</div>
-              )}
-              {cached.note && <div className="dict-ai-note">{cached.note}</div>}
-              {cached.conversationId && (
-                <button
-                  className="dict-ai-open"
-                  onClick={() => closeThen(() => nav(`/ai/${cached.conversationId}`))}
-                >
-                  查看对话 <span aria-hidden="true">›</span>
-                </button>
-              )}
-            </div>
+          {!cached && sentence && (
+            <button
+              className="vocab-sheet-link"
+              onClick={() => setAsking(true)}
+              title="结合这一句解释这个词，并翻译整句"
+            >
+              <span aria-hidden="true">✦</span> AI 解释
+            </button>
           )}
-        </div>
-
-        <div className="vocab-sheet-actions">
-          <button
-            className="btn"
-            onClick={onLocate}
-            disabled={!atPage}
-            title={atPage ? '回到这个词出现的地方' : '原书已删除，找不到原文了'}
-          >
-            定位原文
-          </button>
-          <button
-            className="btn primary"
-            disabled={!sentence}
-            title={sentence ? '结合这一句解释这个词，并翻译整句' : '没有原句，无法结合上下文解释'}
-            onClick={() => setAsking(true)}
-          >
-            <span aria-hidden="true">✦</span> AI 解释
-          </button>
-        </div>
-
-        {/* The panel over the sheet, exactly as the reader stacks them: the sheet
-            stays underneath, so closing the answer returns to the word rather
-            than to the list. */}
-        {asking && sentence && (
+        </>
+      }
+      overlay={
+        // The panel over the sheet, exactly as the reader stacks them: the sheet
+        // stays underneath, so closing the answer returns to the word rather
+        // than to the list.
+        asking && sentence ? (
           <AIPanel<ExplainResult>
             title={`✦ AI 释义 · ${item.term}`}
             run={() => api.explainInContext(item.term, sentence)}
@@ -201,8 +148,54 @@ export default function VocabCard({
             chatId={(r) => r.conversationId}
             onOpenChat={(id) => closeThen(() => nav(`/ai/${id}`))}
           />
+        ) : null
+      }
+    >
+      <div className={`vocab-sheet-trans${item.translation ? '' : ' muted'}`}>
+        {item.translation || '（词库无释义）'}
+      </div>
+
+      {sentence && (
+        <div className="vocab-sheet-quote">
+          <div className="vocab-sheet-label">原文句子</div>
+          <p>{emphasise(sentence, [item.surface, item.term])}</p>
+        </div>
+      )}
+
+      <div className="vocab-sheet-meta">
+        <span className="vocab-sheet-origin">{origin}</span>
+        <span className="vocab-sheet-learn">{scheduleLine(item.dueAt)}</span>
+        {item.status !== 'new' && (
+          <span className={`vocab-status s-${item.status}`} title={STATUS_HINT[item.status]}>
+            {STATUS_LABEL[item.status]}
+          </span>
         )}
       </div>
-    </div>
+      {counts && <div className="vocab-sheet-counts">{counts}</div>}
+
+      {/* Already explained before? Then the answer is on the device and it
+          belongs on the card, not behind a link. */}
+      {cached && (
+        <div className="dict-ai">
+          <div className="dict-ai-head">
+            <span className="dict-ai-star" aria-hidden="true">
+              ✦
+            </span>
+            AI 解释 · 本句
+          </div>
+          {cached.meaning && <div className="dict-ai-meaning">{cached.meaning}</div>}
+          {cached.translation && <div className="dict-ai-trans">整句：{cached.translation}</div>}
+          {cached.note && <div className="dict-ai-note">{cached.note}</div>}
+          {cached.conversationId && (
+            <button
+              className="dict-ai-open"
+              onClick={() => closeThen(() => nav(`/ai/${cached.conversationId}`))}
+            >
+              查看对话 <span aria-hidden="true">›</span>
+            </button>
+          )}
+        </div>
+      )}
+    </WordSheet>
   );
 }

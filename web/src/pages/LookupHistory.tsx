@@ -2,7 +2,8 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { api, LookupHit } from '../api';
 import { toast, toastError } from '../toast';
 import SubHeader from '../components/SubHeader';
-import { STATUS_LABEL } from '../vocabLabels';
+import LookupCard from '../components/LookupCard';
+import { STATUS_LABEL, whenLabel } from '../vocabLabels';
 import { useLoadMore } from '../useLoadMore';
 
 /**
@@ -11,18 +12,6 @@ import { useLoadMore } from '../useLoadMore';
  * and never fetched whole.
  */
 const PAGE = 40;
-
-/** 'When did I last look this up', said the way a person would say it. */
-function whenLabel(iso: string): string {
-  if (!iso) return '';
-  const at = new Date(iso);
-  if (Number.isNaN(at.getTime())) return '';
-  const days = Math.floor((Date.now() - at.getTime()) / 86400000);
-  if (days <= 0) return '今天';
-  if (days === 1) return '昨天';
-  if (days < 30) return `${days} 天前`;
-  return `${at.getFullYear() === new Date().getFullYear() ? '' : `${at.getFullYear()}年`}${at.getMonth() + 1}月${at.getDate()}日`;
-}
 
 /**
  * Everything the reader has ever looked up, newest first.
@@ -45,6 +34,8 @@ export default function LookupHistory() {
   /** Matching rows in the database, not rows on screen. */
   const [total, setTotal] = useState(0);
   const [busy, setBusy] = useState('');
+  /** The word whose card is open, by term: the row is the state of record. */
+  const [cardTerm, setCardTerm] = useState<string | null>(null);
 
   // Offsets are tracked apart from `items.length`: a row dropped as a duplicate
   // must not shift the next request and make the page skip a word.
@@ -130,6 +121,10 @@ export default function LookupHistory() {
     }
   }
 
+  // Drawn from the list, not a copy: adding the word updates the row, and the
+  // card that is still open behind it must say 已在生词本 without being closed.
+  const card = cardTerm ? (items.find((it) => it.term === cardTerm) ?? null) : null;
+
   return (
     <div className="page">
       {/* The number is the whole history, not the part on screen: the page is
@@ -157,7 +152,9 @@ export default function LookupHistory() {
           <div className="note-list">
             {items.map((it) => (
               <div className="note-card" key={it.term}>
-                <div className="note-card-body hist-body">
+                {/* The row opens the word's card — the same tap the notebook's
+                    rows answer — and the card is where the word is added. */}
+                <button className="note-card-main hist-body" onClick={() => setCardTerm(it.term)}>
                   <div className="vocab-wordline">
                     <span className="vocab-word">{it.term}</span>
                     {it.phonetic && <span className="dict-phon">/{it.phonetic}/</span>}
@@ -167,22 +164,13 @@ export default function LookupHistory() {
                     <span className="hist-when">
                       查过 {it.lookups} 次 · {whenLabel(it.lastAt)}
                     </span>
-                    {it.inNotebook ? (
-                      <span className="hist-in">
-                        已在生词本
-                        {it.status ? ` · ${STATUS_LABEL[it.status]}` : ''}
-                      </span>
-                    ) : (
-                      <button
-                        className="btn sm"
-                        disabled={busy === it.term}
-                        onClick={() => void add(it)}
-                      >
-                        {busy === it.term ? '加入中…' : '加入生词本'}
-                      </button>
-                    )}
+                    <span className={it.inNotebook ? 'hist-in' : 'hist-out'}>
+                      {it.inNotebook
+                        ? `已在生词本${it.status ? ` · ${STATUS_LABEL[it.status]}` : ''}`
+                        : '未加入生词本'}
+                    </span>
                   </div>
-                </div>
+                </button>
               </div>
             ))}
           </div>
@@ -206,6 +194,15 @@ export default function LookupHistory() {
             ) : null}
           </div>
         </>
+      )}
+
+      {card && (
+        <LookupCard
+          hit={card}
+          busy={busy === card.term}
+          onClose={() => setCardTerm(null)}
+          onAdd={() => void add(card)}
+        />
       )}
     </div>
   );

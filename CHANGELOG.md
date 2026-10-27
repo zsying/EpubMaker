@@ -108,10 +108,20 @@ of described.
   question than the tap asked ("what was this?" not "where was this?") and
   spent a page turn to do it. The row now opens a sheet: the word at reading
   size with 发音, the gloss, the whole example sentence, the provenance and the
-  schedule, and two actions — 定位原文 (the old behaviour, now a deliberate
-  second tap) and ✦ AI 解释, which explains this word in this sentence and
-  translates it, with 查看完整对话 one tap further on. A previously asked
-  question shows its cached answer inside the sheet without a tap.
+  schedule, with two quiet links in the footer — 定位原文 (the old behaviour, now
+  a deliberate second tap) and ✦ AI 解释, which explains this word in this
+  sentence and translates it, with 查看完整对话 one tap further on. A previously
+  asked question shows its cached answer inside the sheet without a tap, and the
+  AI link is then gone: the answer is already on the card, so a second door to
+  it would only be noise.
+- **查词历史 rows open a word card too** — the history is the notebook's raw
+  material, and its rows only ever offered one thing: a 加入生词本 button sitting
+  in the way of the row. The row itself now opens a card with the word at
+  reading size, 发音, the gloss in full (the row clamps it to a line — for
+  `small` that hides four of its five senses), when it was last looked up, and
+  加入生词本 as a single text link that disappears once the word is in. There is
+  no 定位原文 and no AI here: the history remembers what was looked up, not
+  where, so it has no page to point at and no sentence to explain the word in.
 
 ### Changed
 

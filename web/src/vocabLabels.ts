@@ -41,3 +41,16 @@ export function dueLabel(iso: string): string {
 export function scheduleLine(dueAt: string): string {
   return dueAt ? `下次 ${dueLabel(dueAt)}` : '还没复习过';
 }
+
+/** 'When did I last look this up', said the way a person would say it. Shared by
+ * the history row and the card it opens, so one date never reads two ways. */
+export function whenLabel(iso: string): string {
+  if (!iso) return '';
+  const at = new Date(iso);
+  if (Number.isNaN(at.getTime())) return '';
+  const days = Math.floor((Date.now() - at.getTime()) / 86400000);
+  if (days <= 0) return '今天';
+  if (days === 1) return '昨天';
+  if (days < 30) return `${days} 天前`;
+  return `${at.getFullYear() === new Date().getFullYear() ? '' : `${at.getFullYear()}年`}${at.getMonth() + 1}月${at.getDate()}日`;
+}
