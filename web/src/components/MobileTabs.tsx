@@ -9,7 +9,7 @@ import { NavLink, useLocation, useNavigate } from 'react-router-dom';
  *
  * Tabs are siblings, not steps (2026-10-26)
  * ----------------------------------------
- * 书架 / 生词本 / 我的 are three views of the same level, so switching between
+ * 书架 / 生词本 / AI / 我的 are four views of the same level, so switching between
  * them must not add history — yet every switch used to push, and the copies
  * piled up behind each other. Walk 书架 → 生词本 → 书架 → 生词本 and the stack
  * is [/, /vocab, /, /vocab]: the first back lands on the third entry, which is
@@ -68,6 +68,23 @@ const TABS = [
           stroke="currentColor"
           strokeWidth="1.5"
           strokeLinecap="round"
+        />
+      </svg>
+    ),
+  },
+  {
+    to: '/ai',
+    label: 'AI',
+    end: false,
+    icon: (
+      <svg width="20" height="20" viewBox="0 0 20 20" aria-hidden="true">
+        {/* The four-point star the ✦ buttons already use across the app. */}
+        <path
+          d="M10 2.5 L11.8 8.2 L17.5 10 L11.8 11.8 L10 17.5 L8.2 11.8 L2.5 10 L8.2 8.2 Z"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="1.5"
+          strokeLinejoin="round"
         />
       </svg>
     ),

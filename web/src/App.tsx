@@ -9,6 +9,7 @@ import WebDav from './pages/WebDav';
 import Bookmarks from './pages/Bookmarks';
 import Annotations from './pages/Annotations';
 import Vocab from './pages/Vocab';
+import AIChats from './pages/AIChats';
 import Review from './pages/Review';
 import LookupHistory from './pages/LookupHistory';
 import Me from './pages/Me';
@@ -25,10 +26,10 @@ import MobileTabs from './components/MobileTabs';
 export default function App() {
   const loc = useLocation();
   const isReader = /\/books\/[^/]+\/read/.test(loc.pathname);
-  // The bottom tab bar belongs to the three top-level destinations only;
+  // The bottom tab bar belongs to the four top-level destinations only;
   // second-level pages (设置/书签/回收站/…) are stacked on top of them and
   // carry their own back header instead.
-  const showTabs = ['/', '/vocab', '/me'].includes(loc.pathname);
+  const showTabs = ['/', '/vocab', '/ai', '/me'].includes(loc.pathname);
 
   // Overlay closers are page-scoped: once the route changes, a closer left by
   // the previous page must never eat a back press on the new one.
@@ -97,6 +98,9 @@ export default function App() {
           <Link to="/vocab" className="btn ghost">
             生词本
           </Link>
+          <Link to="/ai" className="btn ghost">
+            AI 对话
+          </Link>
           <Link to="/webdav" className="btn ghost">
             WebDAV
           </Link>
@@ -124,6 +128,8 @@ export default function App() {
             <Route path="/vocab" element={<Vocab />} />
             <Route path="/vocab/history" element={<LookupHistory />} />
             <Route path="/vocab/review" element={<Review />} />
+            <Route path="/ai" element={<AIChats />} />
+            <Route path="/ai/:id" element={<AIChats />} />
             <Route path="/trash" element={<Trash />} />
             <Route path="/webdav" element={<WebDav />} />
             <Route path="/me" element={<Me />} />

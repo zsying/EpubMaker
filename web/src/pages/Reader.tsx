@@ -650,6 +650,10 @@ export default function Reader() {
   // would change the page count and throw the reader off their page.
   const [lookupCard, setLookupCard] = useState<LookupCardState>(null);
   const [lookupBusy, setLookupBusy] = useState(false);
+  // The AI gloss the card already knows about. When this exact word + sentence
+  // was explained before, the answer is in the local cache, and the card shows
+  // it the moment it opens — no ✦ tap, no network. Cleared with the card.
+  const [cardAI, setCardAI] = useState<ExplainResult | null>(null);
   // Whether a dictionary is installed at all. A tap on a word always opens
   // the lookup card — without a dictionary it says so and points at the
   // download in 我的 → 查词词库, which is far better than a dead tap.
@@ -680,6 +684,34 @@ export default function Reader() {
   useBackClose(annOpen, () => setAnnOpen(false));
   useBackClose(!!aiPanel, () => setAIPanel(null));
   useBackClose(!!guideAsk, () => setGuideAsk(null));
+
+  // If this exact question was asked before — same word, same sentence — the
+  // answer is already on the device, and the card opens with it showing. The
+  // read is cache-only and never calls the provider; a miss changes nothing.
+  //
+  // This hook lives up here with the other overlay effects on purpose: the
+  // component returns early while `loading`, and a hook registered after that
+  // return would change the hook count between renders — which React reports
+  // by unmounting the whole reader.
+  useEffect(() => {
+    setCardAI(null);
+    if (!lookupCard) return;
+    const word = lookupCard.res.entry?.word || lookupCard.surface || lookupCard.res.query;
+    const sentence = lookupCard.context;
+    if (!word || !sentence) return;
+    let alive = true;
+    api
+      .aiExplainCached(word, sentence)
+      .then((r) => {
+        if (alive) setCardAI(r ?? null);
+      })
+      .catch(() => {
+        /* a cache read failure is a miss, not a problem for the reader */
+      });
+    return () => {
+      alive = false;
+    };
+  }, [lookupCard]);
 
   // The chapter guide lives in the top bar (0.4): reading it is a deliberate
   // act about the whole chapter, so it belongs with 目录/书签 rather than
@@ -3074,6 +3106,27 @@ export default function Reader() {
   // The word as the reader sees it on the page. Falls back to the dictionary's
   // normalised query for an older card state.
   const cardWord = lookupCard ? lookupCard.surface || lookupCard.res.query : '';
+  // The cached gloss itself is fetched by the effect near the state
+  // declarations (before the loading return); this block only draws it.
+
+  // The cached AI gloss as the card shows it — the same block in both the
+  // dictionary-miss state (where it replaces "未收录") and the found state
+  // (where it sits under the dictionary entry).
+  const cardAIGloss = cardAI && (
+    <div className="dict-ai">
+      <div className="dict-ai-head">
+        <span className="dict-ai-star" aria-hidden="true">
+          ✦
+        </span>
+        AI 解释 · 本句
+        {cardAI.pos && <span className="ai-pos">{cardAI.pos}</span>}
+      </div>
+      {cardAI.meaning && <div className="dict-ai-meaning">{cardAI.meaning}</div>}
+      {cardAI.translation && <div className="dict-ai-trans">整句：{cardAI.translation}</div>}
+      {cardAI.note && <div className="dict-ai-note">{cardAI.note}</div>}
+    </div>
+  );
+
   const overlayLayer = (
     <>
       {/* selection toolbar — stays up while a handle is dragged: the drag is
@@ -3153,34 +3206,49 @@ export default function Reader() {
             ×
           </button>
           {!lookupCard.res.found || !lookupCard.res.entry ? (
-            <div className="dict-miss">
-              {!dictReady ? (
-                <>
-                  <div className="dict-miss-title">词库未安装</div>
-                  <div className="dict-miss-hint">在「我的 → 查词词库」可在线下载</div>
-                </>
-              ) : (
-                <>
-                  <div className="dict-miss-title">
-                    词库未收录 <b>{cardWord}</b>
-                  </div>
-                  {/* A word the dictionary does not have is usually a name, a
+            cardAI ? (
+              <>
+                {cardAIGloss}
+                <div className="dict-miss-hint">
+                  这是之前 AI 对「{cardWord}」的解释。词库未收录此词。
+                </div>
+                <button className="ai-fallback" onClick={explainThis}>
+                  <span className="ai-fallback-star" aria-hidden="true">
+                    ✦
+                  </span>
+                  重新问 AI
+                </button>
+              </>
+            ) : (
+              <div className="dict-miss">
+                {!dictReady ? (
+                  <>
+                    <div className="dict-miss-title">词库未安装</div>
+                    <div className="dict-miss-hint">在「我的 → 查词词库」可在线下载</div>
+                  </>
+                ) : (
+                  <>
+                    <div className="dict-miss-title">
+                      词库未收录 <b>{cardWord}</b>
+                    </div>
+                    {/* A word the dictionary does not have is usually a name, a
                       coinage or a domain term — which is exactly the word a
                       reader needs help with. Ending the answer at "未收录" is
                       the least useful thing the card could do, so the model is
                       offered right here, at full size. */}
-                  <div className="dict-miss-hint">
-                    人名、地名、专业词常不在词库里。AI 可以结合这一句解释它，并把整句翻成中文。
-                  </div>
-                </>
-              )}
-              <button className="ai-fallback" onClick={explainThis}>
-                <span className="ai-fallback-star" aria-hidden="true">
-                  ✦
-                </span>
-                让 AI 解释「{cardWord}」
-              </button>
-            </div>
+                    <div className="dict-miss-hint">
+                      人名、地名、专业词常不在词库里。AI 可以结合这一句解释它，并把整句翻成中文。
+                    </div>
+                  </>
+                )}
+                <button className="ai-fallback" onClick={explainThis}>
+                  <span className="ai-fallback-star" aria-hidden="true">
+                    ✦
+                  </span>
+                  让 AI 解释「{cardWord}」
+                </button>
+              </div>
+            )
           ) : (
             <>
               <div className="dict-head">
@@ -3215,6 +3283,9 @@ export default function Reader() {
                   )}
                 </div>
               )}
+              {/* Asked the AI about this word in this sentence before? The
+                  answer is already on the device — show it without a tap. */}
+              {cardAIGloss}
               <div className="dict-foot">
                 {lookupCard.res.recorded ? (
                   <span className="dict-saved">已在生词本</span>

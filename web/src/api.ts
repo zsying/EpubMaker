@@ -157,6 +157,44 @@ export interface ExplainResult {
   pos: string;
   note: string;
   cached: boolean;
+  /** The conversation this answer was filed under, for "continue in the AI page". */
+  conversationId?: string;
+}
+
+/** One AI conversation: a lookup, a parse, a chapter guide, or a manual chat. */
+export interface AIConversation {
+  id: string;
+  title: string;
+  /** lookup | parse | summarize | manual */
+  origin: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+/** A list row: header plus the facts the row shows. */
+export interface AIConversationItem extends AIConversation {
+  count: number;
+  preview: string;
+}
+
+/** One turn of a transcript. The system prompt is stored as a message too. */
+export interface AIMessage {
+  id: string;
+  conversationId: string;
+  role: 'system' | 'user' | 'assistant';
+  content: string;
+  createdAt: string;
+}
+
+export interface AIConversationDetail extends AIConversation {
+  messages: AIMessage[];
+}
+
+/** One continuation: what was asked and what came back, as stored. */
+export interface AIChatTurn {
+  conversationId: string;
+  user: AIMessage;
+  assistant: AIMessage;
 }
 
 /** One slice of a sentence with its grammatical role. */
@@ -835,6 +873,32 @@ export const api = {
   /** A short guide for one chapter, from the chapter's own text. */
   summarizeChapter: (bookId: string, chapterId: string) =>
     call<SummaryResult>('SummarizeChapter', bookId, chapterId),
+
+  /* ------------- AI conversations: the transcripts, and continuing them ------------- */
+
+  /** All conversations, newest activity first. */
+  aiConversations: () => call<AIConversationItem[]>('AIConversations'),
+
+  /** One transcript in full — system prompt included. */
+  aiConversation: (id: string) => call<AIConversationDetail | null>('AIConversation', id),
+
+  aiConversationDelete: (id: string) => call<boolean>('AIConversationDelete', id),
+
+  /**
+   * Sends one message. An empty id starts a manual conversation and returns
+   * the new one; otherwise the stored transcript (system prompt included)
+   * goes back to the provider verbatim. A failed send rolls the user message
+   * back, so a retry cannot duplicate it.
+   */
+  aiChatSend: (conversationId: string, text: string) =>
+    call<AIChatTurn>('AIChatSend', conversationId, text),
+
+  /**
+   * The cached explanation for one word in one sentence, if the AI already
+   * answered exactly this question. Never calls the provider; a miss is null.
+   */
+  aiExplainCached: (word: string, sentence: string) =>
+    call<ExplainResult | null>('AIExplainCached', word, sentence),
 
   /* ---------------- diagnostics: the local log ---------------- */
 
