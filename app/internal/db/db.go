@@ -280,6 +280,16 @@ func migrate(d *sql.DB) error {
 	                SELECT term, lookups, first_at, last_at FROM vocab_seen`)
 	_, _ = d.Exec(`INSERT OR IGNORE INTO lookup_history (term, lookups, first_at, last_at)
 	                SELECT term, lookups, created_at, updated_at FROM vocab`)
+	// A bookmark is a spot in a chapter, so the same spot is one bookmark.
+	// Builds before this one let the bookmark drawer's 添加当前页 button insert the
+	// same page again on every press; keep the first copy of each spot, then put
+	// a unique index in place so no caller can do that again. The copies have to
+	// go first: creating the index over a database that already holds duplicates
+	// fails, and the schema block above runs before this point on every open.
+	_, _ = d.Exec(`DELETE FROM bookmarks WHERE rowid NOT IN (
+	                 SELECT MIN(rowid) FROM bookmarks GROUP BY book_id, chapter_id, anchor)`)
+	_, _ = d.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_bookmarks_page
+	               ON bookmarks(book_id, chapter_id, anchor)`)
 	return nil
 }
 

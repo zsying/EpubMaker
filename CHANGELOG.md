@@ -262,6 +262,20 @@ of described.
 
 ### Fixed
 
+- **A page can only be bookmarked once** — the 书签 drawer's ＋ 添加当前页 button
+  added a bookmark on every press, so one page could collect a column of identical
+  rows (and then the star in the reader's top bar, which asks "is this page
+  marked?", behaved oddly: it removed one of them and stayed lit). The button is
+  now the same action as the star — 添加当前页 or 移除本页书签, depending on the
+  page — and the page is marked once however many times it is pressed, including
+  two presses inside one frame, because a press that lands while the first request
+  is in flight is dropped rather than queued. The rule is enforced where the data
+  lives as well: a bookmark is identified by its chapter and anchor, so the
+  database has one row per spot (`ON CONFLICT DO NOTHING`, plus a unique index),
+  and `AddBookmark` answers with the row that is already there. Pages that already
+  carry duplicates are collapsed by the migration (the first copy wins) and one
+  press of the star or the button now clears all of them, so the star cannot be
+  left lit by a mark the reader cannot see.
 - **A chapter no longer ends on a blank page** — the page count was
   `ceil(scrollWidth / stride)`, which counts column *boxes*: a last paragraph that
   spilled a few pixels past the final column widened the strip by one and produced

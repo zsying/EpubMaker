@@ -167,6 +167,12 @@ func ListBookmarks(bookID string) ([]Bookmark, error) {
 	return out, rows.Err()
 }
 
+// AddBookmark marks a spot in a chapter. A spot is identified by its chapter
+// and anchor, so marking it again cannot create a second bookmark: the insert
+// yields to the row already there and hands that back instead. Every caller
+// (the star in the reader's top bar, the bookmark drawer's button, a retry
+// after a request the frontend lost track of) is therefore idempotent without
+// having to ask first, and without a check-then-insert window between them.
 func AddBookmark(bookID, chapterID string, anchor int, label string) (*Bookmark, error) {
 	d, err := db.Open()
 	if err != nil {
@@ -176,13 +182,32 @@ func AddBookmark(bookID, chapterID string, anchor int, label string) (*Bookmark,
 		ID: uid(), BookID: bookID, ChapterID: chapterID,
 		Anchor: anchor, Label: orDefault(label, ""), CreatedAt: nowIso(),
 	}
-	if _, err := d.Exec(
+	res, err := d.Exec(
 		`INSERT INTO bookmarks (id, book_id, chapter_id, anchor, label, created_at)
-		 VALUES (?, ?, ?, ?, ?, ?)`,
-		b.ID, b.BookID, b.ChapterID, b.Anchor, b.Label, b.CreatedAt); err != nil {
+		 VALUES (?, ?, ?, ?, ?, ?)
+		 ON CONFLICT(book_id, chapter_id, anchor) DO NOTHING`,
+		b.ID, b.BookID, b.ChapterID, b.Anchor, b.Label, b.CreatedAt)
+	if err != nil {
 		return nil, err
 	}
+	if n, err := res.RowsAffected(); err == nil && n == 0 {
+		return bookmarkAt(d, bookID, chapterID, anchor)
+	}
 	return b, nil
+}
+
+// bookmarkAt reads the bookmark standing for one spot, for the insert above to
+// return when it lost to the unique index.
+func bookmarkAt(d *sql.DB, bookID, chapterID string, anchor int) (*Bookmark, error) {
+	var b Bookmark
+	if err := d.QueryRow(
+		`SELECT id, book_id, chapter_id, anchor, label, created_at
+		 FROM bookmarks WHERE book_id = ? AND chapter_id = ? AND anchor = ?`,
+		bookID, chapterID, anchor,
+	).Scan(&b.ID, &b.BookID, &b.ChapterID, &b.Anchor, &b.Label, &b.CreatedAt); err != nil {
+		return nil, err
+	}
+	return &b, nil
 }
 
 func DeleteBookmark(id string) error {

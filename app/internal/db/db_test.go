@@ -146,6 +146,85 @@ func TestMigrateSeedsLookupHistory(t *testing.T) {
 	}
 }
 
+// A database written by a build that let the bookmark drawer add the same page
+// over and over must come out of the migration with one bookmark per spot: the
+// copies are dropped before the unique index goes on, because creating that
+// index over a table that already holds copies would fail and take the whole
+// open with it.
+func TestMigrateCollapsesDuplicateBookmarks(t *testing.T) {
+	t.Setenv("EPUBMAKER_HOME", t.TempDir())
+
+	path := config.Get().Paths.DbFile
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	old, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// config.Get() is cached for the whole test binary, so this file may be one
+	// an earlier test already migrated. Start from the shape the bug left behind.
+	if _, err := old.Exec(`
+		DROP TABLE IF EXISTS bookmarks;
+		DROP TABLE IF EXISTS books;
+		CREATE TABLE books (
+		  id TEXT PRIMARY KEY, title TEXT NOT NULL DEFAULT '',
+		  created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
+		CREATE TABLE bookmarks (
+		  id TEXT PRIMARY KEY,
+		  book_id TEXT NOT NULL REFERENCES books(id) ON DELETE CASCADE,
+		  chapter_id TEXT NOT NULL,
+		  anchor INTEGER NOT NULL DEFAULT 0,
+		  label TEXT NOT NULL DEFAULT '',
+		  created_at TEXT NOT NULL);`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := old.Exec(`INSERT INTO books (id, title, created_at, updated_at)
+	                       VALUES ('dup-book','t','2026-01-01T00:00:00Z','2026-01-01T00:00:00Z')`); err != nil {
+		t.Fatal(err)
+	}
+	// Three presses on page 120, one on page 40: the first of the three is the
+	// one that should survive, because it is the one the reader saw appear.
+	for _, id := range []string{"bm1", "bm2", "bm3"} {
+		if _, err := old.Exec(`INSERT INTO bookmarks (id, book_id, chapter_id, anchor, created_at)
+		                       VALUES (?,'dup-book','c1',120,'2026-01-02T00:00:00Z')`, id); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := old.Exec(`INSERT INTO bookmarks (id, book_id, chapter_id, anchor, created_at)
+	                       VALUES ('bm4','dup-book','c1',40,'2026-01-03T00:00:00Z')`); err != nil {
+		t.Fatal(err)
+	}
+	_ = old.Close()
+
+	d, err := Open()
+	if err != nil {
+		t.Fatalf("open db with duplicate bookmarks: %v", err)
+	}
+	defer Close()
+
+	var n int
+	if err := d.QueryRow(`SELECT COUNT(*) FROM bookmarks WHERE book_id = 'dup-book'`).Scan(&n); err != nil {
+		t.Fatal(err)
+	}
+	if n != 2 {
+		t.Fatalf("bookmarks after migration = %d, want 2 (one per spot)", n)
+	}
+	var kept string
+	if err := d.QueryRow(`SELECT id FROM bookmarks WHERE book_id = 'dup-book' AND anchor = 120`).Scan(&kept); err != nil {
+		t.Fatal(err)
+	}
+	if kept != "bm1" {
+		t.Errorf("kept %q, want the first copy bm1", kept)
+	}
+
+	// And the index is really there: the same spot cannot be inserted again.
+	if _, err := d.Exec(`INSERT INTO bookmarks (id, book_id, chapter_id, anchor, created_at)
+	                     VALUES ('bm5','dup-book','c1',120,'2026-01-04T00:00:00Z')`); err == nil {
+		t.Error("a second bookmark for the same spot was accepted")
+	}
+}
+
 func TestOpenAndMigrate(t *testing.T) {
 	t.Setenv("EPUBMAKER_HOME", t.TempDir())
 

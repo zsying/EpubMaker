@@ -3409,7 +3409,9 @@ export default function Reader() {
       // map, so the anchor is whatever text sits at the top of the pane.
       const off = mode === 'paged' ? offsetForPage(pageIndex) : offsetAtViewportTop();
       const b = await api.addBookmark(id, current, off, '');
-      setBookmarks((prev) => [...prev, b]);
+      // Marking a spot that is already marked comes back as the row that was
+      // there, so this merges rather than appending a twin of it.
+      setBookmarks((prev) => (prev.some((x) => x.id === b.id) ? prev : [...prev, b]));
       toast('已添加书签', 'success');
     } catch (e) {
       toastError(e);
@@ -3421,37 +3423,58 @@ export default function Reader() {
   const contentStyle: CSSProperties = { fontSize };
   if (readFont !== 'default') contentStyle.fontFamily = `'${CUSTOM_FONT_FAMILY}', Georgia, serif`;
 
-  async function removeBookmark(bid: string) {
+  async function removeBookmarks(ids: string[]) {
+    if (ids.length === 0) return;
     try {
-      await api.deleteBookmark(bid);
-      setBookmarks((prev) => prev.filter((x) => x.id !== bid));
-      toast('已删除书签', 'success');
+      await Promise.all(ids.map((bid) => api.deleteBookmark(bid)));
+      setBookmarks((prev) => prev.filter((x) => !ids.includes(x.id)));
+      toast(ids.length > 1 ? `已删除 ${ids.length} 个书签` : '已删除书签', 'success');
     } catch (e) {
       toastError(e);
     }
   }
 
-  // The bookmark standing for "this page" (phone: the star in the top bar).
-  // Paged mode matches exactly via the offset->page map; scrolling compares
-  // against the offset at the top of the pane with slack, because the pane
-  // moves in pixel steps the map does not model.
-  function currentPageBookmark(): Bookmark | null {
-    if (!current) return null;
+  const removeBookmark = (bid: string) => removeBookmarks([bid]);
+
+  // Every bookmark standing for "this page". Paged mode matches exactly via the
+  // offset->page map; scrolling compares against the offset at the top of the
+  // pane with slack, because the pane moves in pixel steps the map does not
+  // model. Plural on purpose: a page can carry more than one mark (the drawer
+  // used to add a new one on every press), and the star has to be able to turn
+  // all of them off.
+  function pageBookmarks(): Bookmark[] {
+    if (!current) return [];
     if (mode === 'paged') {
-      return (
-        bookmarks.find(
-          (b) => b.chapterId === current && pageIndexForOffset(b.anchor) === pageIndex,
-        ) ?? null
+      return bookmarks.filter(
+        (b) => b.chapterId === current && pageIndexForOffset(b.anchor) === pageIndex,
       );
     }
     const top = offsetAtViewportTop();
-    return bookmarks.find((b) => b.chapterId === current && Math.abs(b.anchor - top) < 500) ?? null;
+    return bookmarks.filter((b) => b.chapterId === current && Math.abs(b.anchor - top) < 500);
   }
 
+  // The bookmark standing for "this page" (phone: the star in the top bar).
+  function currentPageBookmark(): Bookmark | null {
+    return pageBookmarks()[0] ?? null;
+  }
+
+  // Bookmarking is one action with one meaning, and it has to be safe to press
+  // twice: the star and the drawer's button both call this, and a double tap —
+  // or a tap that lands while the first request is still in flight — must not
+  // mark the page twice. Whoever gets through owns the interaction; the second
+  // press is dropped instead of queued behind the first.
+  const bookmarkBusyRef = useRef(false);
+
   async function togglePageBookmark() {
-    const existing = currentPageBookmark();
-    if (existing) await removeBookmark(existing.id);
-    else await addBookmarkNow();
+    if (bookmarkBusyRef.current) return;
+    bookmarkBusyRef.current = true;
+    try {
+      const marks = pageBookmarks();
+      if (marks.length > 0) await removeBookmarks(marks.map((b) => b.id));
+      else await addBookmarkNow();
+    } finally {
+      bookmarkBusyRef.current = false;
+    }
   }
 
   function jumpBookmark(b: Bookmark) {
@@ -3478,6 +3501,10 @@ export default function Reader() {
   // Only measured while the mobile chrome is actually up: in scroll mode the
   // helper walks text nodes, and doing that on every desktop render is waste.
   const pageBookmark = touchPrimary && chromeOpen ? currentPageBookmark() : null;
+  // The drawer's button says the same thing as the star, so it needs the same
+  // answer — and it must have one on desktop too, where the star does not exist.
+  // Guarded on bmOpen so a closed drawer costs nothing.
+  const pageMarked = pageBookmark !== null || (bmOpen && currentPageBookmark() !== null);
 
   const iconBack = (
     <svg
@@ -4762,8 +4789,12 @@ export default function Reader() {
           <aside className="drawer" onClick={(e) => e.stopPropagation()}>
             <div className="drawer-head">
               书签
-              <button className="btn sm primary" onClick={addBookmarkNow}>
-                ＋ 添加当前页
+              <button
+                className={`btn sm${pageMarked ? '' : ' primary'}`}
+                onClick={togglePageBookmark}
+                title={pageMarked ? '取消当前页的书签' : '给当前页加一个书签'}
+              >
+                {pageMarked ? '移除本页书签' : '＋ 添加当前页'}
               </button>
               <button className="btn sm" onClick={() => setBmOpen(false)}>
                 ✕
