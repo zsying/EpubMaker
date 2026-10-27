@@ -125,6 +125,21 @@ of described.
 
 ### Changed
 
+- **A page turn moves like paper, and moves nothing but pixels** — turning a page
+  inside a chapter used to land in a single frame: the column strip's
+  `translate3d` jumped from one page to the next. It now slides over 210 ms, with
+  a soft shadow band sweeping across the sheet in the same direction (34% of the
+  sheet wide, ~14% black at its peak; denser on the dark themes, where a shadow
+  over near-black paper would otherwise not read at all). The transition lives on
+  a `turning` class instead of on `.reader-columns` itself, so restore, resize and
+  the 1↔2 page switch still land instantly — an always-on transition made the text
+  fly in from page 1 after any re-measure. Nothing re-layouts: clip box, spread,
+  sheet slots, page count and page number stay put on every frame of the turn
+  (asserted frame by frame, not eyeballed), and the strip was already its own
+  compositor layer, so the slide is animated on the GPU. Measured on the phone
+  through `Page.startScreencast`: 21 frames per turn, 19 of them distinct, 20 ms
+  median — continuous motion, not a few steps. `prefers-reduced-motion: reduce`
+  turns the page instantly and draws no band.
 - **The AI tab behaves like the top-level tab it is** — 书架 / 生词本 / AI / 我的
   are siblings, so `/ai` no longer shows a back chevron: there is no layer
   above it, and the button could only leave the app. The chevron stays on

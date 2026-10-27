@@ -621,6 +621,17 @@ export default function Reader() {
   const fxRef = useRef(false);
   const awaitingChapterRef = useRef(false);
 
+  // Page-turn motion for WITHIN-chapter turns: the column strip slides to the
+  // neighbouring page and a shadow band sweeps across the sheet. Held only for
+  // the duration of the gesture and deliberately not a permanent CSS
+  // transition — every other transform change on that strip (measure, restore,
+  // 1<->2 page mode, rotation) must land instantly, or the text would fly in
+  // from page 1 whenever the layout is rebuilt.
+  const [turnFx, setTurnFx] = useState<{ id: number; dir: 1 | -1 } | null>(null);
+  const turnFxSeq = useRef(0);
+  const turnFxTimer = useRef(0);
+  useEffect(() => () => window.clearTimeout(turnFxTimer.current), []);
+
   // book-page geometry (proportions like a real paperback)
   const [stageWidth, setStageWidth] = useState(0);
   const [stageHeight, setStageHeight] = useState(0);
@@ -1638,6 +1649,28 @@ export default function Reader() {
     window.setTimeout(apply, 130);
   }
 
+  // Long enough that only a badly stalled main thread can reach it; the band's
+  // own animationend normally ends the turn first. The timer exists because the
+  // band is display:none under prefers-reduced-motion, where no such event ever
+  // arrives.
+  const TURN_FX_MS = 600;
+
+  function slideTurn(dir: 1 | -1) {
+    turnFxSeq.current += 1;
+    setTurnFx({ id: turnFxSeq.current, dir });
+    window.clearTimeout(turnFxTimer.current);
+    turnFxTimer.current = window.setTimeout(() => setTurnFx(null), TURN_FX_MS);
+  }
+
+  // Ending on the band's animation rather than on a fixed delay is what keeps
+  // the slide from being cut short: dropping the class also drops the
+  // transition, and a transition removed while it is still running snaps
+  // straight to its end value.
+  function endTurnFx() {
+    window.clearTimeout(turnFxTimer.current);
+    setTurnFx(null);
+  }
+
   function turn(delta: number) {
     // Preview visits do not turn pages: the position must stay on the anchor,
     // and every save guard aside, drifting would break the "temporary look"
@@ -1649,11 +1682,15 @@ export default function Reader() {
     if (sel) clearSelectionUI();
     const step = turnStep;
     if (delta > 0) {
-      if (pageIndex + step <= maxPageIndex) setPageIndex(pageIndex + step);
-      else if (next) startTurn(() => openChapter(next.id, { type: 'first' }));
+      if (pageIndex + step <= maxPageIndex) {
+        slideTurn(1);
+        setPageIndex(pageIndex + step);
+      } else if (next) startTurn(() => openChapter(next.id, { type: 'first' }));
     } else {
-      if (pageIndex - step >= 0) setPageIndex(pageIndex - step);
-      else if (prev) startTurn(() => openChapter(prev.id, { type: 'last' }));
+      if (pageIndex - step >= 0) {
+        slideTurn(-1);
+        setPageIndex(pageIndex - step);
+      } else if (prev) startTurn(() => openChapter(prev.id, { type: 'last' }));
     }
   }
 
@@ -3891,7 +3928,7 @@ export default function Reader() {
         onMouseLeave={onStageMouseUp}
       >
         <div
-          className={`reader-spread${fxOut ? ' fx-out' : ''}`}
+          className={`reader-spread${fxOut ? ' fx-out' : ''}${turnFx ? ' turning' : ''}`}
           ref={spreadRef}
           style={{
             width: Math.max(0, viewWidth),
@@ -3978,6 +4015,23 @@ export default function Reader() {
               <div className="reader-content" ref={contentRef} style={contentStyle} />
             </div>
           </div>
+          {/* The shadow of the turning sheet, sweeping in the direction the page
+              travels. Keyed on the turn so every turn restarts the animation;
+              it is a shadow over static text, so nothing has to re-layout for
+              it to move. */}
+          {geometryReady && turnFx && (
+            <div
+              key={turnFx.id}
+              className={`turn-veil ${turnFx.dir > 0 ? 'fwd' : 'back'}`}
+              onAnimationEnd={endTurnFx}
+              style={{
+                width: Math.max(0, viewWidth),
+                height: Math.max(0, sheetHeight),
+              }}
+            >
+              <span className="turn-veil-band" />
+            </div>
+          )}
         </div>
       </div>
 

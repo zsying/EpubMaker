@@ -1101,6 +1101,114 @@ a {
   opacity: 0;
 }
 
+/* ---- page turn (within a chapter) ----
+   Two composited transforms, nothing else: the column strip slides by exactly
+   one (or two) page widths, and a shadow band sweeps across the sheet in the
+   same direction. Neither touches layout or the clip box, so the text cannot
+   wobble, re-wrap or shift its margins mid-turn — the only things that move are
+   the pixels.
+
+   The transition lives on `.turning`, NOT on `.reader-columns` itself: the same
+   strip is re-transformed on every measure/restore, and an always-on transition
+   would make the text fly in from page 1 after a resize or a mode switch. */
+.reader-spread.turning .reader-columns {
+  transition: transform 210ms cubic-bezier(0.22, 0.61, 0.36, 1);
+}
+
+/* The page number belongs to the sheet, and the sheet is a fixed slot: in a
+   spread it jumps corners the instant the page changes, while the text is still
+   sliding. A quick fade hands it over with the page instead of ahead of it. */
+.reader-spread .page-sheet .page-num {
+  transition: opacity 140ms ease;
+}
+.reader-spread.turning .page-sheet .page-num {
+  opacity: 0;
+  transition: opacity 90ms ease;
+}
+
+.turn-veil {
+  position: absolute;
+  left: 0;
+  top: 0;
+  /* Above the fold/spine and the covered page edges (z-index 7), which sit on
+     top of the clip the text lives in. */
+  z-index: 8;
+  overflow: hidden;
+  pointer-events: none;
+}
+
+/* The band is a soft shadow: no edges, peak around 15% black on paper. It
+   starts and ends fully outside the sheet, so nothing pops in or out. Narrow
+   on purpose — a wide wash reads as the screen dimming, a narrow one as the
+   edge of a page passing. */
+.turn-veil-band {
+  position: absolute;
+  top: -2%;
+  bottom: -2%;
+  left: 0;
+  width: 34%;
+  will-change: transform;
+  background: linear-gradient(
+    90deg,
+    rgba(34, 26, 12, 0) 0%,
+    rgba(34, 26, 12, 0.05) 14%,
+    rgba(34, 26, 12, 0.13) 52%,
+    rgba(34, 26, 12, 0.16) 74%,
+    rgba(34, 26, 12, 0) 100%
+  );
+}
+/* Off the right edge is 294% of a 34%-wide band's own width (100/0.34), off the
+   left edge is -100%. */
+.turn-veil.fwd .turn-veil-band {
+  animation: turn-band-fwd 250ms cubic-bezier(0.33, 0.12, 0.28, 1) both;
+}
+.turn-veil.back .turn-veil-band {
+  animation: turn-band-back 250ms cubic-bezier(0.33, 0.12, 0.28, 1) both;
+}
+@keyframes turn-band-fwd {
+  from {
+    transform: translate3d(294%, 0, 0);
+  }
+  to {
+    transform: translate3d(-100%, 0, 0);
+  }
+}
+@keyframes turn-band-back {
+  from {
+    transform: translate3d(-100%, 0, 0);
+  }
+  to {
+    transform: translate3d(294%, 0, 0);
+  }
+}
+
+/* On a dark page a shadow is invisible; the same band has to be much denser to
+   read as one at all. */
+html[data-app-theme='dark'] .turn-veil-band,
+html[data-app-theme='midnight'] .turn-veil-band {
+  background: linear-gradient(
+    90deg,
+    rgba(0, 0, 0, 0) 0%,
+    rgba(0, 0, 0, 0.26) 26%,
+    rgba(0, 0, 0, 0.4) 58%,
+    rgba(0, 0, 0, 0.48) 74%,
+    rgba(0, 0, 0, 0) 100%
+  );
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .reader-spread.turning .reader-columns {
+    transition: none;
+  }
+  .reader-spread .page-sheet .page-num,
+  .reader-spread.turning .page-sheet .page-num {
+    transition: none;
+  }
+  .turn-veil {
+    display: none;
+  }
+}
+
 /* Foreground clip that exactly matches the visible sheet(s). The page-sheet
    shadows live on sibling elements behind it, so they are not clipped, while
    the text column is strictly masked to the current 1 or 2 pages. */
