@@ -1115,13 +1115,23 @@ a {
   transition: transform 210ms cubic-bezier(0.22, 0.61, 0.36, 1);
 }
 
+/* A gesture turn is the same motion with the easing taken out: while the finger
+   is down the page is where the thumb put it (`turn-drag`), and only the
+   release slides it home (`turn-settle`). */
+.reader-spread.turn-settle .reader-drag {
+  transition: transform 210ms cubic-bezier(0.22, 0.61, 0.36, 1);
+}
+
 /* The page number belongs to the sheet, and the sheet is a fixed slot: in a
    spread it jumps corners the instant the page changes, while the text is still
-   sliding. A quick fade hands it over with the page instead of ahead of it. */
+   sliding. A quick fade hands it over with the page instead of ahead of it. A
+   dragged page takes its number with it for the same reason. */
 .reader-spread .page-sheet .page-num {
   transition: opacity 140ms ease;
 }
-.reader-spread.turning .page-sheet .page-num {
+.reader-spread.turning .page-sheet .page-num,
+.reader-spread.turn-drag .page-sheet .page-num,
+.reader-spread.turn-settle .page-sheet .page-num {
   opacity: 0;
   transition: opacity 90ms ease;
 }
@@ -1159,11 +1169,23 @@ a {
 }
 /* Off the right edge is 294% of a 34%-wide band's own width (100/0.34), off the
    left edge is -100%. */
-.turn-veil.fwd .turn-veil-band {
+.turn-veil.sweep.fwd .turn-veil-band {
   animation: turn-band-fwd 250ms cubic-bezier(0.33, 0.12, 0.28, 1) both;
 }
-.turn-veil.back .turn-veil-band {
+.turn-veil.sweep.back .turn-veil-band {
   animation: turn-band-back 250ms cubic-bezier(0.33, 0.12, 0.28, 1) both;
+}
+/* A gesture turn drives the band by hand (placeBand): its position IS the drag
+   progress, so the shadow sits where the pulled page's edge is instead of
+   flying on its own schedule. This is only the first-frame fallback — the
+   element is placed in the commit that mounts it. */
+.turn-veil.drag .turn-veil-band,
+.turn-veil.settle .turn-veil-band {
+  animation: none;
+  transform: translate3d(294%, 0, 0);
+}
+.turn-veil.settle .turn-veil-band {
+  transition: transform 210ms cubic-bezier(0.22, 0.61, 0.36, 1);
 }
 @keyframes turn-band-fwd {
   from {
@@ -1197,11 +1219,15 @@ html[data-app-theme='midnight'] .turn-veil-band {
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .reader-spread.turning .reader-columns {
+  .reader-spread.turning .reader-columns,
+  .reader-spread.turn-settle .reader-drag,
+  .turn-veil.settle .turn-veil-band {
     transition: none;
   }
   .reader-spread .page-sheet .page-num,
-  .reader-spread.turning .page-sheet .page-num {
+  .reader-spread.turning .page-sheet .page-num,
+  .reader-spread.turn-drag .page-sheet .page-num,
+  .reader-spread.turn-settle .page-sheet .page-num {
     transition: none;
   }
   .turn-veil {
@@ -1217,6 +1243,19 @@ html[data-app-theme='midnight'] .turn-veil-band {
   left: 0;
   top: 0;
   overflow: hidden;
+}
+
+/* The drag layer: a gesture turn moves this, while the strip inside keeps the
+   transform the reader gives it. Promoted for good — a transform written on an
+   unpromoted element would re-raster the whole chapter every frame of the
+   drag. */
+.reader-drag {
+  position: absolute;
+  left: 0;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  will-change: transform;
 }
 
 .page-sheet {

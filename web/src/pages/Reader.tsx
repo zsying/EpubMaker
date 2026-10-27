@@ -310,6 +310,11 @@ type AIPanelState =
   | { kind: 'summary' }
   | null;
 
+// A page turn the finger is holding. `follow` is the drag itself — the page
+// sits exactly where the thumb has dragged it; `settle` is the release, where
+// the same slide carries it to whichever end the gesture earned.
+type TurnDrag = { dir: 1 | -1; phase: 'follow' | 'settle' };
+
 // Echoes the sentence the word came from with the word itself marked. The
 // sentence is plain text lifted off the page, so the only markup in it is the
 // one this function adds.
@@ -631,6 +636,34 @@ export default function Reader() {
   const turnFxSeq = useRef(0);
   const turnFxTimer = useRef(0);
   useEffect(() => () => window.clearTimeout(turnFxTimer.current), []);
+
+  // A page turn the FINGER owns (touch), see beginDragTurn. While the finger is
+  // down the page follows it exactly, with no easing at all — a turn that eases
+  // is a turn that reports the gesture rather than obeying it. The release
+  // decides the rest, and both endings are the same slide, so "half a page,
+  // then put it back" is a state the page really passes through.
+  //
+  // The offset is written straight to the DOM (.reader-drag), never through
+  // React: this runs on every touchmove, and a re-render of the reader tree per
+  // frame is not something a page turn should cost.
+  const [turnDrag, setTurnDrag] = useState<TurnDrag | null>(null);
+  const dragLayerRef = useRef<HTMLDivElement>(null);
+  const veilRef = useRef<HTMLDivElement>(null);
+  // Measured band geometry, per veil element (see placeBand).
+  const bandGeomRef = useRef<{ el: HTMLElement; w: number; bw: number } | null>(null);
+  // The live drag: how far the page is pulled, in px, where the finger picked
+  // it up, how it must end, and whether the release slide is the thing running
+  // now. Deliberately not state — it changes every frame and nothing renders
+  // from it.
+  const dragTurnRef = useRef<{
+    dir: 1 | -1;
+    px: number;
+    origin: number;
+    commit: boolean;
+    settling: boolean;
+  } | null>(null);
+  const dragEndTimer = useRef(0);
+  useEffect(() => () => window.clearTimeout(dragEndTimer.current), []);
 
   // book-page geometry (proportions like a real paperback)
   const [stageWidth, setStageWidth] = useState(0);
@@ -1634,6 +1667,16 @@ export default function Reader() {
 
   const turnStep = Math.max(1, pagesPerView);
   const maxPageIndex = Math.max(0, pageCount - pagesPerView);
+  // The numbers a gesture turn needs while it is running. They are read from a
+  // ref because the drag outlives the render that started it (a 210ms release
+  // slide, a re-measure in the middle of it): the closure that runs the ending
+  // may be older than the geometry it has to land on.
+  const turnGeomRef = useRef({ stride: 0, step: 1, max: 0 });
+  turnGeomRef.current = {
+    stride: turnStep * (sheetWidth + pageGap),
+    step: turnStep,
+    max: maxPageIndex,
+  };
 
   // Cross-dissolve page turn: fade the spread out, swap the page (or load the
   // next/previous chapter) while invisible, then fade back in. There is zero
@@ -1663,13 +1706,213 @@ export default function Reader() {
   }
 
   // Ending on the band's animation rather than on a fixed delay is what keeps
-  // the slide from being cut short: dropping the class also drops the
-  // transition, and a transition removed while it is still running snaps
-  // straight to its end value.
+  // the turn honest: a running transition is not stopped by dropping the
+  // declaration that started it — it goes on holding the specified value until
+  // it is over — so a class removed on a timer would leave the page moving with
+  // nothing left to tell it had finished. The timer below only covers the case
+  // where the animation never runs at all (reduced motion).
   function endTurnFx() {
     window.clearTimeout(turnFxTimer.current);
     setTurnFx(null);
   }
+
+  /* ---- a page turn the finger owns ---- */
+  // The keyboard, the wheel and the page-edge clicks keep the fixed-duration
+  // slide above: no finger, nothing to synchronise with. A touch gesture is the
+  // opposite — the page has to be under the thumb at every instant, and where
+  // the turn ends is decided by where the finger lets go.
+  //
+  // Both endings run through the same slide, so a release never "resolves" a
+  // turn the reader has not already been shown: drag a third of the page, let
+  // go, and the page finishes the journey from exactly where it was left.
+  const TURN_SLIDE_MS = 210; // must match .reader-spread.turn-settle in styles.css
+
+  // The page's position during a turn, in px from the spread it belongs to.
+  // Written straight to the element: this runs on every touchmove.
+  //
+  // `cancelSlide` is the take-over case. A running CSS transition keeps winning
+  // over the specified value until it is over — dropping the class that declared
+  // it does not stop it, and neither does writing a new value (Chrome carries on
+  // to the old target). The only way to stop it where it stands is to take the
+  // transition out of the style and force a recalc before the value goes in;
+  // that recalc is never painted, so the jump it causes is not seen.
+  function placeDrag(px: number, cancelSlide = false) {
+    const el = dragLayerRef.current;
+    if (!el) return;
+    if (cancelSlide) {
+      el.style.transition = 'none';
+      void el.offsetWidth;
+    }
+    el.style.transform = px === 0 ? '' : `translate3d(${px}px, 0, 0)`;
+  }
+
+  // Where the page is right now. Only read when a new touch catches a page that
+  // is still sliding.
+  function dragLayerX(): number {
+    const el = dragLayerRef.current;
+    if (!el) return 0;
+    const tr = getComputedStyle(el).transform;
+    if (!tr || tr === 'none') return 0;
+    const m = tr.match(/matrix(?:3d)?\(([^)]+)\)/);
+    if (!m) return 0;
+    const v = m[1].split(',').map(Number);
+    return tr.startsWith('matrix3d') ? v[12] : v[4];
+  }
+
+  // The shadow rides the same progress as the page: off the right edge before
+  // the turn, off the left edge after it — so at any point of a drag it sits
+  // where the pulled page's edge is, instead of flying on its own schedule.
+  //
+  // The band's width is measured ONCE per veil: reading offsetWidth here would
+  // force a layout on every touchmove, which is exactly the cost a page turn
+  // must not pay. The veil is keyed per turn, so a new turn re-measures.
+  function placeBand(p: number, dir: 1 | -1) {
+    const band = veilRef.current?.firstElementChild as HTMLElement | null;
+    if (!band) return;
+    const w = viewWidth;
+    const cache = bandGeomRef.current;
+    if (!cache || cache.el !== band || cache.w !== w) {
+      bandGeomRef.current = { el: band, w, bw: band.offsetWidth };
+    }
+    const bw = bandGeomRef.current!.bw;
+    const travel = w + bw;
+    band.style.transform = `translate3d(${dir > 0 ? w - p * travel : p * travel - bw}px, 0, 0)`;
+  }
+
+  function dragAvailable(dir: 1 | -1) {
+    const { step, max } = turnGeomRef.current;
+    return dir > 0 ? pageIndex + step <= max : pageIndex - step >= 0;
+  }
+
+  // Returns whether the page took the gesture. At a chapter edge it does not:
+  // the strip carries this chapter only, so there is no neighbouring column to
+  // pull in, and dragging the page off into blank paper would be a lie. The
+  // release still turns the chapter, through the cross-fade below.
+  function beginDragTurn(dx: number): boolean {
+    if (previewRef.current) return false;
+    // Reduced motion is a request for no moving pictures, and a page sliding
+    // under the thumb is exactly that.
+    if (window.matchMedia?.('(prefers-reduced-motion: reduce)').matches) return false;
+    // A fast reader flicks again before the last page has finished sliding. The
+    // new touch catches the page where it is and drags on from there, instead
+    // of fighting the slide or waiting it out.
+    const carried = dragTurnRef.current?.settling ? dragLayerX() : 0;
+    const px = carried + dx;
+    const dir: 1 | -1 = px < 0 ? 1 : -1;
+    if (!dragAvailable(dir)) return false;
+    if (carried) {
+      window.clearTimeout(dragEndTimer.current);
+      dragTurnRef.current!.settling = false;
+      dragTurnRef.current!.commit = false;
+      // Pin the page where it was caught, before the class change reaches React.
+      placeDrag(carried, true);
+    }
+    dragTurnRef.current = { dir, px, origin: carried, commit: false, settling: false };
+    setTurnDrag({ dir, phase: 'follow' });
+    followDrag(dx);
+    return true;
+  }
+
+  // 1:1 with the finger, but never past the neighbouring spread: the strip
+  // holds the whole chapter, so beyond that it would show the end of the paper
+  // rather than more book. There it stiffens instead.
+  function followDrag(dx: number) {
+    const d = dragTurnRef.current;
+    if (!d) return;
+    const stride = turnGeomRef.current.stride || 1;
+    // Measured from where this finger started, which is the page's own position
+    // on a fresh drag and wherever it was caught on one that interrupts a slide.
+    let px = d.origin + dx;
+    // The reader drags a page back and forth before deciding, so the direction
+    // is whatever side of the spread the finger is on now.
+    const want: 1 | -1 = px < 0 ? 1 : -1;
+    if (want !== d.dir) {
+      if (!dragAvailable(want)) {
+        d.px = 0;
+        placeDrag(0);
+        placeBand(0, d.dir);
+        return;
+      }
+      d.dir = want;
+    }
+    const mag = Math.abs(px);
+    px = mag <= stride ? mag : stride + (mag - stride) * 0.12;
+    d.px = -want * px;
+    placeDrag(d.px);
+    placeBand(Math.min(1, px / stride), d.dir);
+  }
+
+  // Let go. A flick counts even when it barely moved the page — the gesture
+  // said "next" — and a slow drag has to be carried a third of the way.
+  // `interrupted` is the system taking the gesture back: nobody let go, so
+  // nothing was decided, and the page returns whatever it had travelled.
+  function releaseDragTurn(flick: number, interrupted = false) {
+    const d = dragTurnRef.current;
+    if (!d) return;
+    const dist = Math.abs(d.px);
+    const far = Math.min(Math.max(turnGeomRef.current.stride * 0.3, 48), 160);
+    d.commit = !interrupted && (dist >= far || (flick * d.dir < -0.5 && dist > 16));
+    // The card points at a word on the page being left behind. It goes when the
+    // page is known to be going — not at touchstart, where unmounting the
+    // element under the finger makes the browser cancel the gesture — and not
+    // when the page is only being pulled at and let go again.
+    if (d.commit) {
+      cancelWordLookup();
+      setLookupCard(null);
+    }
+    d.settling = true;
+    setTurnDrag({ dir: d.dir, phase: 'settle' });
+    window.clearTimeout(dragEndTimer.current);
+    // Only a stalled main thread reaches this: the slide's own transitionend
+    // normally ends the turn first.
+    dragEndTimer.current = window.setTimeout(finishDragTurn, TURN_SLIDE_MS + 240);
+  }
+
+  function finishDragTurn() {
+    window.clearTimeout(dragEndTimer.current);
+    const d = dragTurnRef.current;
+    dragTurnRef.current = null;
+    if (d?.commit) {
+      // The strip's base moves to the page the slide ended on, and the drag
+      // offset is dropped in the same commit — see the layout effect below.
+      const { step, max } = turnGeomRef.current;
+      setPageIndex((p) => Math.max(0, Math.min(max, p + d.dir * step)));
+    } else {
+      placeDrag(0);
+    }
+    setTurnDrag(null);
+  }
+
+  // The release target is written after React has put the settling class on the
+  // element: the transition must exist before the value it has to animate.
+  // During the drag this only places the band — and re-anchors a page that a
+  // new touch has just caught, in the same frame the transition comes off, so
+  // it stops where it was instead of snapping to the value it was heading for.
+  useLayoutEffect(() => {
+    const d = dragTurnRef.current;
+    if (!turnDrag || !d) return;
+    const stride = turnGeomRef.current.stride || 1;
+    if (turnDrag.phase === 'settle') {
+      // A page that was caught by hand has an inline `transition: none` on it
+      // from the take-over; this is where it goes back to the stylesheet's.
+      const el = dragLayerRef.current;
+      if (el) el.style.transition = '';
+      placeDrag(d.commit ? -d.dir * stride : 0);
+      placeBand(d.commit ? 1 : 0, d.dir);
+    } else {
+      placeDrag(d.px);
+      placeBand(Math.min(1, Math.abs(d.px) / stride), d.dir);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [turnDrag]);
+
+  // A committed turn: the base has just moved to the new page, so the offset
+  // goes now — one frame later and the same page would be shown twice.
+  useLayoutEffect(() => {
+    if (dragTurnRef.current) return;
+    placeDrag(0);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pageIndex]);
 
   function turn(delta: number) {
     // Preview visits do not turn pages: the position must stay on the anchor,
@@ -1907,6 +2150,20 @@ export default function Reader() {
     // Set only when the hold actually produced a selection, so a held press on
     // blank paper still counts as a (chrome-toggling) tap on release.
     let lpFired = false;
+    // Recent finger positions of the current drag, for the release decision: a
+    // flick has to count even when it barely moved the page, and one frame of
+    // velocity is noise.
+    const samples: Array<{ x: number; t: number }> = [];
+
+    const flickVelocity = (): number => {
+      const now = Date.now();
+      const recent = samples.filter((s) => now - s.t < 120);
+      if (recent.length < 2) return 0;
+      const a = recent[0];
+      const b = recent[recent.length - 1];
+      const dt = b.t - a.t;
+      return dt > 0 ? (b.x - a.x) / dt : 0;
+    };
 
     const cancelLongPress = () => {
       window.clearTimeout(lpTimer);
@@ -1937,6 +2194,7 @@ export default function Reader() {
 
     const onStart = (e: TouchEvent) => {
       lpFired = false;
+      samples.length = 0;
       // Multi-touch is never a page turn (pinch, or a stray second finger).
       if (e.touches.length !== 1) {
         active = false;
@@ -2008,9 +2266,27 @@ export default function Reader() {
       const dx = t.clientX - startX;
       const dy = t.clientY - startY;
       if (Math.hypot(dx, dy) > LP_SLOP) cancelLongPress();
+      // A page already in this finger's hand follows it whatever it does next —
+      // it is off its mark, and freezing it mid-drag reads as a dropped gesture.
+      // A page still sliding home from the last flick is NOT in this hand yet:
+      // it is caught below, once this gesture has travelled far enough to be one.
+      const held = dragTurnRef.current;
+      if (held && !held.settling) {
+        if (e.cancelable) e.preventDefault();
+        samples.push({ x: t.clientX, t: Date.now() });
+        if (samples.length > 8) samples.shift();
+        followDrag(dx);
+        return;
+      }
       if (Math.abs(dx) > 12 && Math.abs(dx) > Math.abs(dy)) {
         horizontal = true;
         if (e.cancelable) e.preventDefault();
+        // From the first horizontal pixel the page belongs to the finger: it
+        // sits exactly where the drag has taken it, so the gesture is answered
+        // while it happens rather than after it has been judged.
+        samples.push({ x: t.clientX, t: Date.now() });
+        if (samples.length > 8) samples.shift();
+        beginDragTurn(dx);
       }
     };
 
@@ -2019,7 +2295,10 @@ export default function Reader() {
       if (!active) return;
       active = false;
       const t = e.changedTouches[0];
-      if (!t) return;
+      if (!t) {
+        if (dragTurnRef.current) releaseDragTurn(0);
+        return;
+      }
       const dx = t.clientX - startX;
       const dy = t.clientY - startY;
       if (!horizontal) {
@@ -2028,18 +2307,29 @@ export default function Reader() {
         if (!lpFired && Date.now() - startT < TAP_MS) routeTapRef.current(t.clientX, t.clientY);
         return;
       }
-      if (Math.abs(dx) < MIN_TRAVEL) return;
-      if (Math.abs(dx) < Math.abs(dy) * MIN_RATIO) return;
-      // The gesture was ours end to end; no stray click can follow.
-      turnedAtRef.current = Date.now();
       // Dismiss whatever floats over the page only once the gesture is over.
       // Unmounting the element under the finger mid-drag makes the browser
       // cancel the touch sequence, and the page turn never happens — which is
       // how "swipe while the word card is open" stayed broken even after the
       // listener moved to the reader root.
-      setSel(null);
-      setPopover(null);
-      setChromeOpen(false);
+      const dismiss = () => {
+        setSel(null);
+        setPopover(null);
+        setChromeOpen(false);
+      };
+      // A page that was pulled in owns the release however far it went: it has
+      // to be put down somewhere, finished or returned.
+      if (dragTurnRef.current) {
+        turnedAtRef.current = Date.now();
+        dismiss();
+        releaseDragTurn(flickVelocity());
+        return;
+      }
+      if (Math.abs(dx) < MIN_TRAVEL) return;
+      if (Math.abs(dx) < Math.abs(dy) * MIN_RATIO) return;
+      // The gesture was ours end to end; no stray click can follow.
+      turnedAtRef.current = Date.now();
+      dismiss();
       turn(dx < 0 ? 1 : -1);
     };
 
@@ -2047,6 +2337,12 @@ export default function Reader() {
       cancelLongPress();
       active = false;
       horizontal = false;
+      // The system took the gesture back (a notification shade pulled down, an
+      // app switch): nobody let go, so the page must not be left standing half
+      // turned — and must not be turned on a decision no finger made. A page
+      // still sliding from an earlier flick is not this gesture's to interrupt.
+      const held = dragTurnRef.current;
+      if (held && !held.settling) releaseDragTurn(0, true);
     };
 
     host.addEventListener('touchstart', onStart, { passive: false });
@@ -2059,6 +2355,14 @@ export default function Reader() {
       host.removeEventListener('touchmove', onMove);
       host.removeEventListener('touchend', onEnd);
       host.removeEventListener('touchcancel', onCancel);
+      // A re-registration (page change, mode switch, rotation) mid-gesture
+      // orphans the drag: put the page back rather than leave it half turned.
+      if (dragTurnRef.current) {
+        dragTurnRef.current = null;
+        window.clearTimeout(dragEndTimer.current);
+        placeDrag(0);
+        setTurnDrag(null);
+      }
     };
   }, [mode, pageIndex, pageCount, pagesPerView, prev, next]);
 
@@ -3928,7 +4232,9 @@ export default function Reader() {
         onMouseLeave={onStageMouseUp}
       >
         <div
-          className={`reader-spread${fxOut ? ' fx-out' : ''}${turnFx ? ' turning' : ''}`}
+          className={`reader-spread${fxOut ? ' fx-out' : ''}${turnFx ? ' turning' : ''}${
+            turnDrag ? (turnDrag.phase === 'follow' ? ' turn-drag' : ' turn-settle') : ''
+          }`}
           ref={spreadRef}
           style={{
             width: Math.max(0, viewWidth),
@@ -3999,31 +4305,53 @@ export default function Reader() {
               height: Math.max(0, sheetHeight),
             }}
           >
+            {/* The drag layer carries nothing but a gesture turn's offset. It is
+                a wrapper rather than a second transform on the strip because the
+                strip's own transform is rewritten by every measure, restore and
+                1<->2 page switch: an offset mixed into it would have to be
+                re-applied by hand after each of them. */}
             <div
-              className="reader-columns"
-              ref={columnsRef}
-              style={{
-                left: marginPx,
-                top: marginPx,
-                width: pageCount > 0 ? pageCount * contentWidth + (pageCount - 1) * columnGap : 0,
-                height: Math.max(0, contentHeight),
-                transform: `translate3d(-${pageIndex * (sheetWidth + pageGap)}px, 0, 0)`,
-                columnWidth: contentWidth,
-                columnGap: columnGap,
+              className="reader-drag"
+              ref={dragLayerRef}
+              onTransitionEnd={(e) => {
+                if (e.target !== e.currentTarget || e.propertyName !== 'transform') return;
+                if (dragTurnRef.current?.settling) finishDragTurn();
               }}
             >
-              <div className="reader-content" ref={contentRef} style={contentStyle} />
+              <div
+                className="reader-columns"
+                ref={columnsRef}
+                style={{
+                  left: marginPx,
+                  top: marginPx,
+                  width: pageCount > 0 ? pageCount * contentWidth + (pageCount - 1) * columnGap : 0,
+                  height: Math.max(0, contentHeight),
+                  transform: `translate3d(-${pageIndex * (sheetWidth + pageGap)}px, 0, 0)`,
+                  columnWidth: contentWidth,
+                  columnGap: columnGap,
+                }}
+              >
+                <div className="reader-content" ref={contentRef} style={contentStyle} />
+              </div>
             </div>
           </div>
           {/* The shadow of the turning sheet, sweeping in the direction the page
               travels. Keyed on the turn so every turn restarts the animation;
               it is a shadow over static text, so nothing has to re-layout for
-              it to move. */}
-          {geometryReady && turnFx && (
+              it to move. A gesture turn drives it by hand instead, matching the
+              page: see placeBand. */}
+          {geometryReady && (turnDrag || turnFx) && (
             <div
-              key={turnFx.id}
-              className={`turn-veil ${turnFx.dir > 0 ? 'fwd' : 'back'}`}
-              onAnimationEnd={endTurnFx}
+              key={turnDrag ? 'drag' : `sweep-${turnFx!.id}`}
+              ref={veilRef}
+              className={`turn-veil ${
+                turnDrag
+                  ? turnDrag.phase === 'follow'
+                    ? 'drag'
+                    : 'settle'
+                  : `sweep ${turnFx!.dir > 0 ? 'fwd' : 'back'}`
+              }`}
+              onAnimationEnd={turnDrag ? undefined : endTurnFx}
               style={{
                 width: Math.max(0, viewWidth),
                 height: Math.max(0, sheetHeight),

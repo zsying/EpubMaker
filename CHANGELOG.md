@@ -140,6 +140,21 @@ of described.
   through `Page.startScreencast`: 21 frames per turn, 19 of them distinct, 20 ms
   median — continuous motion, not a few steps. `prefers-reduced-motion: reduce`
   turns the page instantly and draws no band.
+- **A swipe turns the page under the thumb instead of after it** — the turn used
+  to be decided at `touchend` and played out afterwards, so the page sat still
+  while the finger moved and then moved while the finger was gone. Now the page
+  follows the finger 1:1 from the first horizontal pixel, shadow and all, and the
+  release decides the rest: carried a third of the way (or flicked faster than
+  0.5 px/ms) it finishes the journey; let go short it falls back to where it came
+  from. Both endings are the same 210 ms slide, so a page that is put down halfway
+  is a state the reader really passes through rather than a decision announced at
+  the end. A `touchcancel` always puts the page back — nobody let go, so nothing
+  was decided. A second flick catches the page still sliding from the first and
+  carries on from there, which is what makes fast page-turning feel continuous.
+  Chapter edges do not hand over the paper (the strip only carries this chapter),
+  and `prefers-reduced-motion: reduce` keeps the old instant turn with no drag at
+  all. The keyboard, the wheel and the page-edge clicks keep the fixed-duration
+  slide: there is no finger to synchronise with.
 - **The AI tab behaves like the top-level tab it is** — 书架 / 生词本 / AI / 我的
   are siblings, so `/ai` no longer shows a back chevron: there is no layer
   above it, and the button could only leave the app. The chevron stays on
