@@ -15,6 +15,7 @@ import (
 	"crypto/rand"
 	"database/sql"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"strings"
 	"time"
@@ -323,10 +324,15 @@ type ListItem struct {
 	Preview string `json:"preview"`
 }
 
-// ListDetailed fetches the page in one query. The subqueries are per-row but
-// the table is small and indexed; N+1 round trips through database/sql would
-// be slower than one scan with subselects.
-func ListDetailed(limit int) ([]ListItem, error) {
+// ListDetailed fetches one page in a single query. The subqueries are per-row
+// but the table is small and indexed; N+1 round trips through database/sql
+// would be slower than one scan with subselects.
+//
+// Paging is by offset because the order key (updated_at) is unique per row:
+// appends nudge the timestamp forward, so no two rows tie, and a page boundary
+// cannot skip or repeat an entry. A limit of zero means "to the end", which is
+// only for tests and export — the page always asks for a bounded slice.
+func ListDetailed(limit, offset int) ([]ListItem, error) {
 	d, err := db.Open()
 	if err != nil {
 		return nil, err
@@ -339,8 +345,12 @@ func ListDetailed(limit int) ([]ListItem, error) {
 	      FROM ai_conversations c ORDER BY c.updated_at DESC`
 	args := []any{}
 	if limit > 0 {
-		q += ` LIMIT ?`
-		args = append(args, limit)
+		q += ` LIMIT ? OFFSET ?`
+		args = append(args, limit, offset)
+	} else if offset > 0 {
+		// SQLite spells "no cap" as a negative limit; OFFSET alone needs one.
+		q += ` LIMIT -1 OFFSET ?`
+		args = append(args, offset)
 	}
 	rows, err := d.Query(q, args...)
 	if err != nil {
@@ -355,8 +365,55 @@ func ListDetailed(limit int) ([]ListItem, error) {
 			&it.UpdatedAt, &it.Count, &preview); err != nil {
 			return nil, err
 		}
-		it.Preview = strings.TrimSpace(preview.String)
+		it.Preview = previewOf(preview.String)
 		out = append(out, it)
 	}
 	return out, rows.Err()
+}
+
+// previewOf makes a row's preview readable. A grounded answer is JSON — that
+// is what the prompt asked for — and quoting it verbatim puts `{"summary":"…`
+// on the list page instead of the answer. The transcript itself still shows
+// the raw object (behind a tap); only the one-line preview is humanised.
+func previewOf(content string) string {
+	s := strings.TrimSpace(content)
+	if strings.HasPrefix(s, "{") {
+		var m map[string]any
+		if err := json.Unmarshal([]byte(s), &m); err == nil {
+			// Priority: what the reader would say if asked what the answer
+			// was. meaning (查词) → summary (导读) → translation (拆句).
+			for _, k := range []string{"meaning", "summary", "translation", "text", "note", "gloss"} {
+				if v, ok := m[k].(string); ok && strings.TrimSpace(v) != "" {
+					return oneLine(v)
+				}
+			}
+			for _, v := range m {
+				if str, ok := v.(string); ok && strings.TrimSpace(str) != "" {
+					return oneLine(str)
+				}
+			}
+			return ""
+		}
+	}
+	return oneLine(s)
+}
+
+// oneLine collapses the newlines a prompt or a model reply carries: the row
+// clamps to two lines anyway, and a raw "\n" in a preview makes the card jump
+// in height while the list loads.
+func oneLine(s string) string {
+	return strings.Join(strings.Fields(s), " ")
+}
+
+// Total is how many conversations exist, independent of the page in hand: the
+// list page needs it to decide whether there is a next page and to label the
+// header without loading everything.
+func Total() (int, error) {
+	d, err := db.Open()
+	if err != nil {
+		return 0, err
+	}
+	var n int
+	err = d.QueryRow(`SELECT COUNT(*) FROM ai_conversations`).Scan(&n)
+	return n, err
 }

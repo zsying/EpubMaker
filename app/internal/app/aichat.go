@@ -74,9 +74,42 @@ type AIConversationDTO struct {
 	Preview string `json:"preview"`
 }
 
-// AIConversations lists the transcripts, newest activity first.
-func (b *Backend) AIConversations() ([]AIConversationDTO, error) {
-	items, err := aichat.ListDetailed(200)
+// AIConversationPage is one slice of the list plus what it takes to ask for
+// the next one. Total is counted separately so the frontend can label the
+// header ("128 条") without loading all 128 rows: a year of lookups is a few
+// thousand transcripts, and the page is a scrolling list, not an export.
+type AIConversationPage struct {
+	Items   []AIConversationDTO `json:"items"`
+	Total   int                 `json:"total"`
+	HasMore bool                `json:"hasMore"`
+}
+
+// defaultConvPage and maxConvPage bound one request. The page asks for 30 at a
+// time; the ceiling keeps a bad caller from turning one scroll into a full
+// table read.
+const (
+	defaultConvPage = 30
+	maxConvPage     = 100
+)
+
+// AIConversations lists the transcripts, newest activity first, one page at a
+// time. A non-positive limit means "the default page", not "everything": the
+// caller that genuinely wants all of them pages through.
+func (b *Backend) AIConversations(offset, limit int) (*AIConversationPage, error) {
+	if limit <= 0 {
+		limit = defaultConvPage
+	}
+	if limit > maxConvPage {
+		limit = maxConvPage
+	}
+	if offset < 0 {
+		offset = 0
+	}
+	total, err := aichat.Total()
+	if err != nil {
+		return nil, err
+	}
+	items, err := aichat.ListDetailed(limit, offset)
 	if err != nil {
 		return nil, err
 	}
@@ -84,7 +117,11 @@ func (b *Backend) AIConversations() ([]AIConversationDTO, error) {
 	for i, it := range items {
 		out[i] = AIConversationDTO{Conversation: it.Conversation, Count: it.Count, Preview: it.Preview}
 	}
-	return out, nil
+	return &AIConversationPage{
+		Items:   out,
+		Total:   total,
+		HasMore: offset+len(out) < total,
+	}, nil
 }
 
 // AIConversationDetail is the conversation page's payload: the header and the

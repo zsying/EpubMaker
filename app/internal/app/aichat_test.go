@@ -34,6 +34,25 @@ func stubAIChat(t *testing.T, reply func(msgs []ai.Message) (string, error)) *ai
 	return rec
 }
 
+// listConvs walks the paged list. Tests care about "all conversations"; the
+// page size is the page's business, and hard-coding it here would make a
+// paging change look like a test failure.
+func listConvs(t *testing.T, b *Backend) []AIConversationDTO {
+	t.Helper()
+	var all []AIConversationDTO
+	for offset := 0; ; {
+		page, err := b.AIConversations(offset, maxConvPage)
+		if err != nil {
+			t.Fatalf("AIConversations(offset=%d): %v", offset, err)
+		}
+		all = append(all, page.Items...)
+		if !page.HasMore || len(page.Items) == 0 {
+			return all
+		}
+		offset += len(page.Items)
+	}
+}
+
 // explainOnce drives one real (stubbed) lookup so the tests always exercise
 // the same code path the reader does.
 func explainOnce(t *testing.T, b *Backend, word, sentence string) *ExplainResult {
@@ -61,10 +80,7 @@ func TestExplainRecordsConversation(t *testing.T) {
 		t.Fatal("the lookup must name the conversation it created")
 	}
 
-	convs, err := b.AIConversations()
-	if err != nil {
-		t.Fatalf("AIConversations: %v", err)
-	}
+	convs := listConvs(t, b)
 	if len(convs) != 1 {
 		t.Fatalf("conversations = %d, want 1", len(convs))
 	}
@@ -104,7 +120,7 @@ func TestExplainRecordsConversation(t *testing.T) {
 	if _, err := b.ExplainInContext("turn", "She turned the page and smiled."); err != nil {
 		t.Fatalf("second explain: %v", err)
 	}
-	convs, _ = b.AIConversations()
+	convs = listConvs(t, b)
 	if len(convs) != 1 || rec.calls != 1 {
 		t.Errorf("after re-ask: conversations=%d calls=%d, want 1 and 1", len(convs), rec.calls)
 	}
@@ -119,8 +135,14 @@ func TestParseAndSummarizeRecordConversations(t *testing.T) {
 		return `{"translation":"她翻过书页。","segments":[],"notes":[]}`, nil
 	})
 	b := &Backend{}
-	if _, err := b.ParseSentence("She turned the page."); err != nil {
+	parsed, err := b.ParseSentence("She turned the page.")
+	if err != nil {
 		t.Fatalf("ParseSentence: %v", err)
+	}
+	// The panel offers "查看对话" from the answer itself, so the answer has to
+	// name its transcript — otherwise the only way back is the list page.
+	if parsed.ConversationId == "" {
+		t.Error("ParseSentence must name the conversation it created")
 	}
 
 	xhtml := `<h1>第一章</h1><p>Alice began to get bored sitting by her sister.</p>`
@@ -128,14 +150,15 @@ func TestParseAndSummarizeRecordConversations(t *testing.T) {
 	stubAI(t, func(system, user string) (string, error) {
 		return `{"summary":"爱丽丝犯困。","points":[],"terms":[]}`, nil
 	})
-	if _, err := b.SummarizeChapter("b-chat", "c-chat"); err != nil {
+	summarized, err := b.SummarizeChapter("b-chat", "c-chat")
+	if err != nil {
 		t.Fatalf("SummarizeChapter: %v", err)
 	}
-
-	convs, err := b.AIConversations()
-	if err != nil {
-		t.Fatalf("AIConversations: %v", err)
+	if summarized.ConversationId == "" {
+		t.Error("SummarizeChapter must name the conversation it created")
 	}
+
+	convs := listConvs(t, b)
 	if len(convs) != 2 {
 		t.Fatalf("conversations = %d, want 2", len(convs))
 	}
@@ -148,6 +171,58 @@ func TestParseAndSummarizeRecordConversations(t *testing.T) {
 	}
 	if byOrigin[aichat.OriginSummarize] != "第一章" {
 		t.Errorf("summarize title = %q", byOrigin[aichat.OriginSummarize])
+	}
+	byID := map[string]string{}
+	for _, c := range convs {
+		byID[c.ID] = c.Origin
+	}
+	if byID[parsed.ConversationId] != aichat.OriginParse || byID[summarized.ConversationId] != aichat.OriginSummarize {
+		t.Errorf("returned ids do not point at their own transcripts: %v", byID)
+	}
+}
+
+// The list is paged: one request must not carry a year of lookups. Total and
+// hasMore are what let the page grow on scroll, and a page boundary must not
+// repeat or skip a row.
+func TestAIConversationsPages(t *testing.T) {
+	resetAI(t)
+	b := &Backend{}
+	for i := 0; i < 3; i++ {
+		c := &aichat.Conversation{Title: "对话", Origin: aichat.OriginManual}
+		msgs := []aichat.Message{
+			{Role: aichat.RoleSystem, Content: "s"},
+			{Role: aichat.RoleUser, Content: "q"},
+			{Role: aichat.RoleAssistant, Content: "a"},
+		}
+		if err := aichat.Create(c, msgs); err != nil {
+			t.Fatalf("Create: %v", err)
+		}
+	}
+	page, err := b.AIConversations(0, 2)
+	if err != nil {
+		t.Fatalf("AIConversations: %v", err)
+	}
+	if len(page.Items) != 2 || page.Total != 3 || !page.HasMore {
+		t.Fatalf("page 1 = %d items, total %d, hasMore %v; want 2/3/true",
+			len(page.Items), page.Total, page.HasMore)
+	}
+	rest, err := b.AIConversations(2, 2)
+	if err != nil {
+		t.Fatalf("AIConversations page 2: %v", err)
+	}
+	if len(rest.Items) != 1 || rest.HasMore {
+		t.Errorf("page 2 = %d items, hasMore %v; want 1/false", len(rest.Items), rest.HasMore)
+	}
+	if rest.Items[0].ID == page.Items[0].ID || rest.Items[0].ID == page.Items[1].ID {
+		t.Error("the second page repeated a row from the first")
+	}
+	// A caller that passes nothing gets a page, not the table.
+	if def, _ := b.AIConversations(0, 0); len(def.Items) != 3 {
+		t.Errorf("default page = %d items, want all 3 here", len(def.Items))
+	}
+	// …and an absurd limit is clamped rather than obeyed.
+	if big, _ := b.AIConversations(0, 5000); len(big.Items) != 3 {
+		t.Errorf("clamped page = %d items", len(big.Items))
 	}
 }
 
@@ -163,7 +238,7 @@ func TestFailedLookupRecordsNothing(t *testing.T) {
 	if _, err := b.ExplainInContext("turn", "She turned the page."); err == nil {
 		t.Fatal("an empty reply should fail")
 	}
-	convs, _ := b.AIConversations()
+	convs := listConvs(t, b)
 	if len(convs) != 0 {
 		t.Errorf("conversations = %d, want none for a failed ask", len(convs))
 	}
@@ -266,7 +341,7 @@ func TestAIChatSendCreatesManualConversation(t *testing.T) {
 	if err != nil {
 		t.Fatalf("AIChatSend: %v", err)
 	}
-	convs, _ := b.AIConversations()
+	convs := listConvs(t, b)
 	if len(convs) != 1 {
 		t.Fatalf("conversations = %d, want 1", len(convs))
 	}
@@ -320,7 +395,7 @@ func TestAIConversationDelete(t *testing.T) {
 	if d, _ := b.AIConversation(out.ConversationId); d != nil {
 		t.Error("the conversation survived deletion")
 	}
-	convs, _ := b.AIConversations()
+	convs := listConvs(t, b)
 	if len(convs) != 0 {
 		t.Errorf("list still shows %d conversations", len(convs))
 	}

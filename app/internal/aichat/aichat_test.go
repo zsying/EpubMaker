@@ -219,7 +219,7 @@ func TestListDetailed(t *testing.T) {
 	if _, err := Append(c.ID, "assistant", "有，turn up 表示出现。"); err != nil {
 		t.Fatalf("Append: %v", err)
 	}
-	items, err := ListDetailed(50)
+	items, err := ListDetailed(50, 0)
 	if err != nil {
 		t.Fatalf("ListDetailed: %v", err)
 	}
@@ -232,5 +232,93 @@ func TestListDetailed(t *testing.T) {
 	}
 	if it.Preview != "有，turn up 表示出现。" {
 		t.Errorf("preview = %q, want the last non-system message", it.Preview)
+	}
+}
+
+// The list is paged because a year of lookups must not arrive in one payload.
+// Pages must tile the whole set exactly: no repeats at a boundary, nothing
+// skipped, and the newest activity always on page one.
+func TestListDetailedPagesTileTheSet(t *testing.T) {
+	reset(t)
+	for _, title := range []string{"一", "二", "三", "四", "五"} {
+		mkConv(t, title, "lookup", "k-"+title)
+	}
+	first, err := ListDetailed(2, 0)
+	if err != nil {
+		t.Fatalf("ListDetailed page 1: %v", err)
+	}
+	second, err := ListDetailed(2, 2)
+	if err != nil {
+		t.Fatalf("ListDetailed page 2: %v", err)
+	}
+	last, err := ListDetailed(2, 4)
+	if err != nil {
+		t.Fatalf("ListDetailed page 3: %v", err)
+	}
+	if len(first) != 2 || len(second) != 2 || len(last) != 1 {
+		t.Fatalf("page sizes = %d/%d/%d, want 2/2/1", len(first), len(second), len(last))
+	}
+	seen := map[string]bool{}
+	var order []string
+	for _, page := range [][]ListItem{first, second, last} {
+		for _, it := range page {
+			if seen[it.ID] {
+				t.Fatalf("conversation %q appeared on two pages", it.Title)
+			}
+			seen[it.ID] = true
+			order = append(order, it.Title)
+		}
+	}
+	if len(order) != 5 {
+		t.Fatalf("paged through %d rows, want 5", len(order))
+	}
+	// Newest activity first: the five were created in order, so the list runs
+	// backwards through creation.
+	if strings.Join(order, ",") != "五,四,三,二,一" {
+		t.Errorf("order = %s", strings.Join(order, ","))
+	}
+
+	total, err := Total()
+	if err != nil {
+		t.Fatalf("Total: %v", err)
+	}
+	if total != 5 {
+		t.Errorf("total = %d, want 5", total)
+	}
+}
+
+// A grounded answer is JSON, so a verbatim preview would put `{"summary":"…`
+// on the list page instead of the answer. The row quotes the answer; the
+// transcript keeps the object.
+func TestPreviewKeepsTheAnswerNotThePunctuation(t *testing.T) {
+	reset(t)
+	c := &Conversation{Title: "第一章", Origin: "summarize", CacheKey: "k-prev"}
+	msgs := []Message{
+		{Role: "system", Content: "system prompt"},
+		{Role: "user", Content: "章节标题：第一章"},
+		{Role: "assistant", Content: `{"summary":"爱丽丝犯困。","points":["要点"],"terms":[]}`},
+	}
+	if err := Create(c, msgs); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	items, err := ListDetailed(10, 0)
+	if err != nil {
+		t.Fatalf("ListDetailed: %v", err)
+	}
+	if len(items) != 1 {
+		t.Fatalf("items = %d", len(items))
+	}
+	if items[0].Preview != "爱丽丝犯困。" {
+		t.Errorf("preview = %q, want the summary without its JSON wrapper", items[0].Preview)
+	}
+
+	// A reply that happens to be JSON but says nothing we recognise still
+	// gets one readable line, not a wall of braces.
+	if got := previewOf(`{"unknown":"一句话\n换了行"}`); got != "一句话 换了行" {
+		t.Errorf("previewOf fallback = %q", got)
+	}
+	// Prose keeps its punctuation, minus the line breaks.
+	if got := previewOf("  第一行\n第二行  "); got != "第一行 第二行" {
+		t.Errorf("previewOf prose = %q", got)
 	}
 }

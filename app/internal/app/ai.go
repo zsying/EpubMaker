@@ -357,6 +357,9 @@ type ParseResult struct {
 	Segments    []Segment `json:"segments"`
 	Notes       []string  `json:"notes"`
 	Cached      bool      `json:"cached"`
+	// ConversationId names the transcript this answer was filed under, so the
+	// panel can offer "查看对话" right where the answer appeared.
+	ConversationId string `json:"conversationId,omitempty"`
 }
 
 // ParseSentence translates and dissects one sentence. The sentence is the
@@ -384,7 +387,7 @@ func (b *Backend) ParseSentence(sentence string) (*ParseResult, error) {
 		return nil, err
 	}
 	out.Cached = ans.Cached
-	recordConversation(aichat.OriginParse, sentence, "parse", system, user, ans.Text)
+	out.ConversationId = recordConversation(aichat.OriginParse, sentence, "parse", system, user, ans.Text)
 	return out, nil
 }
 
@@ -453,6 +456,9 @@ type SummaryResult struct {
 	Terms     []SummaryTerm `json:"terms"`
 	Truncated bool          `json:"truncated"`
 	Cached    bool          `json:"cached"`
+	// ConversationId names the transcript this guide was filed under, so the
+	// panel can offer "查看对话" right where the guide appeared.
+	ConversationId string `json:"conversationId,omitempty"`
 }
 
 // summarizeBudget caps the chapter text sent to the provider. A chapter is
@@ -495,7 +501,7 @@ func (b *Backend) SummarizeChapter(bookID, chapterID string) (*SummaryResult, er
 	if strings.TrimSpace(title) == "" {
 		title = "章节导读"
 	}
-	recordConversation(aichat.OriginSummarize, title, "summarize", system, user, ans.Text)
+	out.ConversationId = recordConversation(aichat.OriginSummarize, title, "summarize", system, user, ans.Text)
 	return out, nil
 }
 
