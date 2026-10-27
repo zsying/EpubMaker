@@ -1,0 +1,236 @@
+package aichat
+
+import (
+	"os"
+	"strings"
+	"testing"
+
+	"epubmaker-desktop/internal/db"
+)
+
+func TestMain(m *testing.M) {
+	dir, err := os.MkdirTemp("", "epubmaker-aichat-test")
+	if err != nil {
+		panic(err)
+	}
+	os.Setenv("EPUBMAKER_HOME", dir)
+	code := m.Run()
+	_ = db.Close()
+	_ = os.RemoveAll(dir)
+	os.Exit(code)
+}
+
+// reset empties both tables so every test starts from an empty transcript
+// store. Messages go first: a plain DELETE (no cascade reliance) keeps the
+// test honest even if the schema ever drops the foreign key.
+func reset(t *testing.T) {
+	t.Helper()
+	d, err := db.Open()
+	if err != nil {
+		t.Fatalf("db.Open: %v", err)
+	}
+	for _, q := range []string{`DELETE FROM ai_messages`, `DELETE FROM ai_conversations`} {
+		if _, err := d.Exec(q); err != nil {
+			t.Fatalf("clear %s: %v", q, err)
+		}
+	}
+}
+
+func mkConv(t *testing.T, title, origin, cacheKey string) *Conversation {
+	t.Helper()
+	c := &Conversation{Title: title, Origin: origin, CacheKey: cacheKey}
+	msgs := []Message{
+		{Role: "system", Content: "system prompt"},
+		{Role: "user", Content: "user question"},
+		{Role: "assistant", Content: "assistant answer"},
+	}
+	if err := Create(c, msgs); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	return c
+}
+
+func TestCreateFillsIDsAndTimestamps(t *testing.T) {
+	reset(t)
+	c := mkConv(t, "turn", "lookup", "lookup:abc")
+	if c.ID == "" {
+		t.Fatal("Create must fill the conversation id")
+	}
+	if c.CreatedAt == "" || c.UpdatedAt == "" {
+		t.Fatal("Create must fill both timestamps")
+	}
+
+	msgs, err := Messages(c.ID)
+	if err != nil {
+		t.Fatalf("Messages: %v", err)
+	}
+	if len(msgs) != 3 {
+		t.Fatalf("messages = %d, want 3", len(msgs))
+	}
+	// Transcript order: system first, then the exchange. A conversation view
+	// that reorders these is not the conversation that happened.
+	wantRoles := []string{"system", "user", "assistant"}
+	for i, m := range msgs {
+		if m.Role != wantRoles[i] {
+			t.Errorf("msg[%d].role = %q, want %q", i, m.Role, wantRoles[i])
+		}
+		if m.ConversationID != c.ID {
+			t.Errorf("msg[%d].conversationId = %q, want %q", i, m.ConversationID, c.ID)
+		}
+		if m.ID == "" {
+			t.Errorf("msg[%d] has no id", i)
+		}
+	}
+}
+
+func TestListIsOrderedByRecency(t *testing.T) {
+	reset(t)
+	first := mkConv(t, "第一", "lookup", "k1")
+	second := mkConv(t, "第二", "manual", "k2")
+	// Touch the first one later: a continuation bumps it to the top, which is
+	// exactly why the list is sorted by updated_at and not by created_at.
+	if _, err := Append(first.ID, "user", "还有呢？"); err != nil {
+		t.Fatalf("Append: %v", err)
+	}
+
+	list, err := List(50)
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if len(list) != 2 {
+		t.Fatalf("List = %d conversations, want 2", len(list))
+	}
+	if list[0].ID != first.ID || list[1].ID != second.ID {
+		t.Errorf("order = [%s %s], want the touched conversation first", list[0].ID, list[1].ID)
+	}
+	if list[0].Title != "第一" {
+		t.Errorf("title = %q", list[0].Title)
+	}
+}
+
+func TestByCacheKeyDeduplicates(t *testing.T) {
+	reset(t)
+	mkConv(t, "turn", "lookup", "lookup:same")
+	got, err := ByCacheKey("lookup:same")
+	if err != nil {
+		t.Fatalf("ByCacheKey: %v", err)
+	}
+	if got == nil {
+		t.Fatal("ByCacheKey = nil, want the stored conversation")
+	}
+	if got.Title != "turn" {
+		t.Errorf("title = %q", got.Title)
+	}
+	if other, err := ByCacheKey("lookup:other"); err != nil || other != nil {
+		t.Errorf("ByCacheKey(miss) = %+v, %v; want nil, nil", other, err)
+	}
+}
+
+func TestAppendBumpsUpdatedAt(t *testing.T) {
+	reset(t)
+	c := mkConv(t, "聊", "manual", "")
+	before := c.UpdatedAt
+	m, err := Append(c.ID, "user", "为什么用过去式？")
+	if err != nil {
+		t.Fatalf("Append: %v", err)
+	}
+	if m.Role != "user" || m.Content != "为什么用过去式？" {
+		t.Errorf("appended = %+v", m)
+	}
+	after, err := Get(c.ID)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	// RFC3339Nano in UTC sorts lexically, so a string compare is the ordering
+	// the list query itself will use.
+	if after.UpdatedAt <= before {
+		t.Errorf("updated_at did not move forward: %q -> %q", before, after.UpdatedAt)
+	}
+	msgs, _ := Messages(c.ID)
+	if len(msgs) != 4 || msgs[3].Role != "user" {
+		t.Errorf("messages after append = %+v", msgs)
+	}
+}
+
+func TestDeleteRemovesMessages(t *testing.T) {
+	reset(t)
+	c := mkConv(t, "删我", "parse", "k-del")
+	if err := Delete(c.ID); err != nil {
+		t.Fatalf("Delete: %v", err)
+	}
+	if got, _ := Get(c.ID); got != nil {
+		t.Error("conversation survived Delete")
+	}
+	msgs, err := Messages(c.ID)
+	if err != nil {
+		t.Fatalf("Messages: %v", err)
+	}
+	if len(msgs) != 0 {
+		t.Errorf("%d messages outlived their conversation", len(msgs))
+	}
+}
+
+func TestGetMissingIsNilNotError(t *testing.T) {
+	reset(t)
+	c, err := Get("nope")
+	if err != nil || c != nil {
+		t.Errorf("Get(missing) = %+v, %v; want nil, nil", c, err)
+	}
+}
+
+func TestTitleClampForLongInput(t *testing.T) {
+	reset(t)
+	long := strings.Repeat("字", 80)
+	got := TitleOf(long)
+	if len([]rune(got)) > 40 {
+		t.Errorf("TitleOf kept %d runes, want a clamped title", len([]rune(got)))
+	}
+}
+
+func TestDeleteMessage(t *testing.T) {
+	reset(t)
+	c := mkConv(t, "回滚", "manual", "")
+	msgs, _ := Messages(c.ID)
+	last := msgs[len(msgs)-1]
+	if err := DeleteMessage(last.ID); err != nil {
+		t.Fatalf("DeleteMessage: %v", err)
+	}
+	after, _ := Messages(c.ID)
+	if len(after) != len(msgs)-1 {
+		t.Errorf("messages = %d, want %d after the delete", len(after), len(msgs)-1)
+	}
+	// Deleting something twice is a no-op, not an error: the rollback path
+	// that uses this may race a user deleting the whole conversation.
+	if err := DeleteMessage(last.ID); err != nil {
+		t.Errorf("second delete = %v, want nil", err)
+	}
+}
+
+// ListDetailed is the list page's single query: recency order plus, per row,
+// how many turns it holds and the last thing said in it (system prompts are
+// not preview material — the row should quote the conversation, not the
+// boilerplate that shaped it).
+func TestListDetailed(t *testing.T) {
+	reset(t)
+	c := mkConv(t, "turn", "lookup", "k-list")
+	if _, err := Append(c.ID, "user", "还有别的用法吗？"); err != nil {
+		t.Fatalf("Append: %v", err)
+	}
+	if _, err := Append(c.ID, "assistant", "有，turn up 表示出现。"); err != nil {
+		t.Fatalf("Append: %v", err)
+	}
+	items, err := ListDetailed(50)
+	if err != nil {
+		t.Fatalf("ListDetailed: %v", err)
+	}
+	if len(items) != 1 {
+		t.Fatalf("items = %d, want 1", len(items))
+	}
+	it := items[0]
+	if it.Count != 5 {
+		t.Errorf("count = %d, want 5", it.Count)
+	}
+	if it.Preview != "有，turn up 表示出现。" {
+		t.Errorf("preview = %q, want the last non-system message", it.Preview)
+	}
+}

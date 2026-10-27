@@ -134,20 +134,36 @@ func (c *Client) Chat(ctx context.Context, system, user string) (string, error) 
 	return r.Content, nil
 }
 
-// Ask is Chat with the provider's bookkeeping attached.
-func (c *Client) Ask(ctx context.Context, system, user string) (Reply, error) {
+// Message is one turn of a multi-turn conversation, in the provider's own
+// vocabulary. A transcript replayed to continue a chat needs nothing else —
+// the roles are stored verbatim in the conversation store and sent back as
+// they were recorded.
+type Message struct {
+	Role    string
+	Content string
+}
+
+// AskMessages sends a full message list and returns the assistant's reply.
+// The caller owns the transcript: whatever roles and order it passes are what
+// the provider sees. A leading system message is the caller's business, not
+// this function's.
+func (c *Client) AskMessages(ctx context.Context, msgs []Message) (Reply, error) {
 	if !c.cfg.Configured() {
 		return Reply{}, ErrNotConfigured
+	}
+	if len(msgs) == 0 {
+		return Reply{}, errors.New("ai: empty message list")
 	}
 	ctx, cancel := context.WithTimeout(ctx, c.timeout)
 	defer cancel()
 
+	chatMsgs := make([]chatMessage, len(msgs))
+	for i, m := range msgs {
+		chatMsgs[i] = chatMessage{Role: m.Role, Content: content(m.Content)}
+	}
 	raw, err := json.Marshal(chatRequest{
-		Model: strings.TrimSpace(c.cfg.Model),
-		Messages: []chatMessage{
-			{Role: "system", Content: content(system)},
-			{Role: "user", Content: content(user)},
-		},
+		Model:       strings.TrimSpace(c.cfg.Model),
+		Messages:    chatMsgs,
 		Temperature: c.temperature,
 		MaxTokens:   c.maxTokens,
 		Stream:      false,
@@ -195,6 +211,14 @@ func (c *Client) Ask(ctx context.Context, system, user string) (Reply, error) {
 		Model:     strings.TrimSpace(cr.Model),
 		Usage:     cr.Usage,
 	}, nil
+}
+
+// Ask is Chat with the provider's bookkeeping attached.
+func (c *Client) Ask(ctx context.Context, system, user string) (Reply, error) {
+	return c.AskMessages(ctx, []Message{
+		{Role: "system", Content: system},
+		{Role: "user", Content: user},
+	})
 }
 
 // endpoint resolves the chat completions URL. Users paste either a base

@@ -313,3 +313,49 @@ func TestMaxTokensIsRoomy(t *testing.T) {
 		t.Errorf("DefaultMaxTokens = %d, too tight for a sentence parse", DefaultMaxTokens)
 	}
 }
+
+// Continuing a conversation replays the stored transcript as-is: roles and
+// order are the caller's facts, and the wire format must carry them exactly.
+func TestAskMessagesSendsTheTranscript(t *testing.T) {
+	cap := &capture{}
+	srv := fakeProvider(t, 200, `{"choices":[{"message":{"content":"因为主句已经是过去式"}}]}`, cap)
+
+	c := NewClient(Config{BaseURL: srv.URL, Model: "m"})
+	msgs := []Message{
+		{Role: "system", Content: "你是英语阅读助手"},
+		{Role: "user", Content: "turn 什么意思"},
+		{Role: "assistant", Content: "翻动"},
+		{Role: "user", Content: "为什么用过去式？"},
+	}
+	out, err := c.AskMessages(context.Background(), msgs)
+	if err != nil {
+		t.Fatalf("AskMessages: %v", err)
+	}
+	if out.Content != "因为主句已经是过去式" {
+		t.Errorf("content = %q", out.Content)
+	}
+	raw, ok := cap.body["messages"].([]any)
+	if !ok || len(raw) != 4 {
+		t.Fatalf("messages = %v, want 4 entries", cap.body["messages"])
+	}
+	for i, want := range []struct{ role, content string }{
+		{"system", "你是英语阅读助手"},
+		{"user", "turn 什么意思"},
+		{"assistant", "翻动"},
+		{"user", "为什么用过去式？"},
+	} {
+		m, _ := raw[i].(map[string]any)
+		if m["role"] != want.role || m["content"] != want.content {
+			t.Errorf("messages[%d] = %v, want %s/%s", i, m, want.role, want.content)
+		}
+	}
+}
+
+// An empty transcript is a caller bug, not a provider question: refuse it
+// instead of shipping a request the endpoint would answer "nothing sent".
+func TestAskMessagesRejectsEmpty(t *testing.T) {
+	c := NewClient(Config{BaseURL: "http://ai.test/v1", Model: "m"})
+	if _, err := c.AskMessages(context.Background(), nil); err == nil {
+		t.Error("an empty message list must be refused")
+	}
+}

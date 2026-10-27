@@ -198,6 +198,32 @@ CREATE TABLE IF NOT EXISTS ai_cache (
   response   TEXT NOT NULL DEFAULT '',
   created_at TEXT NOT NULL DEFAULT ''
 );
+
+-- AI conversations: one transcript per explain / parse / summarize answer,
+-- plus any chat the reader started by hand. cache_key ties the transcript to
+-- the ai_cache row of the call that created it, so the same question answered
+-- twice records once. origin says where it came from (lookup / parse /
+-- summarize / manual); the reader sees it as a badge on the list page.
+CREATE TABLE IF NOT EXISTS ai_conversations (
+  id         TEXT PRIMARY KEY,
+  title      TEXT NOT NULL DEFAULT '',
+  origin     TEXT NOT NULL DEFAULT 'manual',
+  cache_key  TEXT NOT NULL DEFAULT '',
+  created_at TEXT NOT NULL DEFAULT '',
+  updated_at TEXT NOT NULL DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS idx_aichat_updated ON ai_conversations(updated_at);
+
+-- The transcript itself: the system prompt is stored as a message too, so the
+-- conversation page can show everything that actually went to the provider.
+CREATE TABLE IF NOT EXISTS ai_messages (
+  id              TEXT PRIMARY KEY,
+  conversation_id TEXT NOT NULL REFERENCES ai_conversations(id) ON DELETE CASCADE,
+  role            TEXT NOT NULL DEFAULT 'user',
+  content         TEXT NOT NULL DEFAULT '',
+  created_at      TEXT NOT NULL DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS idx_aimsg_conv ON ai_messages(conversation_id);
 `
 
 func migrate(d *sql.DB) error {

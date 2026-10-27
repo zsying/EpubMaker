@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"epubmaker-desktop/internal/ai"
+	"epubmaker-desktop/internal/aichat"
 	"epubmaker-desktop/internal/aicache"
 	"epubmaker-desktop/internal/aiconfig"
 	"epubmaker-desktop/internal/html"
@@ -253,6 +254,9 @@ type ExplainResult struct {
 	POS         string `json:"pos"`
 	Note        string `json:"note"`
 	Cached      bool   `json:"cached"`
+	// ConversationId names the transcript this answer was filed under, so the
+	// reader can continue it from the AI page.
+	ConversationId string `json:"conversationId,omitempty"`
 }
 
 // ExplainInContext explains one word as it is used in one sentence, and
@@ -280,6 +284,7 @@ func (b *Backend) ExplainInContext(word, sentence string) (*ExplainResult, error
 		return nil, err
 	}
 	out.Cached = ans.Cached
+	out.ConversationId = recordConversation(aichat.OriginLookup, word, "explain", system, user, ans.Text)
 	return out, nil
 }
 
@@ -379,6 +384,7 @@ func (b *Backend) ParseSentence(sentence string) (*ParseResult, error) {
 		return nil, err
 	}
 	out.Cached = ans.Cached
+	recordConversation(aichat.OriginParse, sentence, "parse", system, user, ans.Text)
 	return out, nil
 }
 
@@ -485,6 +491,11 @@ func (b *Backend) SummarizeChapter(bookID, chapterID string) (*SummaryResult, er
 	}
 	out.Truncated = truncated
 	out.Cached = ans.Cached
+	title := src.Title
+	if strings.TrimSpace(title) == "" {
+		title = "章节导读"
+	}
+	recordConversation(aichat.OriginSummarize, title, "summarize", system, user, ans.Text)
 	return out, nil
 }
 

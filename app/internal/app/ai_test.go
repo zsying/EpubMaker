@@ -58,6 +58,14 @@ func resetAI(t *testing.T) {
 	if _, err := d.Exec(`DELETE FROM ai_cache`); err != nil {
 		t.Fatalf("clear ai_cache: %v", err)
 	}
+	// Conversation transcripts go too: several tests below assert how many
+	// conversations a lookup produced, and a leftover from an earlier test
+	// would shift every count.
+	for _, q := range []string{`DELETE FROM ai_messages`, `DELETE FROM ai_conversations`} {
+		if _, err := d.Exec(q); err != nil {
+			t.Fatalf("clear %s: %v", q, err)
+		}
+	}
 	if err := os.Remove(aiconfig.Path()); err != nil && !os.IsNotExist(err) {
 		t.Fatalf("remove ai.json: %v", err)
 	}
