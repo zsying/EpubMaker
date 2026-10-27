@@ -1274,6 +1274,14 @@ html[data-app-theme='midnight'] .turn-veil-band {
   right: 0;
   bottom: 0;
   will-change: transform;
+  /* A whole chapter, thousands of pixels wide, parked one spread off-screen.
+     Its strip therefore reaches back into the viewport — a page of the chapter
+     the reader just left, sitting under the live page on the leftward side. The
+     clip is what makes the parked position mean "not on screen": without it the
+     strip is only hidden by the compositor's layer bounds, which the phone's
+     WebView drops for the first frame of a freshly promoted layer, and that
+     frame is a flash of the previous chapter (ADR-18). */
+  overflow: hidden;
   /* A picture of the next page, not a second reader: no taps, no selection, no
      long-press dictionary, nothing for the finger to catch on. */
   pointer-events: none;

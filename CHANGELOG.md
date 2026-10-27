@@ -282,6 +282,20 @@ of described.
 
 ### Fixed
 
+- **Crossing a chapter no longer flashes the chapter just left** — the
+  neighbouring page is a whole chapter typeset into one strip, thousands of
+  pixels wide, parked one spread off-screen in a screen-sized box with no
+  clipping of its own. When the reader turns forward into a chapter, the reader
+  pre-fetches the chapter it came from (a sideways chapter turn has to be able to
+  go back), and that strip's overflow runs back across the viewport — a page of
+  the chapter just left, sitting under the live page. A desktop browser hides it
+  by clipping a promoted layer to its own bounds, which is the compositor's rule
+  and not ours; the phone's WebView drops that clip for the first frame of a
+  fresh layer, which is the flash. The peek now clips to its own box, so "parked
+  off-screen" is a rule the stylesheet states rather than something to hope for,
+  and the test asks the question that would have caught it — hit-testing the
+  middle of the sheet with the peek's `pointer-events` lifted for one call —
+  instead of measuring a box that was always off-screen anyway.
 - **A page can only be bookmarked once** — the 书签 drawer's ＋ 添加当前页 button
   added a bookmark on every press, so one page could collect a column of identical
   rows (and then the star in the reader's top bar, which asks "is this page
