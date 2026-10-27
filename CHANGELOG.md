@@ -89,9 +89,41 @@ of described.
   the dictionary entry (or in place of 「词库未收录」). It is a cache read that
   never calls the provider: the same question, the same answer, no waiting and
   no cost.
+- **A JSON answer reads as facts, not as punctuation** — the grounded prompts
+  ask the model for JSON, so that is what the transcript stores; the page used
+  to print it raw. It now lays the same object out as labelled rows (释义 /
+  翻译 / 提示, 句子拆解 as a list of segments), keeps prose that wrapped the
+  JSON where it was, and puts the untouched object behind a collapsed
+  「原始 JSON」 — the formatting is a view, not a rewrite of the record. The
+  list's one-line preview is humanised too (meaning → summary → translation),
+  so a row quotes the answer instead of `{"summary":"…`.
+- **「查看对话」 from wherever the answer appeared** — the word card's cached
+  gloss and the AI panel's three answers now name their transcript, so the
+  summary in front of the reader is one tap from the full record (system
+  prompt included) and from continuing it. `ParseSentence` and
+  `SummarizeChapter` return the conversation id for this; the lookup already
+  did.
 
 ### Changed
 
+- **The AI tab behaves like the top-level tab it is** — 书架 / 生词本 / AI / 我的
+  are siblings, so `/ai` no longer shows a back chevron: there is no layer
+  above it, and the button could only leave the app. The chevron stays on
+  `/ai/:id`, which really is stacked on the list.
+- **The conversation list is paged** — 30 rows per request, more when the
+  bottom of the list comes into view (`AIConversations(offset, limit)` returns
+  `{items, total, hasMore}`, capped at 100). A month of lookups is hundreds of
+  transcripts, and none of them needed to be in the first payload for the page
+  to work; the header still shows the true total.
+- **Deleting a conversation is a gesture, not a button** — a red 删 on every
+  row made a reading list look like a database screen, and sat exactly where
+  the thumb lands. Rows now slide left to reveal 删除, and the row waits for
+  the gesture to commit to an axis first, so a vertical scroll is still a
+  scroll.
+- **The transcript scrolls; the composer does not** — the input box is pinned
+  to the bottom of the room and the messages scroll inside it, instead of the
+  whole page scrolling the box out of reach after two answers (and, on a
+  phone, behind the keyboard).
 - **Returning to the shelf is fast again** — the shelf's book list carried every
   cover inline as base64, and the WebView had to write twelve of those ~400 KB
   data URLs into `<img src>` on every visit. Measured on the phone with a
