@@ -6,6 +6,7 @@ import { emphasise } from '../highlight';
 import { speakWord } from '../speech';
 import { STATUS_HINT, STATUS_LABEL, scheduleLine } from '../vocabLabels';
 import AIPanel from './AIPanel';
+import AISentence from './AISentence';
 
 /**
  * One word, opened from the notebook list.
@@ -174,9 +175,9 @@ export default function VocabCard({
             render={(r) => (
               <>
                 {r.cached && <span className="ai-cache-badge">缓存结果</span>}
-                <p className="ai-sentence">
+                <AISentence text={sentence}>
                   {emphasise(sentence, [item.surface, item.term], 'ai-hl')}
-                </p>
+                </AISentence>
                 {r.meaning && (
                   <>
                     <div className="ai-label">

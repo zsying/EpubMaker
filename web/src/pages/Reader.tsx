@@ -52,6 +52,7 @@ import { isTouchPrimary } from '../device';
 import { closeForNavigation, navigationDepth, useBackClose } from '../backNav';
 import FontPicker, { CUSTOM_FONT_FAMILY } from '../components/FontPicker';
 import AIPanel from '../components/AIPanel';
+import AISentence from '../components/AISentence';
 
 const FONT_KEY = 'epubmaker.fontSize';
 const TOC_DOCK_KEY = 'epubmaker.tocDocked';
@@ -3502,7 +3503,9 @@ export default function Reader() {
           render={(r) => (
             <>
               {r.cached && <span className="ai-cache-badge">缓存结果</span>}
-              <p className="ai-sentence">{highlightWord(aiPanel.sentence, aiPanel.word)}</p>
+              <AISentence text={aiPanel.sentence}>
+                {highlightWord(aiPanel.sentence, aiPanel.word)}
+              </AISentence>
               {r.meaning && (
                 <>
                   <div className="ai-label">
@@ -3535,7 +3538,7 @@ export default function Reader() {
           render={(r) => (
             <>
               {r.cached && <span className="ai-cache-badge">缓存结果</span>}
-              <p className="ai-sentence">{aiPanel.sentence}</p>
+              <AISentence text={aiPanel.sentence}>{aiPanel.sentence}</AISentence>
               {r.translation && <p className="ai-trans">{r.translation}</p>}
               {r.segments.length > 0 && (
                 <>

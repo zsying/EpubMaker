@@ -4649,6 +4649,25 @@ button.me-dict:disabled {
   line-height: 1.75;
   color: var(--text);
 }
+/* A long sentence is quoted, not reprinted: past four lines it folds, so the
+   answer the reader tapped for still starts on the first screen. The full text
+   is one tap away and is always intact in the notebook's word sheet. */
+.ai-sentence.is-folded {
+  display: -webkit-box;
+  -webkit-line-clamp: 4;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.ai-sentence-more {
+  margin: 0 0 6px;
+  padding: 2px 0;
+  border: 0;
+  background: none;
+  color: var(--accent);
+  font-size: 12px;
+  font-weight: 600;
+  text-align: left;
+}
 .ai-hl {
   color: var(--accent);
   font-weight: 700;

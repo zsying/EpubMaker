@@ -159,6 +159,13 @@ of described.
   the ordinary sentence, not just the long one, and an example clipped
   mid-clause is no example at all. The sheet behind the row shows it whole
   however long it is.
+- **A long sentence is quoted in the AI panel, not reprinted** — the panel that
+  explains a word in a sentence has to show the sentence, and a 583-character
+  one filled the whole sheet: the explanation the reader tapped for started on
+  the bottom edge of the screen. Past four lines it folds with 展开整句, so the
+  answer begins on the first screen. Nothing is lost — the abbreviation is a
+  view, the sentence of record is still whole, and the word sheet underneath
+  shows all of it.
 - **Taps no longer wait out the double-tap-to-zoom window.** Only the book card
   had `touch-action: manipulation`; on the tab bar the browser held the click
   back for ~292 ms (measured: touchend at 457 ms, click at 749 ms), which is the
