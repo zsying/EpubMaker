@@ -285,7 +285,10 @@ type SelState = {
   firstRect?: { left: number; top: number; right: number; bottom: number };
   lastRect?: { left: number; top: number; right: number; bottom: number };
 } | null;
-type PopoverState = { x: number; y: number; ann: Annotation } | null;
+// `fresh` marks a popover opened by 批注: the highlight was created a moment
+// ago, so the note field takes the cursor. Opening an existing mark must not
+// raise the keyboard — the reader may only be changing its colour.
+type PopoverState = { x: number; y: number; ann: Annotation; fresh?: boolean } | null;
 // `offset`/`context` are captured at lookup time so a manual "add to notebook"
 // can still record where the word came from.
 type LookupCardState = {
@@ -732,6 +735,10 @@ export default function Reader() {
   const [selDragging, setSelDragging] = useState(false);
   const [popover, setPopover] = useState<PopoverState>(null);
   const [noteDraft, setNoteDraft] = useState('');
+  const noteRef = useRef<HTMLTextAreaElement>(null);
+  // The colour the next highlight takes. Remembered across marks so 批注 does
+  // not quietly use yellow on a page the reader has been marking in green.
+  const [markColor, setMarkColor] = useState<string>('yellow');
 
   // Dictionary card for a word picked out of the page. It is positioned in
   // viewport coordinates and rendered outside the page flow on purpose: this
@@ -773,6 +780,23 @@ export default function Reader() {
   useBackClose(annOpen, () => setAnnOpen(false));
   useBackClose(!!aiPanel, () => setAIPanel(null));
   useBackClose(!!guideAsk, () => setGuideAsk(null));
+
+  // 批注 hands the cursor to the note field straight away; opening an existing
+  // mark does not, because a keyboard rising over the page someone is only
+  // recolouring is an interruption. Cursor at the end: a note is written
+  // forwards. Deferred one frame: on the first commit the popover is still
+  // measuring itself and paints with visibility:hidden, and a hidden element
+  // cannot take focus.
+  useEffect(() => {
+    if (!popover?.fresh) return;
+    const raf = requestAnimationFrame(() => {
+      const el = noteRef.current;
+      if (!el) return;
+      el.focus();
+      el.setSelectionRange(el.value.length, el.value.length);
+    });
+    return () => cancelAnimationFrame(raf);
+  }, [popover?.fresh, popover?.ann.id]);
 
   // If this exact question was asked before — same word, same sentence — the
   // answer is already on the device, and the card opens with it showing. The
@@ -3345,8 +3369,15 @@ export default function Reader() {
   }
 
   /* ---- annotation / bookmark actions ---- */
-  async function createAnnotation(color: string) {
+  // A highlight without a note is the common case, and both live in the same
+  // popover. 批注 marks the range and hands the cursor to the note field: the
+  // thought is written while the sentence is still on screen, instead of
+  // marking now and coming back later to a page where the reader no longer
+  // remembers why they marked it.
+  async function createAnnotation(color: string, withNote = false) {
     if (!sel || !current) return;
+    // clearSelectionUI drops `sel`, so the anchor has to be snapshotted first.
+    const at = { x: sel.x, y: sel.bottom + 6 };
     try {
       const a = await api.addAnnotation(
         id,
@@ -3359,8 +3390,14 @@ export default function Reader() {
         '',
       );
       setAnnotations((prev) => [...prev, a]);
+      setMarkColor(color);
       clearSelectionUI();
-      toast('已划线', 'success');
+      if (withNote) {
+        setNoteDraft('');
+        setPopover({ ...at, ann: a, fresh: true });
+      } else {
+        toast('已划线', 'success');
+      }
     } catch (e) {
       toastError(e);
     }
@@ -3778,7 +3815,18 @@ export default function Reader() {
             ✦ AI
           </button>
           {/* Highlights are painted by the paginated view only, so offering
-              colours while scrolling would promise something invisible. */}
+              colours while scrolling would promise something invisible. 批注
+              goes with them for the same reason: a note hangs off a highlight,
+              and there is no highlight to hang it on in scroll mode. */}
+          {mode === 'paged' && (
+            <button
+              className="sel-note"
+              title="划线并添加批注"
+              onClick={() => createAnnotation(markColor, true)}
+            >
+              批注
+            </button>
+          )}
           {mode === 'paged' &&
             COLORS.map((c) => (
               <button
@@ -3931,6 +3979,10 @@ export default function Reader() {
       {/* annotation popover */}
       {popover && (
         <div className="ann-popover" ref={popPos.ref} style={overlayStyle(popPos.pos)}>
+          {/* The marked sentence, echoed back: on a phone the popover sits over
+              the line it belongs to, and once the keyboard is up that line is
+              covered — a note written without it is a note about nothing. */}
+          <div className="ann-quote">{popover.ann.text}</div>
           <div className="ann-pop-colors">
             {COLORS.map((c) => (
               <button
@@ -3941,6 +3993,7 @@ export default function Reader() {
             ))}
           </div>
           <textarea
+            ref={noteRef}
             className="ann-note"
             placeholder="添加批注…"
             value={noteDraft}

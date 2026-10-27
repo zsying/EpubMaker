@@ -122,6 +122,16 @@ of described.
   加入生词本 as a single text link that disappears once the word is in. There is
   no 定位原文 and no AI here: the history remembers what was looked up, not
   where, so it has no page to point at and no sentence to explain the word in.
+- **批注 writes the note at the moment of highlighting** — the selection toolbar
+  could only paint, so a highlight that carried a thought took two steps: mark
+  the sentence, then find the mark again to open its popover. 批注 does both in
+  one press — it marks the range in the colour last used and opens the note field
+  with the cursor already in it, the marked sentence echoed above the field
+  because on a phone the keyboard covers the line the note is about. It reuses
+  the popover a tap on an existing mark opens, so there is one note editor rather
+  than two; opening an existing mark does not raise the keyboard, since
+  recolouring is not writing. Offered in paged mode only, where highlights are
+  actually painted.
 
 ### Changed
 
