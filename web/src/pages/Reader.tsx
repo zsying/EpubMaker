@@ -53,6 +53,8 @@ import { closeForNavigation, navigationDepth, useBackClose } from '../backNav';
 import FontPicker, { CUSTOM_FONT_FAMILY } from '../components/FontPicker';
 import AIPanel from '../components/AIPanel';
 import AISentence from '../components/AISentence';
+import { TurnPeek } from '../components/TurnPeek';
+import { lastTextPage } from '../columns';
 
 const FONT_KEY = 'epubmaker.fontSize';
 const TOC_DOCK_KEY = 'epubmaker.tocDocked';
@@ -607,6 +609,11 @@ export default function Reader() {
   // paged reading state
   const [pageIndex, setPageIndex] = useState(0);
   const [pageCount, setPageCount] = useState(1);
+  // How many columns the strip is wide. Not the same as pageCount: the last
+  // column can be empty (a block ending a few pixels past a column edge), and
+  // the strip still has to be wide enough to hold every column that has text in
+  // it. Turnable pages are pageCount; the box is stripCols.
+  const [stripCols, setStripCols] = useState(1);
   const [pagesPerView, setPagesPerView] = useState(1);
   const [chromeOpen, setChromeOpen] = useState(false);
   const [chromeHover, setChromeHover] = useState(false);
@@ -649,6 +656,24 @@ export default function Reader() {
   const [turnDrag, setTurnDrag] = useState<TurnDrag | null>(null);
   const dragLayerRef = useRef<HTMLDivElement>(null);
   const veilRef = useRef<HTMLDivElement>(null);
+  // The neighbouring chapter's page, laid out and waiting one spread off-screen
+  // (see TurnPeek). A chapter edge is then a place where the book still turns
+  // like a book: the finger pulls the page it is actually going to into view.
+  const [peek, setPeek] = useState<{ cid: string; side: 1 | -1; html: string } | null>(null);
+  const peekRef = useRef<HTMLDivElement>(null);
+  // The gesture and wheel listeners are registered once per page and hold their
+  // own closure; a peek that arrives afterwards has to be visible to them, so it
+  // is also mirrored here rather than read from state inside those listeners.
+  const peekLive = useRef(peek);
+  peekLive.current = peek;
+  // Sanitised HTML of chapters already fetched for a peek, so turning back and
+  // forth across a boundary does not re-render the chapter each time. Small and
+  // bounded: a session only ever visits a handful of neighbours per chapter.
+  const peekCache = useRef(new Map<string, string>());
+  // Set from the frame the chapter turn lands until the new chapter has been
+  // measured and painted: the peek is covering the page during the swap, so
+  // nothing underneath it may be exposed first.
+  const peekHandoffRef = useRef(false);
   // Measured band geometry, per veil element (see placeBand).
   const bandGeomRef = useRef<{ el: HTMLElement; w: number; bw: number } | null>(null);
   // The live drag: how far the page is pulled, in px, where the finger picked
@@ -661,6 +686,9 @@ export default function Reader() {
     origin: number;
     commit: boolean;
     settling: boolean;
+    // What the gesture is turning: a page of this chapter, or — at a chapter
+    // edge, with the neighbour's page in the peek — the chapter itself.
+    kind: 'page' | 'chapter';
   } | null>(null);
   const dragEndTimer = useRef(0);
   useEffect(() => () => window.clearTimeout(dragEndTimer.current), []);
@@ -1276,12 +1304,22 @@ export default function Reader() {
   // Returns the source character offset of the first character shown on page `p`,
   // using the sampled map built on every measure.
   function offsetForPage(p: number): number {
+    return pageStartOffset(p) ?? offsetMapRef.current.at(-1)?.offset ?? 0;
+  }
+
+  // The same lookup, but honest about a page the sampled map never reaches. The
+  // map is sampled every 48 characters, so a short last page can have no sample
+  // of its own; answering "the last offset in the map" is fine for recording
+  // where the reader is, but a caller that maps that offset back to a page lands
+  // on the page *before* it — which is how landing on the last page of a chapter
+  // got nudged back one page by the next measure.
+  function pageStartOffset(p: number): number | null {
     const map = offsetMapRef.current;
-    if (map.length === 0) return 0;
+    if (map.length === 0) return null;
     for (const s of map) {
       if (s.page >= p) return s.offset;
     }
-    return map[map.length - 1].offset;
+    return null;
   }
 
   function measureAndLayout() {
@@ -1374,9 +1412,18 @@ export default function Reader() {
     col.style.columnWidth = `${cw}px`;
     col.style.columnGap = `${columnGap}px`;
     col.style.height = `${ch}px`;
-    const pc = Math.max(1, Math.ceil(col.scrollWidth / (cw + columnGap)));
+    const cols = Math.max(1, Math.ceil(col.scrollWidth / (cw + columnGap)));
+    // The box is not the text: the box is left wide enough that no column is
+    // clipped, but the last column can hold nothing but the tail of a block and
+    // then the chapter would offer a blank last page — one the reader has to
+    // turn past, and the one a backwards chapter turn lands on. What the reader
+    // can turn to is decided by the last character that is really on the page,
+    // measured under the width the strip will actually have.
+    col.style.width = `${cols * cw + (cols - 1) * columnGap}px`;
+    const textPage = lastTextPage(col, contentRef.current, stride);
+    const pc = textPage === null ? cols : Math.max(1, Math.min(cols, textPage + 1));
+    setStripCols(cols);
     setPageCount(pc);
-    col.style.width = `${pc * cw + (pc - 1) * columnGap}px`;
 
     // Build the layout-independent offset->page map BEFORE deriving any page,
     // using the geometry we just measured (cw/ch are the local, correct values
@@ -1386,7 +1433,7 @@ export default function Reader() {
     // Capture the source offset of the currently shown page so a layout change
     // (font size / window / DPI) keeps the same text in view instead of the
     // same (now wrong) page number.
-    const keepOffset = offsetForPage(pageIndex);
+    const keepOffset = pageStartOffset(pageIndex);
 
     const maxIdx = Math.max(0, pc - ppv);
     const intent = pageIntentRef.current;
@@ -1403,7 +1450,7 @@ export default function Reader() {
     } else if (intent?.type === 'first') {
       // Chapter switch forwards (or TOC jump): open on the first page.
       nextPage = 0;
-    } else if (keepOffset !== undefined) {
+    } else if (keepOffset !== null) {
       // Layout change only (font size / window / DPI), same chapter: keep the
       // same text in view rather than the same (now wrong) page number.
       nextPage = Math.min(pageIndexForOffset(keepOffset), maxIdx);
@@ -1438,6 +1485,20 @@ export default function Reader() {
       requestAnimationFrame(() => {
         setFxOut(false);
         fxRef.current = false;
+      });
+    }
+
+    // A chapter turn that had a page to show needed no dissolve: the peek has
+    // been covering the sheet since the slide landed, and the chapter loaded
+    // behind it. Now that the new page is measured and painted, dropping the
+    // drag offset and the peek together is invisible — both show the same page.
+    if (peekHandoffRef.current) {
+      peekHandoffRef.current = false;
+      requestAnimationFrame(() => {
+        dragTurnRef.current = null;
+        placeDrag(0, true);
+        setTurnDrag(null);
+        setPeek(null);
       });
     }
   }
@@ -1563,6 +1624,79 @@ export default function Reader() {
   const progressPct = chapters.length
     ? ((idx + (pageCount ? pageIndex / pageCount : 0)) / chapters.length) * 100
     : 0;
+  const laidOut = sheetWidth > 0 && contentWidth > 0;
+
+  /* ---- the neighbouring chapter's page, laid out before it is needed ---- */
+  // A chapter turn only slides if there is a page to slide in, and that page has
+  // to exist before the finger gets there. It is fetched while the reader sits
+  // on the one page from which a chapter turn is even possible — and laid out
+  // (by TurnPeek) once it arrives, off-screen, where it costs nothing to keep.
+  useEffect(() => {
+    // A turn is in flight: the page on the sheet is the one being dragged, and
+    // the peek is part of that turn. Leave the stage alone until it is over.
+    if (turnDrag) return;
+    const want =
+      mode === 'paged' && laidOut && !preview && !peekHandoffRef.current
+        ? pageIndex + pagesPerView >= pageCount && next
+          ? { cid: next.id, side: 1 as const }
+          : pageIndex === 0 && prev
+            ? { cid: prev.id, side: -1 as const }
+            : null
+        : null;
+    if (!want) {
+      if (peek) setPeek(null);
+      return;
+    }
+    if (peek?.cid === want.cid && peek.side === want.side) return;
+    // Nothing to drag when nothing may move.
+    if (window.matchMedia?.('(prefers-reduced-motion: reduce)').matches) return;
+    let dead = false;
+    const show = (html: string) => {
+      if (!dead) setPeek({ cid: want.cid, side: want.side, html });
+    };
+    // A moment after the page settles: laying a whole chapter out is the same
+    // work opening it does, and doing it in the frame that lands on the last
+    // page would be felt as a hitch of the page that just arrived.
+    const timer = window.setTimeout(() => {
+      const cached = peekCache.current.get(want.cid);
+      if (cached) {
+        show(cached);
+        return;
+      }
+      api
+        .renderChapter(id, want.cid)
+        .then((r) => {
+          if (dead) return;
+          const clean = DOMPurify.sanitize(r.html, CHAPTER_PURIFY);
+          // Bounded: the cache exists for turning back and forth over a
+          // boundary, not for keeping the book in memory.
+          if (peekCache.current.size > 3) peekCache.current.clear();
+          peekCache.current.set(want.cid, clean);
+          show(clean);
+        })
+        .catch(() => {
+          /* no peek: the chapter turn falls back to the dissolve */
+        });
+    }, 160);
+    return () => {
+      dead = true;
+      window.clearTimeout(timer);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [
+    mode,
+    laidOut,
+    preview,
+    current,
+    pageIndex,
+    pageCount,
+    pagesPerView,
+    next?.id,
+    prev?.id,
+    id,
+    turnDrag,
+    peek,
+  ]);
 
   // Map each chapter document href -> Chapter, so a hierarchical TOC node can
   // resolve to the chapter id it opens.
@@ -1779,17 +1913,40 @@ export default function Reader() {
     band.style.transform = `translate3d(${dir > 0 ? w - p * travel : p * travel - bw}px, 0, 0)`;
   }
 
+  // The neighbour's page rides the same offset as the page leaving: one spread
+  // away at rest, home at a full stride. `px` is the live page's offset, so the
+  // two move as one gesture.
+  function placePeek(px: number, dir: 1 | -1) {
+    const el = peekRef.current;
+    if (!el) return;
+    const { stride } = turnGeomRef.current;
+    el.style.transform = `translate3d(${(dir > 0 ? stride : -stride) + px}px, 0, 0)`;
+  }
+
   function dragAvailable(dir: 1 | -1) {
     const { step, max } = turnGeomRef.current;
     return dir > 0 ? pageIndex + step <= max : pageIndex - step >= 0;
   }
 
-  // Returns whether the page took the gesture. At a chapter edge it does not:
-  // the strip carries this chapter only, so there is no neighbouring column to
-  // pull in, and dragging the page off into blank paper would be a lie. The
-  // release still turns the chapter, through the cross-fade below.
+  // Is there a page to turn to past this chapter's edge? Only when the
+  // neighbour's page is already laid out in the peek: without it there would be
+  // nothing to drag in, and the cross-fade covers the load instead.
+  function chapterReachable(dir: 1 | -1) {
+    if (mode !== 'paged' || previewRef.current) return false;
+    const p = peekLive.current;
+    if (peekHandoffRef.current || !p || p.side !== dir) return false;
+    return dir > 0 ? !!next : !!prev;
+  }
+
+  // Returns whether the page took the gesture. A chapter edge takes it too, as
+  // long as the neighbour's page is ready: the peek is positioned exactly one
+  // spread away, so the same drag brings it in.
   function beginDragTurn(dx: number): boolean {
     if (previewRef.current) return false;
+    if (peekHandoffRef.current) return false;
+    // A chapter turn is a one-way journey with the next chapter loading behind
+    // the peek; there is nothing to catch and re-aim, so it refuses a new grip.
+    if (dragTurnRef.current?.kind === 'chapter') return false;
     // Reduced motion is a request for no moving pictures, and a page sliding
     // under the thumb is exactly that.
     if (window.matchMedia?.('(prefers-reduced-motion: reduce)').matches) return false;
@@ -1799,7 +1956,8 @@ export default function Reader() {
     const carried = dragTurnRef.current?.settling ? dragLayerX() : 0;
     const px = carried + dx;
     const dir: 1 | -1 = px < 0 ? 1 : -1;
-    if (!dragAvailable(dir)) return false;
+    const kind: 'page' | 'chapter' = dragAvailable(dir) ? 'page' : 'chapter';
+    if (kind === 'chapter' && !chapterReachable(dir)) return false;
     if (carried) {
       window.clearTimeout(dragEndTimer.current);
       dragTurnRef.current!.settling = false;
@@ -1807,7 +1965,7 @@ export default function Reader() {
       // Pin the page where it was caught, before the class change reaches React.
       placeDrag(carried, true);
     }
-    dragTurnRef.current = { dir, px, origin: carried, commit: false, settling: false };
+    dragTurnRef.current = { dir, px, origin: carried, commit: false, settling: false, kind };
     setTurnDrag({ dir, phase: 'follow' });
     followDrag(dx);
     return true;
@@ -1827,11 +1985,20 @@ export default function Reader() {
     // is whatever side of the spread the finger is on now.
     const want: 1 | -1 = px < 0 ? 1 : -1;
     if (want !== d.dir) {
+      // A chapter turn has only its one neighbour waiting behind the spread, so
+      // it cannot reverse into that chapter. It can, however, hand the gesture
+      // back to the strip: the finger changed its mind and is now pulling a page
+      // of this chapter, and the neighbour's page simply goes home.
       if (!dragAvailable(want)) {
         d.px = 0;
         placeDrag(0);
         placeBand(0, d.dir);
+        if (d.kind === 'chapter') placePeek(0, d.dir);
         return;
+      }
+      if (d.kind === 'chapter') {
+        placePeek(0, d.dir);
+        d.kind = 'page';
       }
       d.dir = want;
     }
@@ -1840,6 +2007,7 @@ export default function Reader() {
     d.px = -want * px;
     placeDrag(d.px);
     placeBand(Math.min(1, px / stride), d.dir);
+    if (d.kind === 'chapter') placePeek(d.px, d.dir);
   }
 
   // Let go. A flick counts even when it barely moved the page — the gesture
@@ -1849,6 +2017,9 @@ export default function Reader() {
   function releaseDragTurn(flick: number, interrupted = false) {
     const d = dragTurnRef.current;
     if (!d) return;
+    // Already decided: a settle in flight is not re-judged by a later touch,
+    // and a chapter turn is waiting for its chapter, not for another verdict.
+    if (d.settling) return;
     const dist = Math.abs(d.px);
     const far = Math.min(Math.max(turnGeomRef.current.stride * 0.3, 48), 160);
     d.commit = !interrupted && (dist >= far || (flick * d.dir < -0.5 && dist > 16));
@@ -1871,6 +2042,17 @@ export default function Reader() {
   function finishDragTurn() {
     window.clearTimeout(dragEndTimer.current);
     const d = dragTurnRef.current;
+    if (d?.commit && d.kind === 'chapter') {
+      const target = d.dir > 0 ? next : prev;
+      if (target) {
+        // Everything stays exactly where the slide left it: the peek covers the
+        // page while the chapter loads, and measureAndLayout drops the offset in
+        // one frame once the new page is painted underneath (see the handoff).
+        peekHandoffRef.current = true;
+        openChapter(target.id, { type: d.dir > 0 ? 'first' : 'last' });
+        return;
+      }
+    }
     dragTurnRef.current = null;
     if (d?.commit) {
       // The strip's base moves to the page the slide ended on, and the drag
@@ -1899,9 +2081,11 @@ export default function Reader() {
       if (el) el.style.transition = '';
       placeDrag(d.commit ? -d.dir * stride : 0);
       placeBand(d.commit ? 1 : 0, d.dir);
+      if (d.kind === 'chapter') placePeek(d.commit ? -d.dir * stride : 0, d.dir);
     } else {
       placeDrag(d.px);
       placeBand(Math.min(1, Math.abs(d.px) / stride), d.dir);
+      if (d.kind === 'chapter') placePeek(d.px, d.dir);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [turnDrag]);
@@ -1914,11 +2098,42 @@ export default function Reader() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pageIndex]);
 
+  // A chapter turn with no finger on it — the keyboard, the wheel, a click on
+  // the page edge — plays the same slide as a gesture one whenever the
+  // neighbour's page is already laid out. Two frames, for the same reason a
+  // release needs them: the band has to be put at its start without a
+  // transition before the transition may carry it across.
+  function slideChapterTurn(dir: 1 | -1): boolean {
+    if (!chapterReachable(dir)) return false;
+    dragTurnRef.current = {
+      dir,
+      px: 0,
+      origin: 0,
+      commit: true,
+      settling: true,
+      kind: 'chapter',
+    };
+    setTurnDrag({ dir, phase: 'follow' });
+    requestAnimationFrame(() => {
+      const d = dragTurnRef.current;
+      if (!d || d.kind !== 'chapter') return;
+      setTurnDrag({ dir, phase: 'settle' });
+      window.clearTimeout(dragEndTimer.current);
+      // Only a stalled main thread reaches this; the drag layer's own
+      // transitionend normally ends the slide first.
+      dragEndTimer.current = window.setTimeout(finishDragTurn, TURN_SLIDE_MS + 240);
+    });
+    return true;
+  }
+
   function turn(delta: number) {
     // Preview visits do not turn pages: the position must stay on the anchor,
     // and every save guard aside, drifting would break the "temporary look"
     // model. Use the banner's two exits to leave the mode.
     if (previewRef.current) return;
+    // A chapter turn is already in flight, with its chapter loading behind the
+    // peek: another turn would have nowhere to land.
+    if (peekHandoffRef.current) return;
     // The card points at a word on the page being left behind.
     cancelWordLookup();
     setLookupCard(null);
@@ -1928,12 +2143,16 @@ export default function Reader() {
       if (pageIndex + step <= maxPageIndex) {
         slideTurn(1);
         setPageIndex(pageIndex + step);
-      } else if (next) startTurn(() => openChapter(next.id, { type: 'first' }));
+      } else if (next) {
+        if (!slideChapterTurn(1)) startTurn(() => openChapter(next.id, { type: 'first' }));
+      }
     } else {
       if (pageIndex - step >= 0) {
         slideTurn(-1);
         setPageIndex(pageIndex - step);
-      } else if (prev) startTurn(() => openChapter(prev.id, { type: 'last' }));
+      } else if (prev) {
+        if (!slideChapterTurn(-1)) startTurn(() => openChapter(prev.id, { type: 'last' }));
+      }
     }
   }
 
@@ -2357,10 +2576,14 @@ export default function Reader() {
       host.removeEventListener('touchcancel', onCancel);
       // A re-registration (page change, mode switch, rotation) mid-gesture
       // orphans the drag: put the page back rather than leave it half turned.
-      if (dragTurnRef.current) {
+      // Not while a chapter turn is handing over, though — that drag is the
+      // chapter load's, and the handoff drops it when the new page is painted.
+      if (dragTurnRef.current && !peekHandoffRef.current) {
         dragTurnRef.current = null;
         window.clearTimeout(dragEndTimer.current);
-        placeDrag(0);
+        // No transition here: the offset is being abandoned, not settled, and a
+        // slide running on while the sheet changes under it would be seen.
+        placeDrag(0, true);
         setTurnDrag(null);
       }
     };
@@ -4324,7 +4547,7 @@ export default function Reader() {
                 style={{
                   left: marginPx,
                   top: marginPx,
-                  width: pageCount > 0 ? pageCount * contentWidth + (pageCount - 1) * columnGap : 0,
+                  width: stripCols > 0 ? stripCols * contentWidth + (stripCols - 1) * columnGap : 0,
                   height: Math.max(0, contentHeight),
                   transform: `translate3d(-${pageIndex * (sheetWidth + pageGap)}px, 0, 0)`,
                   columnWidth: contentWidth,
@@ -4334,6 +4557,28 @@ export default function Reader() {
                 <div className="reader-content" ref={contentRef} style={contentStyle} />
               </div>
             </div>
+            {/* The neighbouring chapter's page, one spread off-screen. Inside
+                the clip, so at rest it is not on screen at all; a chapter turn
+                drags it in exactly the way a page turn drags the next column
+                in, and the two move on one gesture. */}
+            {geometryReady && peek && (
+              <TurnPeek
+                key={peek.cid}
+                layerRef={peekRef}
+                html={peek.html}
+                side={peek.side}
+                contentStyle={contentStyle}
+                geom={{
+                  margin: marginPx,
+                  contentWidth,
+                  contentHeight,
+                  columnGap,
+                  pageStride: sheetWidth + pageGap,
+                  stride: turnStep * (sheetWidth + pageGap),
+                  pagesPerView,
+                }}
+              />
+            )}
           </div>
           {/* The shadow of the turning sheet, sweeping in the direction the page
               travels. Keyed on the turn so every turn restarts the animation;

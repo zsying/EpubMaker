@@ -1221,6 +1221,7 @@ html[data-app-theme='midnight'] .turn-veil-band {
 @media (prefers-reduced-motion: reduce) {
   .reader-spread.turning .reader-columns,
   .reader-spread.turn-settle .reader-drag,
+  .reader-spread.turn-settle .turn-peek,
   .turn-veil.settle .turn-veil-band {
     transition: none;
   }
@@ -1231,6 +1232,9 @@ html[data-app-theme='midnight'] .turn-veil-band {
     transition: none;
   }
   .turn-veil {
+    display: none;
+  }
+  .turn-peek {
     display: none;
   }
 }
@@ -1256,6 +1260,29 @@ html[data-app-theme='midnight'] .turn-veil-band {
   right: 0;
   bottom: 0;
   will-change: transform;
+}
+
+/* The neighbouring chapter's page, waiting one spread away. It lives inside the
+   clip, so at rest it is simply not on screen; a chapter turn drags it in the
+   same way a within-chapter turn drags the next column in. Promoted for the same
+   reason as the drag layer — it carries a whole chapter, and a transform on an
+   unpromoted element would re-raster it on every frame. */
+.turn-peek {
+  position: absolute;
+  left: 0;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  will-change: transform;
+  /* A picture of the next page, not a second reader: no taps, no selection, no
+     long-press dictionary, nothing for the finger to catch on. */
+  pointer-events: none;
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-touch-callout: none;
+}
+.reader-spread.turn-settle .turn-peek {
+  transition: transform 210ms cubic-bezier(0.22, 0.61, 0.36, 1);
 }
 
 .page-sheet {
@@ -1396,12 +1423,16 @@ html[data-app-theme='midnight'] .turn-veil-band {
   box-shadow: 3px 12px 24px rgba(0, 0, 0, 0.22);
 }
 
-.reader-columns {
+.reader-columns,
+.turn-peek-columns {
   position: absolute;
   column-fill: auto;
   background: transparent;
   color: var(--rd-text);
   overflow: hidden;
+}
+
+.reader-columns {
   will-change: transform;
 }
 

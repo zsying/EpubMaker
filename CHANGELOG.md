@@ -151,10 +151,27 @@ of described.
   the end. A `touchcancel` always puts the page back — nobody let go, so nothing
   was decided. A second flick catches the page still sliding from the first and
   carries on from there, which is what makes fast page-turning feel continuous.
-  Chapter edges do not hand over the paper (the strip only carries this chapter),
-  and `prefers-reduced-motion: reduce` keeps the old instant turn with no drag at
+  `prefers-reduced-motion: reduce` keeps the old instant turn with no drag at
   all. The keyboard, the wheel and the page-edge clicks keep the fixed-duration
   slide: there is no finger to synchronise with.
+- **A swipe carries the reader across a chapter boundary too** — the boundary was
+  the one place the hand let go of the paper: the column strip only holds this
+  chapter, so pulling further dragged a page onto nothing, and the swipe fell back
+  to a 130 ms cross-fade. The neighbour's page is now laid out *before* the finger
+  arrives — same margins, same column width, same trailing-page measurement as the
+  page you are on — and parked exactly one spread off-screen, so the finger drags a
+  real pair of pages. Releasing past the threshold hands over rather than cuts: the
+  next chapter loads and measures while the neighbour page still covers the paper,
+  and a single frame then drops the drag offset, the buffer and the neighbour at
+  once, so the swap has nothing visible to show. Dragging back mid-turn gives the
+  page back to the strip instead of swallowing the gesture, a second chapter turn
+  needs a second swipe, and when there is no neighbour to pull in (a one-chapter
+  book, or a fetch that failed) the boundary behaves exactly as before.
+  Measured on the phone: a 60 / 140 / 240 px drag moves the page 60 / 140 / 240 px
+  and the neighbour in lockstep, the release lands on the previous chapter's *last*
+  page with text on it, and the 600 ms after a boundary turn run 38 frames with
+  none over 34 ms — the neighbour is a whole chapter being typeset, which is where
+  a hitch would have been expected.
 - **The AI tab behaves like the top-level tab it is** — 书架 / 生词本 / AI / 我的
   are siblings, so `/ai` no longer shows a back chevron: there is no layer
   above it, and the button could only leave the app. The chevron stays on
@@ -245,6 +262,17 @@ of described.
 
 ### Fixed
 
+- **A chapter no longer ends on a blank page** — the page count was
+  `ceil(scrollWidth / stride)`, which counts column *boxes*: a last paragraph that
+  spilled a few pixels past the final column widened the strip by one and produced
+  an empty page. Nothing showed it until reading backwards, where the previous
+  chapter's last page is exactly where the reader lands — so the page flipped to
+  blank paper, and the counter stuck at 11 / 12. The box count and the page count
+  are now separate numbers: the strip is still as wide as its columns, but the page
+  count comes from measuring where the last non-blank character actually sits
+  (through `getClientRects`, because a soft hyphen splits one character into two
+  fragments). Reading position uses the same measurement, so the last page no
+  longer records the offset of the page before it.
 - **A back gesture out of a long reading session could leave a blank screen** —
   the reader itself was fine; the history bookkeeping behind the hardware back
   button was not. Every overlay pushed its own history entry and, on unmount,
