@@ -1459,7 +1459,9 @@ export default function Reader() {
     // same (now wrong) page number.
     const keepOffset = pageStartOffset(pageIndex);
 
-    const maxIdx = Math.max(0, pc - ppv);
+    // Same rule as maxPageIndex below: the last spread may be a short one, so
+    // the ceiling is the last page-aligned index with content, not pc - ppv.
+    const maxIdx = Math.max(0, Math.floor((pc - 1) / ppv) * ppv);
     const intent = pageIntentRef.current;
     let nextPage = 0;
 
@@ -1824,7 +1826,13 @@ export default function Reader() {
   }
 
   const turnStep = Math.max(1, pagesPerView);
-  const maxPageIndex = Math.max(0, pageCount - pagesPerView);
+  // The last spread starts at the largest page-aligned index that still has
+  // content. `pageCount - pagesPerView` would force every spread to be full:
+  // a 9-page chapter in two-page mode would stop at the 7/8 spread and turn
+  // straight into the next chapter, and page 9 would not exist for the reader.
+  // Odd page counts are the norm, not the exception, so the final spread may
+  // carry a single page, alone in its slot like a book's last page.
+  const maxPageIndex = Math.max(0, Math.floor((pageCount - 1) / turnStep) * turnStep);
   // The numbers a gesture turn needs while it is running. They are read from a
   // ref because the drag outlives the render that started it (a 210ms release
   // slide, a re-measure in the middle of it): the closure that runs the ending
@@ -4557,7 +4565,13 @@ export default function Reader() {
           {geometryReady &&
             Array.from({ length: visibleSheets }).map((_, j) => {
               const i = pageIndex + j;
-              const isLeft = i % 2 === 0;
+              // Which side of the spread the sheet sits on. For a full spread
+              // this matches page parity (even page on the left), but the last
+              // spread of an odd-page chapter holds one page in the left slot:
+              // by parity it would take a right-hand sheet's rounding and page
+              // number, backwards for a page whose gutter is on its right. The
+              // slot is the truth; parity was only ever its shortcut.
+              const isLeft = pagesPerView === 1 ? i % 2 === 0 : j === 0;
               // Like a real book: the page number sits in the outer bottom
               // corner. A single page uses the right corner; in a spread the
               // left sheet uses the left corner and the right sheet the right.

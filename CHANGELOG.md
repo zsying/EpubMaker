@@ -282,6 +282,15 @@ of described.
 
 ### Fixed
 
+- **A chapter's last page is no longer unreachable in two-page mode** — the
+  turn ceiling was `pageCount - pagesPerView`, which forces every spread to be
+  full: a 9-page chapter on a wide window turned 1 / 3 / 5 / 7 and then
+  straight into the next chapter, and page 9 did not exist for the reader. Odd
+  page counts are the norm, so the ceiling is now the last page-aligned index
+  that has content, and the final spread may carry a single page, alone in its
+  slot like a book's last page. (Its sheet also took a right-hand page's
+  rounding and page-number corner by parity, backwards for a page whose gutter
+  is on its right; the sheet now takes its side from the slot it sits in.)
 - **Crossing a chapter no longer flashes the chapter just left** — the
   neighbouring page is a whole chapter typeset into one strip, thousands of
   pixels wide, parked one spread off-screen in a screen-sized box with no
