@@ -369,6 +369,14 @@ type Highlight = { id: string; startOffset: number; endOffset: number; color?: s
 // revealed once measured — otherwise it would paint once at its clipped
 // position. `revision` re-measures when the content changes height, e.g. when
 // the dictionary card grows its "already saved" footer.
+//
+// Re-measuring on a size change of the element itself, rather than on a list of
+// state keys, is what keeps a card that GROWS in place. The dictionary card is
+// placed while it is still short and then grows: a cached AI answer arrives a
+// moment later (reopening a word that was asked about before), an image or a
+// font swap re-wraps the text, "加入生词本" turns into one line of text. Each of
+// those pushed the bottom of the card past the window edge, because the clamp
+// applied at open time was computed against the old height.
 function useAnchoredOverlay(
   anchor: Anchor | null,
   prefer: 'above' | 'below',
@@ -406,10 +414,18 @@ function useAnchoredOverlay(
     const vv = window.visualViewport;
     vv?.addEventListener('resize', measure);
     vv?.addEventListener('scroll', measure);
+    // Anything that changes the overlay's own height re-places it. Observing the
+    // element is the only way to catch content that arrives asynchronously and
+    // silently (the cached AI answer), and it costs nothing when nothing moves:
+    // the observer fires on size, and `setPos` returns the previous object when
+    // the position is unchanged.
+    const ro = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(() => measure());
+    ro?.observe(el);
     return () => {
       window.removeEventListener('resize', measure);
       vv?.removeEventListener('resize', measure);
       vv?.removeEventListener('scroll', measure);
+      ro?.disconnect();
     };
   }, [anchor?.x, anchor?.top, anchor?.bottom, prefer, gap, revision]);
 

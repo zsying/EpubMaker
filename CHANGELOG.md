@@ -297,6 +297,19 @@ of described.
   that strip sits near the top of the page, so it ended up over the chapter
   heading while the reader was reading the answer. Opening the panel now clears
   the selection and the bar, the way 划线 already did.
+- **A word card that grows after opening no longer hangs off the screen** —
+  reopening a word whose gloss was already cached opened the card short (the
+  dictionary entry alone), placed it against *that* height, and then let the
+  cached answer arrive and double it. Measured on the phone: 217 px → 424 px
+  while the card stayed at the top it was given, so its bottom landed at 902 in
+  a 758 px window and the last lines — the answer the card exists to show —
+  were below the edge. Placement now re-runs whenever the overlay's own size
+  changes (`ResizeObserver`), instead of on a hand-picked list of state keys
+  that the cached answer never touched; a font swap, an image, or 加入生词本
+  turning into 已在生词本 re-place it the same way. And when neither side can
+  hold the card whole, it now goes where there is more room rather than always
+  hanging downwards: the same card settles at 8..432, above the word it
+  explains, which stays visible instead of disappearing under it.
 
 ## [0.3.0] — 2026-10-25
 

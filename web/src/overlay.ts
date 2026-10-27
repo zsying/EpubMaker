@@ -45,11 +45,25 @@ export function placeOverlay(
   const fitsBelow = below + size.height <= viewport.height - EDGE_GAP;
   const fitsAbove = above >= EDGE_GAP;
 
-  let top = prefer === 'below' ? below : above;
+  const preferredTop = prefer === 'below' ? below : above;
+  const otherTop = prefer === 'below' ? above : below;
   const preferredFits = prefer === 'below' ? fitsBelow : fitsAbove;
   const otherFits = prefer === 'below' ? fitsAbove : fitsBelow;
-  if (!preferredFits && otherFits) {
-    top = prefer === 'below' ? above : below;
+
+  let top: number;
+  if (preferredFits) {
+    top = preferredTop;
+  } else if (otherFits) {
+    top = otherTop;
+  } else {
+    // Neither side can hold the overlay whole, so the clamp below will crop it
+    // against an edge either way. Go where there is more room: the difference is
+    // which part of the sentence stays visible. A word near the bottom of the
+    // page with a tall answer on it used to be covered by its own card, because
+    // "prefer below" was never questioned once the flip had failed.
+    const roomBelow = viewport.height - EDGE_GAP - below;
+    const roomAbove = anchor.top - gap - EDGE_GAP;
+    top = roomBelow >= roomAbove ? below : above;
   }
   top = Math.min(
     Math.max(top, EDGE_GAP),
