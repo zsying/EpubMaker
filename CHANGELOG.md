@@ -292,6 +292,18 @@ of described.
 
 ### Fixed
 
+- **Long chapters from some Chinese EPUBs no longer collapse to a single page
+  in paged mode** — txt-converted books wrap whole chapters in
+  `<div class="main">`, which collided with the app shell's own `.main
+  { overflow-y: auto }`: inside the multicol strip a scroll container is
+  monolithic, never splits across columns, and a 100k-character chapter
+  paginated to one page while scroll mode looked fine. The book's stylesheet is
+  never loaded, so `class`/`id` on chapter markup are now stripped at sanitize
+  time (they were dead weight whose only possible effect was colliding with the
+  app's classes), and the reader content subtree force-resets the two inline
+  styles that can likewise make a chapter unbreakable (`overflow`,
+  `position`). Character offsets are untouched — attributes are not text — so
+  highlights, progress, bookmarks and vocabulary keep pointing where they did.
 - **A chapter's last page is no longer unreachable in two-page mode** — the
   turn ceiling was `pageCount - pagesPerView`, which forces every spread to be
   full: a 9-page chapter on a wide window turned 1 / 3 / 5 / 7 and then

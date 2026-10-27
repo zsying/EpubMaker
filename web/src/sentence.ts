@@ -9,8 +9,21 @@ import { stripInvisible } from './wordHit';
 
 /** How chapter markup is cleaned before the reader shows it — and before any
  *  text is measured off it, which is the same thing twice: the offsets only
- *  mean something if both sides see the same characters. */
-export const CHAPTER_PURIFY = { ADD_ATTR: ['target'], FORBID_TAGS: ['script', 'style', 'link'] };
+ *  mean something if both sides see the same characters.
+ *
+ *  `class` and `id` are stripped on purpose. The book's own stylesheet is never
+ *  loaded here, so a class can never style the content it came with — the only
+ *  thing it can do is collide with the app's classes. A txt-converted Chinese
+ *  EPUB wraps whole chapters in `<div class="main">`, which picks up the app
+ *  shell's `.main { overflow-y: auto }`; inside the multicol strip a scroll
+ *  container is monolithic — it never splits across columns — and the chapter
+ *  paginates to a single page while scroll mode looks fine. Ids collide the
+ *  same way (`#root`), and nothing here navigates by DOM id. */
+export const CHAPTER_PURIFY = {
+  ADD_ATTR: ['target'],
+  FORBID_TAGS: ['script', 'style', 'link'],
+  FORBID_ATTR: ['class', 'id'],
+};
 
 /** A detached chapter container: the markup the reader shows, parsed the way the
  *  reader parses it, and inert — a detached node never fetches an image.

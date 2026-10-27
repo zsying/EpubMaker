@@ -821,3 +821,40 @@ transform` 带来的层），这不是我们写的规则。真机 WebView 在层
 15/15（设置页一行入口；三张卡；提示词卡的保存与恢复默认走独立接口；库的新增/改名/两段式
 删除；选择器列出默认+库；点选的 id 随首条消息发送；转写首屏带出开场提示词、选择器消失）；
 `ai` 64、`aichat` 40、`verify` 19、`backstack` 33、`mobile` 192。
+
+## ADR-20 书的 markup 不许看见应用的 CSS：class/id 在 sanitize 时剥掉
+
+**问题。** 有几本中文 EPUB，滚动模式一章很长，一切到翻页就只剩一页。用真实章节 HTML
+逐层复现：纯 multicol 探针正常（两百多列），同一份 HTML 进了真 Reader 就塌成 `scrollWidth`
+一列宽。差异不在测量时机、不在 CJK 断行，而在**类名碰撞**：txt 转制的书整章包在
+`<div class="main">` 里，而应用外壳自己就有 `.main { overflow-y: auto }`。书的样式表
+从来不加载，这个 class 唯一能做的事就是撞上应用的规则——撞上 `overflow` 就把整章变成
+滚动容器，而 CSS 分栏里**滚动容器是整体块（monolithic），永不跨列切分**。十万个字符
+全塞进第一列，`pageCount` 自然是 1。滚动模式没有分栏，div 照常长高，所以看起来一切正常。
+
+**决定。**
+
+- **class 与 id 在 sanitize 时剥掉**（`CHAPTER_PURIFY.FORBID_ATTR`）。书的 CSS 不加载，
+  class/id 在阅读器里本来就是死重；它们唯一可能的效果就是与 `.main`、`.topbar`、`#root`
+  这类应用类/ID 相撞。`display:flex` 的碰撞（撞 `.topbar`）和 `overflow` 的碰撞（撞
+  `.main`）都能把一章压成残页，这类属性恰恰是阅读器**不敢**全局强改的（`display` 一改
+  行内流全毁），所以必须在入口处让它们根本进不来。
+- **行内 style 是第二道门，用 CSS 挡**：`.reader-content` 子树 `overflow: visible
+  !important; position: static !important`。`<div style="overflow:hidden">` 包整章的书
+  真实存在，行内 style 过不了 sanitize 这关，只能在渲染层抵消；而 `!important` 恰是
+  行内 style 也压不过的少数手段之一。应用注入进正文的东西（高亮 mark）不需要这两个属性，
+  `jump-flash` 等浮层都在 `.reader-content` 之外。
+- **offset 不受影响**：剥的是属性不是文本，渲染文本的字符流逐字符不变，划线/进度/书签/
+  生词的指针全部原样有效；`chapterHost`（查词/拆句的解析）走同一份 `CHAPTER_PURIFY`，
+  两侧看见的仍是一样的 markup。
+
+**反证（两道防线各有牙）。** 去掉 CSS 加固：`overflow:hidden` 行内样式的章节立刻塌回
+1122px（一列）。恢复 CSS、只去掉 `FORBID_ATTR`：`overflow` 碰撞被 CSS 挡住（律师娇妻
+保持 91422px），但 `class="topbar"` 的 `display:flex` 碰撞塌到 8948px 且内容压坏——
+证明剥 class 不是 CSS 加固的冗余，而是挡住了 CSS 不敢碰的那一半。
+
+**回归：** 复现脚本（真实章节体 + mock 后端，desktop + scroll→paged 转换两路径）：
+律师娇妻 1122→91422、卡拉马佐夫 87208、俗人回档 137174、活着 139582，行内样式与
+class 碰撞构造章全部正常分栏；`pageturn-chapter` 29/29、`pageturn-drag` 31/31、
+`backstack` 33/33、`bookmark-once` 11/11、`annotate-note` 21/21、`sentence-window`
+4/4、`hyphen-hit` 10/10、`mobile` 192/192、`verify` 19/19、`ai` 65。

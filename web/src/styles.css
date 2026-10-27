@@ -1451,6 +1451,18 @@ html[data-app-theme='midnight'] .turn-veil-band {
   word-wrap: break-word;
   min-height: 100%;
 }
+/* Book markup must not opt out of fragmentation. Inside the multicol strip a
+   scroll container (any overflow other than visible) or an absolutely-positioned
+   box is monolithic: it never splits across columns, so a chapter wrapped in
+   one collapses to a single page while scroll mode shows every line. Book
+   classes are stripped at sanitize time (see CHAPTER_PURIFY), but inline
+   styles still arrive — and a !important here beats them. Nothing the app
+   injects into the content (highlight marks) needs either property. */
+.reader-content,
+.reader-content * {
+  overflow: visible !important;
+  position: static !important;
+}
 .reader-paged .reader-content img,
 .reader-paged .reader-content svg {
   max-width: 100%;
