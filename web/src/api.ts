@@ -177,6 +177,20 @@ export interface AIConversationItem extends AIConversation {
   preview: string;
 }
 
+/**
+ * One page of the list, newest activity first.
+ *
+ * The page is deliberately paged: a year of lookups is thousands of
+ * transcripts, and the shelf of them is a scrolling list, not an export.
+ * `total` labels the header without loading every row, and `hasMore` is what
+ * the scroll sentinel asks for the next slice.
+ */
+export interface AIConversationPage {
+  items: AIConversationItem[];
+  total: number;
+  hasMore: boolean;
+}
+
 /** One turn of a transcript. The system prompt is stored as a message too. */
 export interface AIMessage {
   id: string;
@@ -210,6 +224,8 @@ export interface ParseResult {
   segments: Segment[];
   notes: string[];
   cached: boolean;
+  /** The conversation this answer was filed under, for "查看对话". */
+  conversationId?: string;
 }
 
 /** A word worth remembering from a chapter. */
@@ -225,6 +241,8 @@ export interface SummaryResult {
   terms: SummaryTerm[];
   truncated: boolean;
   cached: boolean;
+  /** The conversation this guide was filed under, for "查看对话". */
+  conversationId?: string;
 }
 
 /* ----------------------------- diagnostics (0.4) ----------------------------- */
@@ -876,8 +894,9 @@ export const api = {
 
   /* ------------- AI conversations: the transcripts, and continuing them ------------- */
 
-  /** All conversations, newest activity first. */
-  aiConversations: () => call<AIConversationItem[]>('AIConversations'),
+  /** One page of conversations, newest activity first (30 unless told otherwise). */
+  aiConversations: (offset = 0, limit = 30) =>
+    call<AIConversationPage>('AIConversations', offset, limit),
 
   /** One transcript in full — system prompt included. */
   aiConversation: (id: string) => call<AIConversationDetail | null>('AIConversation', id),

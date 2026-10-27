@@ -3086,6 +3086,16 @@ export default function Reader() {
     setAIPanel(null);
     nav('/settings');
   };
+  // "查看对话" — every grounded answer is filed as a transcript, so the answer
+  // in front of the reader has a page where it can be read in full and
+  // continued (system prompt and all). The panel closes first: this leaves the
+  // reader, and a sheet left open would still be mounted over the next page.
+  const openChat = (convId: string) => {
+    if (!convId) return;
+    setAIPanel(null);
+    setLookupCard(null);
+    nav(`/ai/${convId}`);
+  };
   // One way into the AI for a word, shared by the card's ✦ and by the "not in
   // the dictionary" state — where the model is the only answer there is, so the
   // entry has to be as easy to find there as on a word that was found.
@@ -3106,6 +3116,9 @@ export default function Reader() {
   // The word as the reader sees it on the page. Falls back to the dictionary's
   // normalised query for an older card state.
   const cardWord = lookupCard ? lookupCard.surface || lookupCard.res.query : '';
+  // Where the cached gloss's conversation lives, if it has one (it does unless
+  // the answer predates the transcript store).
+  const cardChatId = cardAI?.conversationId ?? '';
   // The cached gloss itself is fetched by the effect near the state
   // declarations (before the loading return); this block only draws it.
 
@@ -3124,6 +3137,11 @@ export default function Reader() {
       {cardAI.meaning && <div className="dict-ai-meaning">{cardAI.meaning}</div>}
       {cardAI.translation && <div className="dict-ai-trans">整句：{cardAI.translation}</div>}
       {cardAI.note && <div className="dict-ai-note">{cardAI.note}</div>}
+      {cardChatId && (
+        <button className="dict-ai-open" onClick={() => openChat(cardChatId)}>
+          查看对话 <span aria-hidden="true">›</span>
+        </button>
+      )}
     </div>
   );
 
@@ -3505,6 +3523,8 @@ export default function Reader() {
           )}
           onClose={() => setAIPanel(null)}
           onGoSettings={goAISettings}
+          chatId={(r) => r.conversationId}
+          onOpenChat={openChat}
         />
       )}
 
@@ -3545,6 +3565,8 @@ export default function Reader() {
           )}
           onClose={() => setAIPanel(null)}
           onGoSettings={goAISettings}
+          chatId={(r) => r.conversationId}
+          onOpenChat={openChat}
         />
       )}
 
@@ -3586,6 +3608,8 @@ export default function Reader() {
           )}
           onClose={() => setAIPanel(null)}
           onGoSettings={goAISettings}
+          chatId={(r) => r.conversationId}
+          onOpenChat={openChat}
         />
       )}
     </>

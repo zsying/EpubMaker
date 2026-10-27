@@ -14,45 +14,55 @@ export default function SubHeader({
   tag,
   children,
   backTo = '/',
+  back = true,
 }: {
   title: ReactNode;
   tag?: ReactNode;
   children?: ReactNode;
   /** Where to go when there is no history to pop (a cold start on this URL). */
   backTo?: string;
+  /**
+   * A top-level tab (书架 / 生词本 / AI / 我的) has nothing above it: its
+   * siblings are reached through the tab bar, not by going back. Showing a
+   * chevron there promises a layer that does not exist — pressing it leaves
+   * the app rather than going "up".
+   */
+  back?: boolean;
 }) {
   const nav = useNavigate();
   return (
     <div className="sub-head">
-      <button
-        className="sub-back"
-        aria-label="返回"
-        onClick={() => {
-          // The number the router keeps, not history.length: the latter never
-          // shrinks, so it says "there is something behind me" long after the
-          // stack is empty. A sheet left open is stepped over, not swallowed.
-          const st = window.history.state as { idx?: number } | null;
-          const idx = st && typeof st.idx === 'number' ? st.idx : 0;
-          // Never step past what exists: idx counts the entries above the root,
-          // so this page plus its past is idx+1. go(-3) with two entries behind
-          // is a no-op, and the button simply stops working.
-          const depth = Math.min(navigationDepth(), idx + 1);
-          closeForNavigation();
-          if (idx > 0) nav(-depth);
-          else nav(backTo, { replace: true });
-        }}
-      >
-        <svg width="18" height="18" viewBox="0 0 18 18" aria-hidden="true">
-          <path
-            d="M11.5 3.5 L6 9 L11.5 14.5"
-            fill="none"
-            stroke="currentColor"
-            strokeWidth="1.8"
-            strokeLinecap="round"
-            strokeLinejoin="round"
-          />
-        </svg>
-      </button>
+      {back && (
+        <button
+          className="sub-back"
+          aria-label="返回"
+          onClick={() => {
+            // The number the router keeps, not history.length: the latter never
+            // shrinks, so it says "there is something behind me" long after the
+            // stack is empty. A sheet left open is stepped over, not swallowed.
+            const st = window.history.state as { idx?: number } | null;
+            const idx = st && typeof st.idx === 'number' ? st.idx : 0;
+            // Never step past what exists: idx counts the entries above the root,
+            // so this page plus its past is idx+1. go(-3) with two entries behind
+            // is a no-op, and the button simply stops working.
+            const depth = Math.min(navigationDepth(), idx + 1);
+            closeForNavigation();
+            if (idx > 0) nav(-depth);
+            else nav(backTo, { replace: true });
+          }}
+        >
+          <svg width="18" height="18" viewBox="0 0 18 18" aria-hidden="true">
+            <path
+              d="M11.5 3.5 L6 9 L11.5 14.5"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="1.8"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            />
+          </svg>
+        </button>
+      )}
       <h1>{title}</h1>
       {tag ? <span className="tag sub-tag">{tag}</span> : null}
       <span className="spacer" />

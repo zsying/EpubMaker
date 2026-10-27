@@ -24,12 +24,28 @@ interface AIPanelProps<T> {
   onClose: () => void;
   /** Offered in the error state: a failed call is often a settings problem. */
   onGoSettings?: () => void;
+  /**
+   * The transcript this answer was filed under. When the caller can name one,
+   * the panel ends with "查看完整对话" — the panel shows the answer, the
+   * conversation page shows everything that produced it and lets the reader
+   * keep asking in it.
+   */
+  chatId?: (result: T) => string | undefined;
+  onOpenChat?: (id: string) => void;
 }
 
 type PanelState<T> =
   { kind: 'loading' } | { kind: 'done'; result: T } | { kind: 'error'; message: string };
 
-export default function AIPanel<T>({ title, run, render, onClose, onGoSettings }: AIPanelProps<T>) {
+export default function AIPanel<T>({
+  title,
+  run,
+  render,
+  onClose,
+  onGoSettings,
+  chatId,
+  onOpenChat,
+}: AIPanelProps<T>) {
   const [state, setState] = useState<PanelState<T>>({ kind: 'loading' });
   const [attempt, setAttempt] = useState(0);
   // Held in a ref so a parent re-render (which makes a new `run` closure every
@@ -54,6 +70,8 @@ export default function AIPanel<T>({ title, run, render, onClose, onGoSettings }
       alive = false;
     };
   }, [attempt]);
+
+  const chatTarget = state.kind === 'done' && chatId ? chatId(state.result) : undefined;
 
   return (
     <div className="sheet-mask ai-mask" onClick={onClose}>
@@ -92,6 +110,11 @@ export default function AIPanel<T>({ title, run, render, onClose, onGoSettings }
             </div>
           )}
           {state.kind === 'done' && render(state.result)}
+          {state.kind === 'done' && chatTarget && onOpenChat && (
+            <button className="ai-open-chat" onClick={() => onOpenChat(chatTarget)}>
+              查看完整对话 <span aria-hidden="true">›</span>
+            </button>
+          )}
         </div>
       </div>
     </div>

@@ -5008,10 +5008,19 @@ button.me-dict:disabled {
 
 /* ------------------------- AI conversations page (/ai) ------------------------- */
 
+/* The room is exactly one viewport tall: the transcript scrolls inside it and
+   the composer sits on the bottom edge. A composer that scrolls with the
+   transcript drifts out of reach after two answers, and on a phone it ends up
+   behind the keyboard — the input box is the one control that must never move. */
 .ai-room {
   display: flex;
   flex-direction: column;
-  min-height: 100%;
+  height: 100%;
+  min-height: 0;
+  padding-bottom: 0;
+}
+.ai-room .sub-head {
+  flex: none;
 }
 
 /* list rows: origin badge + title + last message + meta */
@@ -5059,20 +5068,29 @@ button.me-dict:disabled {
 /* the transcript */
 .ai-transcript {
   flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
   display: flex;
   flex-direction: column;
   gap: 10px;
   padding: 12px 0 16px;
   max-width: 720px;
+  width: 100%;
 }
+/* pre-wrap lives on the text block, not on the bubble: a JSON answer is laid
+   out as rows, and inherited pre-wrap would turn every newline between those
+   elements into a blank line. */
 .ai-msg {
   max-width: 88%;
   border-radius: 12px;
   padding: 8px 12px;
   font-size: 14.5px;
   line-height: 1.6;
-  white-space: pre-wrap;
   word-break: break-word;
+}
+.ai-msg-text {
+  white-space: pre-wrap;
 }
 .ai-msg-user {
   align-self: flex-end;
@@ -5131,11 +5149,14 @@ button.me-dict:disabled {
 
 /* the composer */
 .ai-composer {
+  flex: none;
   display: flex;
   gap: 8px;
   align-items: flex-end;
-  padding: 10px 0 16px;
+  padding: 10px 0 calc(10px + env(safe-area-inset-bottom));
   max-width: 720px;
+  width: 100%;
+  border-top: 1px solid var(--border);
 }
 .ai-composer textarea {
   flex: 1;
@@ -5185,4 +5206,154 @@ button.me-dict:disabled {
   font-size: 12px;
   color: var(--text-3);
   margin-top: 2px;
+}
+
+.dict-ai-open {
+  margin-top: 6px;
+  border: 0;
+  background: transparent;
+  padding: 2px 0;
+  color: var(--accent);
+  font: inherit;
+  font-size: 12.5px;
+  cursor: pointer;
+}
+
+/* The AI panel's way into the full transcript. A dashed border says "this
+   leaves the sheet" — the answer above it is the sheet's own content. */
+.ai-open-chat {
+  display: block;
+  margin-top: 16px;
+  width: 100%;
+  border: 1px dashed var(--border-strong);
+  border-radius: 10px;
+  background: transparent;
+  color: var(--accent);
+  font: inherit;
+  font-size: 13px;
+  padding: 9px 12px;
+  cursor: pointer;
+}
+.ai-open-chat:active {
+  background: var(--fill);
+}
+
+/* A JSON answer read as facts: labelled rows, lists as lists, and the raw
+   object one tap away. */
+.ai-json {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.ai-json-rows {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.ai-json-row {
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+}
+.ai-json-key {
+  flex: none;
+  min-width: 46px;
+  font-size: 12px;
+  line-height: 1.7;
+  color: var(--text-3);
+}
+.ai-json-val {
+  flex: 1;
+  min-width: 0;
+}
+.ai-json-text,
+.ai-json-atom {
+  font-size: 14px;
+  line-height: 1.6;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.ai-json-atom {
+  color: var(--text-2);
+}
+.ai-json-list {
+  margin: 0;
+  padding-left: 18px;
+  font-size: 14px;
+  line-height: 1.6;
+}
+.ai-json-items {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.ai-json-item {
+  border-left: 2px solid var(--border-strong);
+  padding-left: 8px;
+}
+.ai-json-raw {
+  font-size: 12px;
+  color: var(--text-3);
+}
+.ai-json-raw summary {
+  cursor: pointer;
+  user-select: none;
+}
+.ai-json-raw pre {
+  margin: 4px 0 0;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: var(--panel-2);
+  overflow-x: auto;
+  font-size: 11.5px;
+  line-height: 1.5;
+  white-space: pre;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+
+/* Rows that slide left for 删除. The gesture picks its axis first (see
+   SwipeRow), so a vertical swipe is still the list's. */
+.ai-swipe {
+  position: relative;
+  border-radius: var(--radius);
+  touch-action: pan-y;
+}
+.ai-swipe-del {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  bottom: 4px;
+  width: 68px;
+  border: 0;
+  border-radius: 10px;
+  background: var(--danger);
+  color: #fff;
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+  /* Hidden until the row moves: geometry alone would let a corner of the red
+     button show through the card's rounded corner. */
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.12s ease;
+}
+.ai-swipe.open .ai-swipe-del {
+  opacity: 1;
+  pointer-events: auto;
+}
+.ai-swipe-body {
+  position: relative;
+  will-change: transform;
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+.ai-more {
+  display: flex;
+  justify-content: center;
+  padding: 16px 0 8px;
+}
+.ai-more-end {
+  font-size: 12px;
+  color: var(--text-3);
 }

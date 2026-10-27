@@ -1,8 +1,16 @@
-import { useEffect, useRef, useState } from 'react';
+import {
+  useEffect,
+  useRef,
+  useState,
+  type MouseEvent,
+  type PointerEvent,
+  type ReactNode,
+} from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { api, AIConversationDetail, AIConversationItem, AIMessage } from '../api';
 import { toastError } from '../toast';
 import SubHeader from '../components/SubHeader';
+import AIMessageBody from '../components/AIMessageBody';
 
 /**
  * The AI page: every grounded answer (查词 / 拆句 / 导读) is a conversation,
@@ -13,10 +21,11 @@ import SubHeader from '../components/SubHeader';
  * actually went to the provider, and hiding it would make the page a summary
  * of the conversation rather than the conversation.
  *
- * Routes: `/ai` is the list (a top-level tab); `/ai/:id` is one transcript,
- * with the reserved id `new` for a chat that starts from one message. `new`
- * replaces itself with the real conversation after the first answer, so a
- * back press from an established chat always lands on the list.
+ * Routes: `/ai` is the list (a top-level tab — no back chevron, its siblings
+ * are the other tabs); `/ai/:id` is one transcript, with the reserved id `new`
+ * for a chat that starts from one message. `new` replaces itself with the real
+ * conversation after the first answer, so a back press from an established
+ * chat always lands on the list.
  */
 
 const ORIGIN_LABEL: Record<string, string> = {
@@ -25,6 +34,12 @@ const ORIGIN_LABEL: Record<string, string> = {
   summarize: '导读',
   manual: '对话',
 };
+
+/** Rows per request. The list grows on scroll; it never asks for everything. */
+const PAGE = 30;
+
+/** How far a row slides to expose its delete action. */
+const REMOVE_W = 76;
 
 function stamp(iso: string): string {
   const d = new Date(iso);
@@ -35,17 +50,140 @@ function stamp(iso: string): string {
 
 /* --------------------------------- list ---------------------------------- */
 
+/**
+ * A row that slides left to reveal 删除.
+ *
+ * The button is not in the row any more: one red button per conversation made
+ * a reading list look like a database admin screen, and on a phone it sat
+ * exactly where the thumb lands. A horizontal drag is the standard gesture for
+ * this, and it is the only one that costs nothing when you are just scrolling —
+ * so the gesture decides its own axis first (6px), and a vertical swipe is
+ * handed straight back to the list.
+ */
+function SwipeRow({
+  open,
+  onOpen,
+  onDelete,
+  children,
+}: {
+  open: boolean;
+  onOpen: (open: boolean) => void;
+  onDelete: () => void;
+  children: ReactNode;
+}) {
+  const [drag, setDrag] = useState<number | null>(null);
+  const from = useRef<{ x: number; y: number; base: number } | null>(null);
+  const axis = useRef<'' | 'x' | 'y'>('');
+  // When the last horizontal drag ended. A mouse drag is followed by a click
+  // on whatever was under it; a finger's is not. A short window covers both
+  // without eating the reader's next deliberate tap (which is what a plain
+  // "ignore the next click" flag did on a phone).
+  const draggedAt = useRef(0);
+  const shiftRef = useRef(0);
+  const base = open ? -REMOVE_W : 0;
+  const shift = drag ?? base;
+
+  function down(e: PointerEvent<HTMLDivElement>) {
+    if (e.pointerType === 'mouse' && e.button !== 0) return;
+    from.current = { x: e.clientX, y: e.clientY, base };
+    axis.current = '';
+    shiftRef.current = base;
+  }
+
+  function move(e: PointerEvent<HTMLDivElement>) {
+    const f = from.current;
+    if (!f) return;
+    const dx = e.clientX - f.x;
+    const dy = e.clientY - f.y;
+    if (!axis.current) {
+      if (Math.abs(dx) < 6 && Math.abs(dy) < 6) return;
+      axis.current = Math.abs(dx) > Math.abs(dy) ? 'x' : 'y';
+      if (axis.current === 'y') {
+        from.current = null;
+        return;
+      }
+      e.currentTarget.setPointerCapture?.(e.pointerId);
+    }
+    if (axis.current !== 'x') return;
+    const next = Math.max(-REMOVE_W - 16, Math.min(0, f.base + dx));
+    shiftRef.current = next;
+    setDrag(next);
+  }
+
+  function up() {
+    from.current = null;
+    if (axis.current === 'x') {
+      draggedAt.current = Date.now();
+      onOpen(shiftRef.current < -REMOVE_W / 2);
+    }
+    axis.current = '';
+    setDrag(null);
+  }
+
+  function guardClick(e: MouseEvent<HTMLDivElement>) {
+    // A drag ends with a click on whatever was under the finger; opening a
+    // conversation there would be the opposite of what was asked. And while
+    // the row is open, a tap on it means "put it back".
+    if (Date.now() - draggedAt.current < 300) {
+      e.preventDefault();
+      e.stopPropagation();
+      return;
+    }
+    if (open) {
+      e.preventDefault();
+      e.stopPropagation();
+      onOpen(false);
+    }
+  }
+
+  return (
+    <div className={`ai-swipe${open || drag !== null ? ' open' : ''}`}>
+      <button className="ai-swipe-del" onClick={onDelete} aria-label="删除对话">
+        删除
+      </button>
+      <div
+        className="ai-swipe-body"
+        style={{
+          transform: `translateX(${shift}px)`,
+          transition: drag === null ? 'transform .18s ease' : 'none',
+        }}
+        onPointerDown={down}
+        onPointerMove={move}
+        onPointerUp={up}
+        onPointerCancel={up}
+        onClickCapture={guardClick}
+      >
+        {children}
+      </div>
+    </div>
+  );
+}
+
 function ChatList() {
   const nav = useNavigate();
   const [items, setItems] = useState<AIConversationItem[]>([]);
+  const [total, setTotal] = useState(0);
+  const [hasMore, setHasMore] = useState(false);
   const [loading, setLoading] = useState(true);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [openId, setOpenId] = useState<string | null>(null);
+  const sentinel = useRef<HTMLDivElement | null>(null);
+  // The page cursor is "how many rows I already hold", read inside the scroll
+  // observer — which is created once, so it cannot close over the latest state.
+  const held = useRef(0);
+  held.current = items.length;
+  const busy = useRef(false);
+  const more = useRef<() => void>(() => {});
 
   useEffect(() => {
     let alive = true;
     api
-      .aiConversations()
-      .then((list) => {
-        if (alive) setItems(list ?? []);
+      .aiConversations(0, PAGE)
+      .then((p) => {
+        if (!alive) return;
+        setItems(p.items);
+        setTotal(p.total);
+        setHasMore(p.hasMore);
       })
       .catch((e) => toastError(e))
       .finally(() => {
@@ -56,10 +194,50 @@ function ChatList() {
     };
   }, []);
 
+  async function loadMore() {
+    if (busy.current || !hasMore) return;
+    busy.current = true;
+    setLoadingMore(true);
+    try {
+      const page = await api.aiConversations(held.current, PAGE);
+      // A page boundary moves when a new lookup lands while the list is open,
+      // so the offset alone is not a promise: dedupe by id.
+      setItems((prev) => {
+        const seen = new Set(prev.map((c) => c.id));
+        return [...prev, ...page.items.filter((c) => !seen.has(c.id))];
+      });
+      setTotal(page.total);
+      setHasMore(page.hasMore);
+    } catch (e) {
+      toastError(e);
+    } finally {
+      busy.current = false;
+      setLoadingMore(false);
+    }
+  }
+  more.current = () => void loadMore();
+
+  // Grow on scroll. The button below is the same action for a browser without
+  // IntersectionObserver — an old WebView, or a keyboard user tabbing through.
+  useEffect(() => {
+    const el = sentinel.current;
+    if (!el || !hasMore || loading || typeof IntersectionObserver !== 'function') return;
+    const io = new IntersectionObserver(
+      (entries) => {
+        if (entries.some((e) => e.isIntersecting)) more.current();
+      },
+      { rootMargin: '240px 0px' },
+    );
+    io.observe(el);
+    return () => io.disconnect();
+  }, [hasMore, loading, items.length]);
+
   async function remove(id: string) {
+    setOpenId(null);
     try {
       await api.aiConversationDelete(id);
       setItems((prev) => prev.filter((c) => c.id !== id));
+      setTotal((t) => Math.max(0, t - 1));
     } catch (e) {
       toastError(e);
     }
@@ -67,7 +245,7 @@ function ChatList() {
 
   return (
     <div className="page">
-      <SubHeader title="AI 对话" tag={`${items.length} 条`}>
+      <SubHeader title="AI 对话" tag={total > 0 ? `${total} 条` : undefined} back={false}>
         <button className="btn sm primary" onClick={() => nav('/ai/new')}>
           新对话
         </button>
@@ -80,27 +258,42 @@ function ChatList() {
           还没有对话。阅读时点词卡或选区工具条上的 ✦ AI，或点右上角「新对话」直接提问。
         </div>
       ) : (
-        <div className="note-list">
-          {items.map((c) => (
-            <div className="note-card" key={c.id}>
-              <button className="note-card-main" onClick={() => nav(`/ai/${c.id}`)}>
-                <div className="ai-row-head">
-                  <span className={`ai-origin ai-origin-${c.origin}`}>
-                    {ORIGIN_LABEL[c.origin] ?? '对话'}
-                  </span>
-                  <span className="note-card-title">{c.title}</span>
+        <>
+          <div className="note-list">
+            {items.map((c) => (
+              <SwipeRow
+                key={c.id}
+                open={openId === c.id}
+                onOpen={(open) => setOpenId(open ? c.id : null)}
+                onDelete={() => void remove(c.id)}
+              >
+                <div className="note-card">
+                  <button className="note-card-main" onClick={() => nav(`/ai/${c.id}`)}>
+                    <div className="ai-row-head">
+                      <span className={`ai-origin ai-origin-${c.origin}`}>
+                        {ORIGIN_LABEL[c.origin] ?? '对话'}
+                      </span>
+                      <span className="note-card-title">{c.title}</span>
+                    </div>
+                    {c.preview && <div className="ai-row-preview">{c.preview}</div>}
+                    <div className="note-card-meta">
+                      {stamp(c.updatedAt)} · {c.count} 条
+                    </div>
+                  </button>
                 </div>
-                {c.preview && <div className="ai-row-preview">{c.preview}</div>}
-                <div className="note-card-meta">
-                  {stamp(c.updatedAt)} · {c.count} 条
-                </div>
+              </SwipeRow>
+            ))}
+          </div>
+          <div className="ai-more" ref={sentinel}>
+            {hasMore ? (
+              <button className="btn sm" disabled={loadingMore} onClick={() => void loadMore()}>
+                {loadingMore ? '加载中…' : '加载更多'}
               </button>
-              <button className="btn sm danger" onClick={() => void remove(c.id)}>
-                删
-              </button>
-            </div>
-          ))}
-        </div>
+            ) : (
+              <span className="ai-more-end">共 {total} 条</span>
+            )}
+          </div>
+        </>
       )}
     </div>
   );
@@ -122,7 +315,9 @@ function MessageBubble({ m }: { m: AIMessage }) {
   }
   return (
     <div className={`ai-msg ai-msg-${m.role}`}>
-      <div className="ai-msg-body">{m.content}</div>
+      <div className="ai-msg-body">
+        <AIMessageBody text={m.content} />
+      </div>
     </div>
   );
 }
@@ -136,7 +331,7 @@ function ChatRoom({ id }: { id: string }) {
   const [draft, setDraft] = useState('');
   const [sending, setSending] = useState(false);
   const [error, setError] = useState('');
-  const endRef = useRef<HTMLDivElement>(null);
+  const transcript = useRef<HTMLDivElement | null>(null);
   // The live conversation id: `new` until the first answer creates one.
   const liveId = conv?.id ?? (isNew ? '' : id);
 
@@ -159,10 +354,13 @@ function ChatRoom({ id }: { id: string }) {
     };
   }, [id, isNew]);
 
-  // Keep the latest turn on screen: a transcript grows from the bottom.
+  // Keep the latest turn on screen: a transcript grows from the bottom. The
+  // scroll box is the transcript itself (the composer is pinned), so scrolling
+  // it directly beats scrollIntoView, which also drags the page container.
   const msgs = conv?.messages ?? [];
   useEffect(() => {
-    endRef.current?.scrollIntoView({ block: 'end' });
+    const el = transcript.current;
+    if (el) el.scrollTop = el.scrollHeight;
   }, [msgs.length, sending]);
 
   async function send() {
@@ -213,7 +411,7 @@ function ChatRoom({ id }: { id: string }) {
       {loading ? (
         <div className="loading">加载中…</div>
       ) : (
-        <div className="ai-transcript">
+        <div className="ai-transcript" ref={transcript}>
           {msgs.length === 0 && (
             <div className="empty">
               直接提问就好：词汇、语法、句子理解，或者任何和阅读有关的问题。
@@ -235,7 +433,6 @@ function ChatRoom({ id }: { id: string }) {
               </button>
             </div>
           )}
-          <div ref={endRef} />
         </div>
       )}
 
