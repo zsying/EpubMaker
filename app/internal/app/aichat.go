@@ -7,9 +7,10 @@ import (
 	"strings"
 
 	"epubmaker-desktop/internal/ai"
+	"epubmaker-desktop/internal/aicache"
 	"epubmaker-desktop/internal/aichat"
 	"epubmaker-desktop/internal/aiconfig"
-	"epubmaker-desktop/internal/aicache"
+	"epubmaker-desktop/internal/aiprompt"
 	"epubmaker-desktop/internal/logx"
 )
 
@@ -28,17 +29,23 @@ import (
 //   - A failed ask records nothing. A transcript without an answer cannot be
 //     continued, and a dead row in the list would read as a bug.
 
-// manualChatSystem is the standing prompt for conversations the reader starts
-// by hand. It is stored as the first message, so the conversation page shows
-// it exactly like the prompts of the grounded capabilities.
-const manualChatSystem = `你是 EpubMaker 的英语阅读助手。用户正在阅读英文原版书，会问你词汇、句子和阅读相关的问题。
-回答用中文，简洁清晰；英文例句和术语保留英文。`
-
 // aiAskMsgs is the multi-turn seam, mirroring aiAsk: the suite never touches
 // the network, and tests stub this to capture the exact transcript that would
 // have been sent.
 var aiAskMsgs = func(ctx context.Context, cfg ai.Config, msgs []ai.Message) (ai.Reply, error) {
 	return ai.NewClient(cfg).AskMessages(ctx, msgs)
+}
+
+// chatSystemFor a hand-made conversation: a prompt picked from the library
+// wins, then the reader's configured standing prompt, then the built-in
+// default. The chosen text is stored as the conversation's first message, so
+// the transcript always shows what actually shaped the answers, and later
+// edits to the library or the setting never reach back into it.
+func chatSystemFor(promptID string, cfg ai.Config) string {
+	if p, err := aiprompt.Get(promptID); err == nil && p != nil {
+		return p.Content
+	}
+	return aiconfig.ChatSystemFor(cfg)
 }
 
 // recordConversation files one completed exchange. It is idempotent per cache
@@ -157,9 +164,13 @@ func (b *Backend) AIConversationDelete(id string) error {
 
 // AIChatTurn is one continuation: the question as stored, the answer as
 // stored, and the conversation they belong to (a manual first message creates
-// the conversation, so the frontend needs the new id back).
+// the conversation, so the frontend needs the new id back). System is the
+// opening prompt of a conversation this call created, so the room can show
+// the prompt it just started with instead of keeping it a surprise for the
+// next visit.
 type AIChatTurn struct {
 	ConversationID string          `json:"conversationId"`
+	System         *aichat.Message `json:"system,omitempty"`
 	User           *aichat.Message `json:"user"`
 	Assistant      *aichat.Message `json:"assistant"`
 }
@@ -169,10 +180,16 @@ type AIChatTurn struct {
 // what "continue" means: the model answers with the context it was originally
 // given, not a fresh guess.
 //
+// promptID only matters when a conversation is being created: it names a
+// library prompt to open the transcript with. A conversation that already
+// exists keeps the system prompt it was born with — that is the prompt its
+// earlier answers were shaped by, and swapping it mid-flight would make the
+// transcript lie about what happened.
+//
 // A failed call rolls the user message back. The retry then re-sends the same
 // question instead of stacking a second copy of it, and the transcript keeps
 // saying only what actually happened.
-func (b *Backend) AIChatSend(conversationID, text string) (*AIChatTurn, error) {
+func (b *Backend) AIChatSend(conversationID, text, promptID string) (*AIChatTurn, error) {
 	text = strings.TrimSpace(text)
 	if text == "" {
 		return nil, errors.New("消息不能为空")
@@ -192,10 +209,14 @@ func (b *Backend) AIChatSend(conversationID, text string) (*AIChatTurn, error) {
 	defer aiMu.Unlock()
 
 	var conv *aichat.Conversation
+	var opening *aichat.Message
 	if conversationID == "" {
 		conv = &aichat.Conversation{Title: aichat.TitleOf(text), Origin: aichat.OriginManual}
-		if err := aichat.Create(conv, []aichat.Message{{Role: aichat.RoleSystem, Content: manualChatSystem}}); err != nil {
+		if err := aichat.Create(conv, []aichat.Message{{Role: aichat.RoleSystem, Content: chatSystemFor(promptID, cfg)}}); err != nil {
 			return nil, err
+		}
+		if msgs, err := aichat.Messages(conv.ID); err == nil && len(msgs) > 0 {
+			opening = &msgs[0]
 		}
 	} else {
 		conv, err = aichat.Get(conversationID)
@@ -249,7 +270,7 @@ func (b *Backend) AIChatSend(conversationID, text string) (*AIChatTurn, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &AIChatTurn{ConversationID: conv.ID, User: userMsg, Assistant: asst}, nil
+	return &AIChatTurn{ConversationID: conv.ID, System: opening, User: userMsg, Assistant: asst}, nil
 }
 
 /* ------------------------- cached lookup for the card ----------------------- */

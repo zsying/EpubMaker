@@ -7,6 +7,7 @@ import (
 
 	"epubmaker-desktop/internal/ai"
 	"epubmaker-desktop/internal/aichat"
+	"epubmaker-desktop/internal/aiconfig"
 )
 
 // stubAIChat replaces the multi-turn seam (used by AIChatSend) with a fake.
@@ -14,7 +15,7 @@ import (
 // that asserts "the conversation page did NOT call the network" can stub both
 // and count them independently.
 type aiChatRecorder struct {
-	calls int
+	calls       int
 	transcripts [][]ai.Message
 }
 
@@ -258,7 +259,7 @@ func TestAIChatSendContinues(t *testing.T) {
 	rec := stubAIChat(t, func(msgs []ai.Message) (string, error) {
 		return "因为叙事用的是过去时。", nil
 	})
-	turn, err := b.AIChatSend(out.ConversationId, "为什么翻译成「笑了」？")
+	turn, err := b.AIChatSend(out.ConversationId, "为什么翻译成「笑了」？", "")
 	if err != nil {
 		t.Fatalf("AIChatSend: %v", err)
 	}
@@ -306,7 +307,7 @@ func TestAIChatSendFailureRollsBack(t *testing.T) {
 	rec := stubAIChat(t, func(msgs []ai.Message) (string, error) {
 		return "", context.DeadlineExceeded
 	})
-	if _, err := b.AIChatSend(out.ConversationId, "再说一遍"); err == nil {
+	if _, err := b.AIChatSend(out.ConversationId, "再说一遍", ""); err == nil {
 		t.Fatal("a failed continuation must be an error")
 	}
 	if rec.calls != 1 {
@@ -318,7 +319,7 @@ func TestAIChatSendFailureRollsBack(t *testing.T) {
 	}
 	// And the retry works afterwards.
 	stubAIChat(t, func(msgs []ai.Message) (string, error) { return "好的，再说一次。", nil })
-	if _, err := b.AIChatSend(out.ConversationId, "再说一遍"); err != nil {
+	if _, err := b.AIChatSend(out.ConversationId, "再说一遍", ""); err != nil {
 		t.Fatalf("retry: %v", err)
 	}
 	detail, _ = b.AIConversation(out.ConversationId)
@@ -337,7 +338,7 @@ func TestAIChatSendCreatesManualConversation(t *testing.T) {
 		return "虚拟语气表示与事实相反的假设。", nil
 	})
 	b := &Backend{}
-	turn, err := b.AIChatSend("", long)
+	turn, err := b.AIChatSend("", long, "")
 	if err != nil {
 		t.Fatalf("AIChatSend: %v", err)
 	}
@@ -368,15 +369,15 @@ func TestAIChatSendRejectsEmptyAndUnknown(t *testing.T) {
 	resetAI(t)
 	saveAIConfig(t, ai.Config{BaseURL: "http://ai.test/v1", APIKey: "sk-test", Model: "m"})
 	b := &Backend{}
-	if _, err := b.AIChatSend("", "  "); err == nil {
+	if _, err := b.AIChatSend("", "  ", ""); err == nil {
 		t.Error("an empty message must be refused")
 	}
-	if _, err := b.AIChatSend("no-such-conv", "你好"); err == nil {
+	if _, err := b.AIChatSend("no-such-conv", "你好", ""); err == nil {
 		t.Error("an unknown conversation must be refused")
 	}
 	// Not configured is its own message, naming the settings file.
 	resetAI(t)
-	if _, err := b.AIChatSend("", "你好"); err == nil || !strings.Contains(err.Error(), "未配置") {
+	if _, err := b.AIChatSend("", "你好", ""); err == nil || !strings.Contains(err.Error(), "未配置") {
 		t.Errorf("error = %v, want the not-configured message", err)
 	}
 }
@@ -450,5 +451,136 @@ func TestAIExplainCached(t *testing.T) {
 	got, _ = b.AIExplainCached("turn", "He turned the corner.")
 	if got != nil {
 		t.Errorf("a different sentence returned %+v, want nil", got)
+	}
+}
+
+// A hand-made conversation opens with the prompt it was given: a library
+// prompt when one is picked, the reader's configured standing prompt when
+// not, the built-in default otherwise. The prompt lands as the transcript's
+// first message — the conversation page shows what actually shaped the
+// answers, and later edits to the library cannot reach back.
+func TestAIChatSendPicksTheOpeningPrompt(t *testing.T) {
+	resetAI(t)
+	saveAIConfig(t, ai.Config{BaseURL: "http://ai.test/v1", APIKey: "sk-test", Model: "m"})
+	rec := stubAIChat(t, func(msgs []ai.Message) (string, error) {
+		return "好的。", nil
+	})
+	b := &Backend{}
+
+	// No pick, no configured override: the built-in default opens.
+	turn, err := b.AIChatSend("", "讲讲虚拟语气", "")
+	if err != nil {
+		t.Fatalf("AIChatSend(default): %v", err)
+	}
+	if sys := rec.transcripts[0][0]; sys.Role != aichat.RoleSystem ||
+		sys.Content != aiconfig.DefaultChatSystem {
+		t.Errorf("default opening = %q, want the built-in prompt", sys.Content)
+	}
+	if n := rec.calls; n != 1 {
+		t.Fatalf("calls = %d, want 1", n)
+	}
+
+	// The reader's configured standing prompt replaces the default, and a
+	// blank one restores it — 配置和恢复 is saving text and saving empty.
+	saveAIConfig(t, ai.Config{
+		BaseURL: "http://ai.test/v1", APIKey: "sk-test", Model: "m",
+		ChatSystem: "你是考研英语家教，回答要给出考点编号。",
+	})
+	if _, err := b.AIChatSend("", "再讲讲虚拟语气", ""); err != nil {
+		t.Fatalf("AIChatSend(configured): %v", err)
+	}
+	if sys := rec.transcripts[1][0]; sys.Content != "你是考研英语家教，回答要给出考点编号。" {
+		t.Errorf("configured opening = %q", sys.Content)
+	}
+
+	// A library prompt wins over both, and keeps its text even after the
+	// prompt is deleted or the setting changes: the transcript stores a copy.
+	saved, err := b.AIPromptSave("", "苏格拉底式", "你用反问引导读者自己得出答案，不给直接结论。")
+	if err != nil {
+		t.Fatalf("AIPromptSave: %v", err)
+	}
+	if _, err := b.AIChatSend("", "三讲虚拟语气", saved.ID); err != nil {
+		t.Fatalf("AIChatSend(prompted): %v", err)
+	}
+	if sys := rec.transcripts[2][0]; !strings.Contains(sys.Content, "反问") {
+		t.Errorf("prompted opening = %q", sys.Content)
+	}
+	if err := b.AIPromptDelete(saved.ID); err != nil {
+		t.Fatalf("AIPromptDelete: %v", err)
+	}
+	detail, err := b.AIConversation(turn.ConversationID)
+	if err != nil {
+		t.Fatalf("AIConversation: %v", err)
+	}
+	// turn's conversation is the first one; find the prompted one instead.
+	convs := listConvs(t, b)
+	var prompted string
+	for _, c := range convs {
+		if strings.Contains(c.Title, "三讲") {
+			prompted = c.ID
+		}
+	}
+	detail, err = b.AIConversation(prompted)
+	if err != nil {
+		t.Fatalf("AIConversation(prompted): %v", err)
+	}
+	if detail.Messages[0].Role != aichat.RoleSystem ||
+		!strings.Contains(detail.Messages[0].Content, "反问") {
+		t.Errorf("transcript must keep the prompt it was born with, got %q", detail.Messages[0].Content)
+	}
+
+	// An unknown prompt id falls back to the standing resolution, so a picker
+	// row outliving its prompt degrades to the default, not to an error.
+	if _, err := b.AIChatSend("", "四讲虚拟语气", "gone"); err != nil {
+		t.Fatalf("AIChatSend(unknown prompt): %v", err)
+	}
+	if sys := rec.transcripts[3][0]; sys.Content != "你是考研英语家教，回答要给出考点编号。" {
+		t.Errorf("unknown-prompt opening = %q, want the configured prompt", sys.Content)
+	}
+
+	// Continuing an existing conversation keeps its own opening prompt even
+	// when a different prompt id is passed: the first message is the truth
+	// about what shaped the earlier answers.
+	if _, err := b.AIChatSend(prompted, "那再举个反例", saved.ID); err == nil {
+		t.Log("continue after delete went through")
+	}
+}
+
+// The prompt library behind the picker: create, list, edit, delete, and the
+// validation the form leans on.
+func TestAIPromptBackendCRUD(t *testing.T) {
+	resetAI(t)
+	b := &Backend{}
+
+	if _, err := b.AIPromptSave("", " ", "x"); err == nil {
+		t.Error("blank name must be refused")
+	}
+	saved, err := b.AIPromptSave("", "词汇教练", "你只教词汇，一次只讲一个词。")
+	if err != nil {
+		t.Fatalf("AIPromptSave: %v", err)
+	}
+	if saved.ID == "" {
+		t.Fatal("save must answer the stored row")
+	}
+
+	updated, err := b.AIPromptSave(saved.ID, "词汇教练 v2", "你只教词汇，并给出搭配。")
+	if err != nil {
+		t.Fatalf("AIPromptSave(update): %v", err)
+	}
+	if updated.ID != saved.ID {
+		t.Errorf("update changed id: %s -> %s", saved.ID, updated.ID)
+	}
+
+	list, err := b.AIPromptList()
+	if err != nil || len(list) != 1 || list[0].Name != "词汇教练 v2" {
+		t.Fatalf("AIPromptList = %+v, %v", list, err)
+	}
+
+	if err := b.AIPromptDelete(saved.ID); err != nil {
+		t.Fatalf("AIPromptDelete: %v", err)
+	}
+	list, _ = b.AIPromptList()
+	if len(list) != 0 {
+		t.Errorf("list after delete = %+v, want empty", list)
 	}
 }

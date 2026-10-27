@@ -47,7 +47,9 @@ export default function AISettings() {
   async function save() {
     setSaving(true);
     try {
-      await api.saveAIConfig(baseUrl.trim(), apiKey.trim(), model.trim());
+      // The chat prompt is another card's business: pass through whatever is
+      // stored so a model-only change cannot wipe it.
+      await api.saveAIConfig(baseUrl.trim(), apiKey.trim(), model.trim(), view?.chatSystem ?? '');
       setApiKey('');
       toast('AI 设置已保存', 'success');
       await load();
@@ -80,7 +82,7 @@ export default function AISettings() {
 
   return (
     <div className="card ai-set">
-      <div className="section-title">AI 能力</div>
+      <div className="section-title">接口</div>
       <p className="ai-set-desc">
         在阅读器里选中单词或句子，即可获得结合上下文的释义、句子拆解和章节导读。 接口兼容 OpenAI
         格式，密钥只保存在本机，每次调用由你主动触发。

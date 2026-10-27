@@ -38,11 +38,16 @@ var requestTimeout = 15 * time.Second
 // ErrNotConfigured says the user has not filled in provider settings.
 var ErrNotConfigured = errors.New("ai provider not configured")
 
-// Config holds the user's BYOK settings.
+// Config holds the user's BYOK settings. ChatSystem is the standing prompt
+// for hand-made conversations; empty means the built-in default (see the
+// aiconfig package, which owns the default text). It lives beside the key in
+// the 0600 sidecar for the same reason the key does: it is per-device state
+// that should not travel with shared backups.
 type Config struct {
-	BaseURL string `json:"baseUrl"`
-	APIKey  string `json:"apiKey"`
-	Model   string `json:"model"`
+	BaseURL    string `json:"baseUrl"`
+	APIKey     string `json:"apiKey"`
+	Model      string `json:"model"`
+	ChatSystem string `json:"chatSystem,omitempty"`
 }
 
 // Configured reports whether the config can make a call. Blank counts as

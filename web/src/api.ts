@@ -143,6 +143,19 @@ export interface AIConfigView {
   /** Whether a call can be made at all (address + model filled in). */
   configured: boolean;
   presets: AIPreset[];
+  /** The reader's standing prompt for hand-made chats; '' means the default. */
+  chatSystem: string;
+  /** The built-in default, for the placeholder and the 恢复默认 button. */
+  chatSystemDefault: string;
+}
+
+/** One saved system prompt, offered to hand-made conversations. */
+export interface AIPrompt {
+  id: string;
+  name: string;
+  content: string;
+  createdAt: string;
+  updatedAt: string;
 }
 
 /**
@@ -207,6 +220,8 @@ export interface AIConversationDetail extends AIConversation {
 /** One continuation: what was asked and what came back, as stored. */
 export interface AIChatTurn {
   conversationId: string;
+  /** The opening prompt, present only when this send created the conversation. */
+  system?: AIMessage;
   user: AIMessage;
   assistant: AIMessage;
 }
@@ -874,12 +889,17 @@ export const api = {
   /** The AI settings with the key masked. Throws when the settings file is unreadable. */
   aiConfig: () => call<AIConfigView>('GetAIConfig'),
 
-  /** Stores the settings. A blank key keeps the stored one (model-only change). */
-  saveAIConfig: (baseUrl: string, apiKey: string, model: string) =>
-    call<boolean>('SaveAIConfig', baseUrl, apiKey, model),
+  /** Stores the settings. A blank key keeps the stored one (model-only change);
+   *  a blank chatSystem restores the built-in default prompt. */
+  saveAIConfig: (baseUrl: string, apiKey: string, model: string, chatSystem: string) =>
+    call<boolean>('SaveAIConfig', baseUrl, apiKey, model, chatSystem),
 
   /** One tiny real call against the stored settings; reports, never throws. */
   aiTestConnection: () => call<{ ok: boolean; reply?: string; error?: string }>('AITestConnection'),
+
+  /** Stores the standing prompt for hand-made chats. A blank text restores
+   *  the built-in default. */
+  aiSaveChatSystem: (chatSystem: string) => call<boolean>('AISaveChatSystem', chatSystem),
 
   /** Explains a word in the sentence it appeared in, and translates that sentence. */
   explainInContext: (word: string, sentence: string) =>
@@ -909,8 +929,20 @@ export const api = {
    * goes back to the provider verbatim. A failed send rolls the user message
    * back, so a retry cannot duplicate it.
    */
-  aiChatSend: (conversationId: string, text: string) =>
-    call<AIChatTurn>('AIChatSend', conversationId, text),
+  aiChatSend: (conversationId: string, text: string, promptId = '') =>
+    call<AIChatTurn>('AIChatSend', conversationId, text, promptId),
+
+  /* ------------------------- prompt library (0.4) ------------------------- */
+
+  /** Every saved system prompt, most recently touched first. */
+  aiPromptList: () => call<AIPrompt[]>('AIPromptList'),
+
+  /** Creates (blank id) or updates one prompt; answers with the stored row. */
+  aiPromptSave: (id: string, name: string, content: string) =>
+    call<AIPrompt>('AIPromptSave', id, name, content),
+
+  /** Deletes one prompt. Conversations already started keep their copy. */
+  aiPromptDelete: (id: string) => call<boolean>('AIPromptDelete', id),
 
   /**
    * The cached explanation for one word in one sentence, if the AI already

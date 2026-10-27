@@ -1,6 +1,5 @@
 import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
-import AISettings from '../components/AISettings';
 import FontPicker from '../components/FontPicker';
 import SubHeader from '../components/SubHeader';
 import { api } from '../api';
@@ -113,8 +112,17 @@ export default function Settings() {
         </div>
       </div>
 
-      <div style={{ marginTop: 16 }}>
-        <AISettings />
+      {/* The LLM page holds everything AI: endpoint, key, chat prompt and the
+          prompt library. One row here instead of three cards — the settings
+          page stays the reading preferences it is. */}
+      <div className="settings-log" style={{ marginTop: 16 }}>
+        <div className="settings-log-text">
+          <b>LLM 配置</b>
+          <small>接口地址、模型、密钥、对话提示词与提示词库</small>
+        </div>
+        <Link className="btn sm" to="/llm">
+          进入
+        </Link>
       </div>
 
       {/* Diagnostics. Next to the AI settings because almost every report that

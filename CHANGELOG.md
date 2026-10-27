@@ -132,6 +132,16 @@ of described.
   than two; opening an existing mark does not raise the keyboard, since
   recolouring is not writing. Offered in paged mode only, where highlights are
   actually painted.
+- **LLM 配置 gets its own page** — the settings page had outgrown one card, and
+  what grew is more than a key: the endpoint form (address / model / key, as
+  before) now shares `/llm` with a standing-prompt card — the prompt every
+  hand-made conversation opens with, configurable and restorable to the built-in
+  default by saving empty — and a prompt library: named prompts saved by the
+  reader, offered when a new conversation starts. The picker lives in the chat
+  room while the conversation is still unnamed, and the prompt it chose comes
+  back with the first answer so the room shows what it opened with. The library
+  is a library, not a source of truth: a conversation copies its prompt when it
+  starts, so editing or deleting one never rewrites an existing transcript.
 
 ### Changed
 

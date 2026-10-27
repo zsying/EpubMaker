@@ -7,7 +7,7 @@ import {
   type ReactNode,
 } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
-import { api, AIConversationDetail, AIConversationItem, AIMessage } from '../api';
+import { api, AIConversationDetail, AIConversationItem, AIMessage, AIPrompt } from '../api';
 import { toastError } from '../toast';
 import SubHeader from '../components/SubHeader';
 import AIMessageBody from '../components/AIMessageBody';
@@ -331,9 +331,24 @@ function ChatRoom({ id }: { id: string }) {
   const [draft, setDraft] = useState('');
   const [sending, setSending] = useState(false);
   const [error, setError] = useState('');
+  // The prompt a brand-new conversation opens with, picked before the first
+  // message. '' is the standing prompt from the LLM settings page; a library
+  // id wins over it. The choice only matters while the conversation is still
+  // unnamed: once the first answer lands, the transcript stores the prompt it
+  // was born with, and the picker's job is done.
+  const [prompts, setPrompts] = useState<AIPrompt[]>([]);
+  const [promptId, setPromptId] = useState('');
   const transcript = useRef<HTMLDivElement | null>(null);
   // The live conversation id: `new` until the first answer creates one.
   const liveId = conv?.id ?? (isNew ? '' : id);
+
+  useEffect(() => {
+    if (!isNew) return;
+    api
+      .aiPromptList()
+      .then((ps) => setPrompts(ps ?? []))
+      .catch(() => setPrompts([]));
+  }, [isNew]);
 
   useEffect(() => {
     if (isNew) return;
@@ -369,7 +384,7 @@ function ChatRoom({ id }: { id: string }) {
     setSending(true);
     setError('');
     try {
-      const turn = await api.aiChatSend(liveId, text);
+      const turn = await api.aiChatSend(liveId, text, promptId);
       setDraft('');
       setConv((prev) => {
         const base: AIConversationDetail = prev ?? {
@@ -380,7 +395,13 @@ function ChatRoom({ id }: { id: string }) {
           updatedAt: turn.assistant.createdAt,
           messages: [],
         };
-        return { ...base, messages: [...base.messages, turn.user, turn.assistant] };
+        const msgs = [...base.messages];
+        // A conversation this send created carries its opening prompt back —
+        // the one the picker chose — so the room shows what the answers are
+        // shaped by instead of keeping it for the next visit.
+        if (turn.system) msgs.push(turn.system);
+        msgs.push(turn.user, turn.assistant);
+        return { ...base, messages: msgs };
       });
       // A `new` chat that just became real: put the real id in the URL so
       // refreshes and back presses behave like any other conversation.
@@ -436,6 +457,27 @@ function ChatRoom({ id }: { id: string }) {
         </div>
       )}
 
+      {/* The prompt picker: only a conversation that has not started yet can
+          choose. Once messages exist the transcript has its prompt stored —
+          shown above — and swapping it would make the record lie. */}
+      {isNew && msgs.length === 0 && (
+        <div className="ai-prompt-pick">
+          <label htmlFor="ai-prompt-sel">提示词</label>
+          <select
+            id="ai-prompt-sel"
+            className="select"
+            value={promptId}
+            onChange={(e) => setPromptId(e.target.value)}
+          >
+            <option value="">默认（跟随 LLM 配置）</option>
+            {prompts.map((p) => (
+              <option key={p.id} value={p.id}>
+                {p.name}
+              </option>
+            ))}
+          </select>
+        </div>
+      )}
       <div className="ai-composer">
         <textarea
           value={draft}

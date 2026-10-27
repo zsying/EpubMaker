@@ -16,6 +16,7 @@ import Me from './pages/Me';
 import About from './pages/About';
 import WifiShare from './pages/WifiShare';
 import Settings from './pages/Settings';
+import LLM from './pages/LLM';
 import Logs from './pages/Logs';
 import { initFileDrop } from './filedrop';
 import { clearBackClosers } from './backNav';
@@ -161,6 +162,7 @@ export default function App() {
             <Route path="/about" element={<About />} />
             <Route path="/wifi" element={<WifiShare />} />
             <Route path="/settings" element={<Settings />} />
+            <Route path="/llm" element={<LLM />} />
             <Route path="/logs" element={<Logs />} />
             <Route
               path="/books/:id/edit"

@@ -265,6 +265,9 @@ func TestListLookupsFiltersAndOrdersByRecency(t *testing.T) {
 		}
 	}
 	// Bump one term so it sorts to the front regardless of insertion order.
+	// The sleep keeps its timestamp from landing in the same microsecond as
+	// clatter's, where "most recent" would be a coin flip.
+	time.Sleep(2 * time.Millisecond)
 	if err := RecordLookup("zephyr"); err != nil {
 		t.Fatal(err)
 	}

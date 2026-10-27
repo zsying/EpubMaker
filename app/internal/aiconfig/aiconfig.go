@@ -60,6 +60,28 @@ type View struct {
 	// guide asks before it offers to send anything) instead of starting a call
 	// that can only fail with "not configured".
 	Configured bool `json:"configured"`
+	// ChatSystem is the reader's standing prompt for hand-made conversations,
+	// empty when the default is in force. ChatSystemDefault is that default,
+	// sent along so the form can show it as the placeholder and the 恢复默认
+	// button can say what it would restore to.
+	ChatSystem        string `json:"chatSystem"`
+	ChatSystemDefault string `json:"chatSystemDefault"`
+}
+
+// DefaultChatSystem is the standing prompt for conversations the reader starts
+// by hand. It is the text a new conversation gets when no custom one is
+// configured and none is picked from the library; changing it here changes
+// every future chat, and never a transcript that already exists.
+const DefaultChatSystem = `你是 EpubMaker 的英语阅读助手。用户正在阅读英文原版书，会问你词汇、句子和阅读相关的问题。
+回答用中文，简洁清晰；英文例句和术语保留英文。`
+
+// ChatSystemFor resolves the standing prompt: the reader's custom text when
+// one is set, the built-in default otherwise.
+func ChatSystemFor(cfg ai.Config) string {
+	if s := strings.TrimSpace(cfg.ChatSystem); s != "" {
+		return s
+	}
+	return DefaultChatSystem
 }
 
 // Path is the absolute path of the settings file.
@@ -84,6 +106,7 @@ func Load() (ai.Config, error) {
 	cfg.BaseURL = strings.TrimSpace(cfg.BaseURL)
 	cfg.APIKey = strings.TrimSpace(cfg.APIKey)
 	cfg.Model = strings.TrimSpace(cfg.Model)
+	cfg.ChatSystem = strings.TrimSpace(cfg.ChatSystem)
 	return cfg, nil
 }
 
@@ -132,10 +155,12 @@ func Validate(cfg ai.Config) error {
 // NewView builds the masked view for the settings page.
 func NewView(cfg ai.Config) View {
 	v := View{
-		BaseURL:    cfg.BaseURL,
-		Model:      cfg.Model,
-		Presets:    Presets(),
-		Configured: cfg.Configured(),
+		BaseURL:           cfg.BaseURL,
+		Model:             cfg.Model,
+		Presets:           Presets(),
+		Configured:        cfg.Configured(),
+		ChatSystem:        strings.TrimSpace(cfg.ChatSystem),
+		ChatSystemDefault: DefaultChatSystem,
 	}
 	if key := strings.TrimSpace(cfg.APIKey); key != "" {
 		v.KeySet = true

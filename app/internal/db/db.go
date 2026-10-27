@@ -224,6 +224,19 @@ CREATE TABLE IF NOT EXISTS ai_messages (
   created_at      TEXT NOT NULL DEFAULT ''
 );
 CREATE INDEX IF NOT EXISTS idx_aimsg_conv ON ai_messages(conversation_id);
+
+-- System prompts the reader has saved in the LLM settings page and picks from
+-- when starting a hand-made conversation. The prompt a conversation actually
+-- used is stored as its first message (see ai_messages), so this table is a
+-- library, not a source of truth: editing or deleting a prompt never rewrites
+-- an existing transcript.
+CREATE TABLE IF NOT EXISTS ai_prompts (
+  id         TEXT PRIMARY KEY,
+  name       TEXT NOT NULL DEFAULT '',
+  content    TEXT NOT NULL DEFAULT '',
+  created_at TEXT NOT NULL DEFAULT '',
+  updated_at TEXT NOT NULL DEFAULT ''
+);
 `
 
 func migrate(d *sql.DB) error {

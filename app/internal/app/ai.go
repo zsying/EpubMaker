@@ -11,8 +11,8 @@ import (
 	"time"
 
 	"epubmaker-desktop/internal/ai"
-	"epubmaker-desktop/internal/aichat"
 	"epubmaker-desktop/internal/aicache"
+	"epubmaker-desktop/internal/aichat"
 	"epubmaker-desktop/internal/aiconfig"
 	"epubmaker-desktop/internal/html"
 	"epubmaker-desktop/internal/library"
@@ -51,14 +51,38 @@ func (b *Backend) GetAIConfig() (*aiconfig.View, error) {
 
 // SaveAIConfig stores the settings. A blank key keeps the stored one — the
 // settings page never receives the key, so a model-only change sends a blank
-// one back.
-func (b *Backend) SaveAIConfig(baseURL, apiKey, model string) error {
-	err := aiconfig.Save(ai.Config{BaseURL: baseURL, APIKey: apiKey, Model: model})
+// one back. chatSystem is the standing prompt for hand-made conversations; a
+// blank one restores the built-in default (ChatSystemFor resolves it).
+func (b *Backend) SaveAIConfig(baseURL, apiKey, model, chatSystem string) error {
+	err := aiconfig.Save(ai.Config{
+		BaseURL:    baseURL,
+		APIKey:     apiKey,
+		Model:      model,
+		ChatSystem: chatSystem,
+	})
 	if err != nil {
 		logx.Event(logx.LevelWarn, "ai", "设置保存失败", "error", err.Error())
 		return err
 	}
 	logx.Event(logx.LevelInfo, "ai", "设置已保存", "baseUrl", baseURL, "model", model)
+	return nil
+}
+
+// AISaveChatSystem stores the standing prompt for hand-made conversations —
+// a save that belongs to the prompt card, so it does not drag the provider
+// fields along. A blank text restores the built-in default; ChatSystemFor
+// resolves empty to it at every new conversation.
+func (b *Backend) AISaveChatSystem(chatSystem string) error {
+	cfg, err := aiconfig.Load()
+	if err != nil {
+		return err
+	}
+	cfg.ChatSystem = strings.TrimSpace(chatSystem)
+	if err := aiconfig.Save(cfg); err != nil {
+		logx.Event(logx.LevelWarn, "ai", "提示词保存失败", "error", err.Error())
+		return err
+	}
+	logx.Event(logx.LevelInfo, "ai", "对话提示词已保存", "chars", itoa(len([]rune(cfg.ChatSystem))))
 	return nil
 }
 

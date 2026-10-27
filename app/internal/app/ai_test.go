@@ -459,15 +459,15 @@ func TestGetAIConfigMasksKey(t *testing.T) {
 func TestSaveAIConfigValidatesAndKeepsKey(t *testing.T) {
 	resetAI(t)
 	b := &Backend{}
-	if err := b.SaveAIConfig("api.openai.com/v1", "k", "m"); err == nil {
+	if err := b.SaveAIConfig("api.openai.com/v1", "k", "m", ""); err == nil {
 		t.Error("a URL without a scheme must be refused")
 	}
-	if err := b.SaveAIConfig("https://api.openai.com/v1", "sk-keep-me", "gpt-4o-mini"); err != nil {
+	if err := b.SaveAIConfig("https://api.openai.com/v1", "sk-keep-me", "gpt-4o-mini", ""); err != nil {
 		t.Fatalf("SaveAIConfig: %v", err)
 	}
 	// The settings page never receives the key, so a model-only change sends
 	// a blank one back — the stored key must survive it.
-	if err := b.SaveAIConfig("https://api.openai.com/v1", "", "gpt-4o"); err != nil {
+	if err := b.SaveAIConfig("https://api.openai.com/v1", "", "gpt-4o", ""); err != nil {
 		t.Fatalf("SaveAIConfig (model change): %v", err)
 	}
 	cfg, err := aiconfig.Load()
