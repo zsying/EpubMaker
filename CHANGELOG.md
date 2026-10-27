@@ -259,6 +259,16 @@ of described.
   fit a segmented sentence plus a reasoning model's thinking, and the whole
   budget going to the thinking is exactly how a successful request looked like
   "no content".
+- **The phone's reader no longer offers 整理** — the action row is 目录 · 书签 ·
+  划线 · 设置. 整理 is chapter tooling (drag chapters into order, an HTML editor,
+  splitting a volume) and none of it fits a phone: opening it ended a reading
+  session in a three-pane desktop layout whose controls a thumb cannot hit. The
+  phone keeps the book-level edit it can actually use — long-press a cover on the
+  shelf for 书名 / 作者 / 标签 / 封面 — and the route itself now answers on a
+  touch-primary device (an old link or a carried-over history entry explains
+  where that edit lives) instead of rendering the desktop page there. The desktop
+  keeps 整理 everywhere it had it: the scroll-mode toolbar, the shelf card, and
+  `/books/:id/edit`.
 
 ### Fixed
 

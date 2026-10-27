@@ -3495,9 +3495,16 @@ export default function Reader() {
 
   /* ---- mobile chrome (微信读书 / 番茄 style) ----
      Top bar: back + chapter title + a page-bookmark star. Bottom: (paged) a
-     chapter slider between 上一章/下一章, a percentage caption, and a five-slot
-     action row (目录 · 书签 · 划线 · 整理 · 设置). The desktop keeps its own
-     bars — the two never render together, gated on touchPrimary. */
+     chapter slider between 上一章/下一章, a percentage caption, and a four-slot
+     action row (目录 · 书签 · 划线 · 设置). The desktop keeps its own bars —
+     the two never render together, gated on touchPrimary.
+
+     整理 is deliberately not one of them. It is chapter tooling — reorder a
+     dragged chapter, publish an HTML editor, split a volume — and every one of
+     those wants a mouse and a wide pane; on a phone it opened a desktop layout
+     behind a reading session nobody meant to leave. The phone's book-level edit
+     (title / author / tags / cover) lives on the shelf instead, behind a
+     long-press, which is the whole of what a thumb can usefully do here. */
   // Only measured while the mobile chrome is actually up: in scroll mode the
   // helper walks text nodes, and doing that on every desktop render is waste.
   const pageBookmark = touchPrimary && chromeOpen ? currentPageBookmark() : null;
@@ -3562,22 +3569,6 @@ export default function Reader() {
       <path d="M16.5 3.5a2.12 2.12 0 013 3L7 19l-4 1 1-4z" />
     </svg>
   );
-  const iconEdit = (
-    <svg
-      viewBox="0 0 24 24"
-      width="20"
-      height="20"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="2"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-    >
-      <path d="M11 4H4v16h16v-7" />
-      <path d="M17.5 3.5a2.12 2.12 0 013 3L13 14l-4 1 1-4z" />
-    </svg>
-  );
-
   const mTabsRow = (
     <div className="m-tabs">
       <button className="m-tab" onClick={() => setTocOpen(true)}>
@@ -3591,10 +3582,6 @@ export default function Reader() {
       <button className="m-tab" onClick={() => setAnnOpen(true)}>
         {iconPen}
         <span>划线</span>
-      </button>
-      <button className="m-tab" onClick={() => nav(`/books/${id}/edit`)}>
-        {iconEdit}
-        <span>整理</span>
       </button>
       <button className="m-tab" onClick={() => setSettingsOpen(true)}>
         <span className="m-aa">Aa</span>

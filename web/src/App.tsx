@@ -1,4 +1,4 @@
-import { useEffect } from 'react';
+import { useEffect, useState, type ReactNode } from 'react';
 import { Link, Navigate, Route, Routes, useLocation } from 'react-router-dom';
 import Library from './pages/Library';
 import Reader from './pages/Reader';
@@ -19,9 +19,34 @@ import Settings from './pages/Settings';
 import Logs from './pages/Logs';
 import { initFileDrop } from './filedrop';
 import { clearBackClosers } from './backNav';
+import { isTouchPrimary } from './device';
 import { api, onSharedImport } from './api';
 import { toast, toastError, Toaster } from './toast';
 import MobileTabs from './components/MobileTabs';
+
+/**
+ * A page that only exists behind a mouse.
+ *
+ * 整理 is chapter tooling — drag chapters into order, publish an HTML editor,
+ * split a volume — and none of it has a phone layout. Removing its entry points
+ * is not the same as removing it: a link from before the upgrade, or a history
+ * entry carried over, still resolves. So the route itself answers on a phone,
+ * and the answer explains where the phone's simpler edit lives rather than
+ * dumping the reader into a desktop pane they cannot operate.
+ */
+function DesktopOnly({ children }: { children: ReactNode }) {
+  const [touch] = useState(isTouchPrimary);
+  if (!touch) return <>{children}</>;
+  return (
+    <div className="page empty">
+      <p style={{ fontSize: 15, marginBottom: 6 }}>整理功能只在桌面端提供</p>
+      <p className="muted">长按书架封面，可以改书名、作者、标签和封面。</p>
+      <Link className="btn" to="/" style={{ marginTop: 16 }}>
+        返回书架
+      </Link>
+    </div>
+  );
+}
 
 export default function App() {
   const loc = useLocation();
@@ -137,7 +162,14 @@ export default function App() {
             <Route path="/wifi" element={<WifiShare />} />
             <Route path="/settings" element={<Settings />} />
             <Route path="/logs" element={<Logs />} />
-            <Route path="/books/:id/edit" element={<Editor />} />
+            <Route
+              path="/books/:id/edit"
+              element={
+                <DesktopOnly>
+                  <Editor />
+                </DesktopOnly>
+              }
+            />
             <Route path="/books/:id/split" element={<Split />} />
             <Route path="*" element={<div className="page empty">页面不存在</div>} />
           </Routes>
