@@ -74,6 +74,21 @@ of described.
   prompt retires its old answers instead of serving stale ones. Empty
   answers, network failures and HTTP errors are never cached, which is what
   keeps 重试 honest. Calls are serialised, so a double tap cannot double-bill.
+- **AI 对话页（底栏「AI」）** — every answer the app has ever asked for is a
+  conversation: a word looked up in a sentence, a sentence broken down, a
+  chapter guided. The list shows where each came from, when it was last added
+  to and the last thing said in it; opening one replays the whole transcript —
+  **system prompt included**, because that is what actually went to the
+  provider — and continues it: the stored messages go back as they were, so
+  the model answers with the context it originally had. 「新对话」 starts a
+  chat by hand. One question is one transcript: a repeat lookup is a cache hit
+  and adds nothing, and a failed send rolls its own question back so a retry
+  cannot duplicate it.
+- **The word card shows the AI gloss it already has** — open a word whose
+  sentence was explained before and the explanation is simply there, under
+  the dictionary entry (or in place of 「词库未收录」). It is a cache read that
+  never calls the provider: the same question, the same answer, no waiting and
+  no cost.
 
 ### Changed
 
