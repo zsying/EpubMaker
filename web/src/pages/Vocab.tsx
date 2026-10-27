@@ -1,11 +1,13 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { api, VocabItem, VocabStats } from '../api';
+import { useBackClose } from '../backNav';
 import { toast, toastError } from '../toast';
-import { STATUS_HINT, STATUS_LABEL } from '../vocabLabels';
+import { STATUS_HINT, STATUS_LABEL, scheduleLine } from '../vocabLabels';
 import { emphasise } from '../highlight';
 import { repairContexts } from '../vocabRepair';
 import { useLoadMore } from '../useLoadMore';
+import VocabCard from '../components/VocabCard';
 
 type Filter = '' | 'new' | 'learning' | 'known';
 
@@ -22,28 +24,6 @@ const FILTERS: { key: Filter; label: string }[] = [
  * first screenful and pulls the rest as it is scrolled to.
  */
 const PAGE = 40;
-
-/** 'When is this due again', said the way a person would say it. */
-function dueLabel(iso: string): string {
-  if (!iso) return '待复习';
-  const at = new Date(iso);
-  if (Number.isNaN(at.getTime())) return '';
-  const ms = at.getTime() - Date.now();
-  if (ms <= 0) return '今天到期';
-  const minutes = Math.round(ms / 60000);
-  if (minutes < 60) return `${Math.max(1, minutes)} 分钟后`;
-  const days = Math.round(ms / 86400000);
-  if (days <= 1) return '明天';
-  // Beyond two months a countdown stops meaning anything; the date reads better.
-  if (days < 60) return `${days} 天后`;
-  return `${at.getMonth() + 1}月${at.getDate()}日`;
-}
-
-/** When the word is due, said the way a schedule would: a word that was never
- * scheduled has no date to show, and saying '今天到期' about it would be wrong. */
-function scheduleLine(dueAt: string): string {
-  return dueAt ? `下次 ${dueLabel(dueAt)}` : '还没复习过';
-}
 
 export default function Vocab() {
   const nav = useNavigate();
@@ -66,6 +46,10 @@ export default function Vocab() {
   // there is nothing to do.
   const [gaps, setGaps] = useState(0);
   const [filling, setFilling] = useState(false);
+  // The word whose sheet is open. Held by id, not by value: the row's sentence
+  // can be repaired in place after the sheet opened (see repairContexts), and a
+  // copy would leave the sheet quoting the fragment the repair just replaced.
+  const [cardId, setCardId] = useState<string | null>(null);
 
   // The list is read in pages, so 'how far in am I' has to be tracked
   // separately from `items.length`: a row dropped as a duplicate must not shift
@@ -184,6 +168,13 @@ export default function Vocab() {
       },
     });
   }
+
+  // The live row: the sheet is drawn from the list, so anything that arrives
+  // while it is open (a repaired sentence, a re-fetched gloss) is what it shows.
+  const card = cardId ? (items.find((it) => it.id === cardId) ?? null) : null;
+  // Hardware back closes the sheet, one press, one layer — and the row stays
+  // where it was.
+  useBackClose(!!card, () => setCardId(null));
 
   // What is worth reviewing right now — not 'everything not yet mastered':
   // a word scheduled for next week is not a word to be asked about today.
@@ -329,9 +320,8 @@ export default function Vocab() {
                 <div className="note-card" key={it.id}>
                   <button
                     className="note-card-main"
-                    onClick={() => jump(it)}
-                    disabled={!it.bookId || !it.chapterId}
-                    title={it.bookTitle ? '回到原文' : '原书已删除'}
+                    onClick={() => setCardId(it.id)}
+                    title="查看释义、原句和 AI 解释"
                   >
                     <div className="vocab-wordline">
                       <span className="vocab-word">{it.term}</span>
@@ -387,6 +377,20 @@ export default function Vocab() {
             ) : null}
           </div>
         </>
+      )}
+
+      {/* The word's own sheet. A row taps into it; the sheet is where the whole
+          sentence and the AI can live, and where 定位原文 is a deliberate second
+          tap rather than a side effect of trying to read a gloss. */}
+      {card && (
+        <VocabCard
+          item={card}
+          onClose={() => setCardId(null)}
+          onLocate={() => {
+            setCardId(null);
+            jump(card);
+          }}
+        />
       )}
     </div>
   );

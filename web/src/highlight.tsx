@@ -30,8 +30,11 @@ function searchForm(text: string): { search: string; at: number[] } {
  * Marks the headword inside its example sentence, so the row reads as a quote
  * rather than an unexplained string. Falls back to the base form when the
  * stored surface text is inflected differently.
+ *
+ * `markClass` is the reader's own accent style when the sentence is quoted back
+ * inside an AI answer; everywhere else the dotted underline of a notebook row.
  */
-export function emphasise(text: string, candidates: string[]): ReactNode {
+export function emphasise(text: string, candidates: string[], markClass = 'vocab-hit'): ReactNode {
   const { search, at } = searchForm(text);
   for (const c of candidates) {
     const needle = searchForm(c.trim()).search;
@@ -46,7 +49,7 @@ export function emphasise(text: string, candidates: string[]): ReactNode {
     return (
       <>
         {text.slice(0, start)}
-        <mark className="vocab-hit">{text.slice(start, stop)}</mark>
+        <mark className={markClass}>{text.slice(start, stop)}</mark>
         {text.slice(stop)}
       </>
     );

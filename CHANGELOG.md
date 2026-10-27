@@ -103,6 +103,15 @@ of described.
   prompt included) and from continuing it. `ParseSentence` and
   `SummarizeChapter` return the conversation id for this; the lookup already
   did.
+- **A notebook row opens the word, not the book** — tapping a word in 生词本
+  used to leave for the chapter it came from, which answered a different
+  question than the tap asked ("what was this?" not "where was this?") and
+  spent a page turn to do it. The row now opens a sheet: the word at reading
+  size with 发音, the gloss, the whole example sentence, the provenance and the
+  schedule, and two actions — 定位原文 (the old behaviour, now a deliberate
+  second tap) and ✦ AI 解释, which explains this word in this sentence and
+  translates it, with 查看完整对话 one tap further on. A previously asked
+  question shows its cached answer inside the sheet without a tap.
 
 ### Changed
 
@@ -136,6 +145,20 @@ of described.
   ~230 ms from tap to shelf. Books whose cover cannot be decoded (WEBP, AVIF,
   SVG) keep using the original image, which is the old behaviour for a handful
   of books rather than a broken shelf.
+- **The example sentence is no longer cut at 220 characters** — the extractor
+  counted 220 characters on each side of the word and stopped, which is not a
+  sentence but half of one: looking up a word inside *Lessons in Chemistry*'s
+  opening sentence stored `…the thirty-year-old mother of Madel`. The walk now
+  runs to the paragraph's own end, and only a block with no sentence terminator
+  at all (a poem, a wall of dialogue) is windowed — 800 characters around the
+  word, marked with `…` on the cut side and never through a word. Rows already
+  in a notebook are re-cut from their chapter the next time the page is opened
+  (`looksLikeFragment` now also flags a context that stops before its own full
+  stop, not only one that starts mid-word).
+- **Notebook rows show five lines of the sentence instead of three** — three cut
+  the ordinary sentence, not just the long one, and an example clipped
+  mid-clause is no example at all. The sheet behind the row shows it whole
+  however long it is.
 - **Taps no longer wait out the double-tap-to-zoom window.** Only the book card
   had `touch-action: manipulation`; on the tab bar the browser held the click
   back for ~292 ms (measured: touchend at 457 ms, click at 749 ms), which is the

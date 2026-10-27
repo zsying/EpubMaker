@@ -19,3 +19,25 @@ export const STATUS_HINT: Record<VocabEntry['status'], string> = {
   known: '连续答对，间隔已经拉长到三周以上',
   ignored: '不再提示',
 };
+
+/** 'When is this due again', said the way a person would say it. */
+export function dueLabel(iso: string): string {
+  if (!iso) return '待复习';
+  const at = new Date(iso);
+  if (Number.isNaN(at.getTime())) return '';
+  const ms = at.getTime() - Date.now();
+  if (ms <= 0) return '今天到期';
+  const minutes = Math.round(ms / 60000);
+  if (minutes < 60) return `${Math.max(1, minutes)} 分钟后`;
+  const days = Math.round(ms / 86400000);
+  if (days <= 1) return '明天';
+  // Beyond two months a countdown stops meaning anything; the date reads better.
+  if (days < 60) return `${days} 天后`;
+  return `${at.getMonth() + 1}月${at.getDate()}日`;
+}
+
+/** When the word is due, said the way a schedule would: a word that was never
+ * scheduled has no date to show, and saying '今天到期' about it would be wrong. */
+export function scheduleLine(dueAt: string): string {
+  return dueAt ? `下次 ${dueLabel(dueAt)}` : '还没复习过';
+}
