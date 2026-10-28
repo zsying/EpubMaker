@@ -268,7 +268,7 @@ const posKey = (id: string) => `epubmaker.pos.${id}`;
 
 // restore carries a layout-independent source character offset (not a page
 // number), so the target page is re-derived from the current layout.
-type PageIntent = { type: 'first' | 'last' | 'restore'; offset?: number } | null;
+type PageIntent = { type: 'first' | 'last' | 'restore'; offset?: number; cid?: string } | null;
 
 // `y`/`bottom` are the selection's viewport edges: overlays flip from one side
 // of the text to the other when there is no room in their preferred direction.
@@ -903,6 +903,17 @@ export default function Reader() {
   // Kept in a ref (not a one-shot intent) so it survives across measure passes
   // — e.g. when the first measurement happens before the stage is laid out.
   const restoreOffsetRef = useRef<number | null>(null);
+  // The chapter a pending restore offset belongs to. Restore offsets and
+  // chapter intents may only be consumed by a measure pass whose DOM actually
+  // holds that chapter — see htmlChapterRef below.
+  const restoreCidRef = useRef<string | null>(null);
+  // The chapter whose html was last handed to setHtml. setCurrent immediately
+  // re-runs the render effect (the annotation list changed) while the DOM
+  // still holds the PREVIOUS chapter, and that pass can beat the
+  // RenderChapter fetch on a slow device — landing the previous chapter's
+  // last page instead of the new one's. Stamped at setHtml time, in both the
+  // success and the failure branch, so a failed load still releases intents.
+  const htmlChapterRef = useRef<string | null>(null);
   const locationUsedRef = useRef(false);
   // A selection to raise once the jump target is actually on screen: the
   // notebook hands over the word's offsets, the annotation drawer the line's.
@@ -967,6 +978,7 @@ export default function Reader() {
           null;
         if (prog && prog.chapterId === target && prog.positionOffset > 0) {
           restoreOffsetRef.current = prog.positionOffset;
+          restoreCidRef.current = target;
         }
         // A preview visit (生词本 / 划线 / 书签) carries its own anchor, which
         // outranks the saved progress: the whole point is landing on THAT spot.
@@ -974,6 +986,7 @@ export default function Reader() {
         const entry = entryRef.current;
         if (entry && !locationUsedRef.current) {
           restoreOffsetRef.current = entry.offset;
+          restoreCidRef.current = target;
           locationUsedRef.current = true;
         }
         if (restoreOffsetRef.current === null) {
@@ -1013,10 +1026,12 @@ export default function Reader() {
     (async () => {
       try {
         const r = await api.renderChapter(id, current);
+        htmlChapterRef.current = current;
         setHtml(r.html);
         if (mode === 'scroll') mainRef.current?.scrollTo({ top: 0, behavior: 'auto' });
       } catch (e) {
         toastError(e);
+        htmlChapterRef.current = current;
         setHtml('<p class="muted">章节内容读取失败</p>');
       }
     })();
@@ -1463,19 +1478,36 @@ export default function Reader() {
     // the ceiling is the last page-aligned index with content, not pc - ppv.
     const maxIdx = Math.max(0, Math.floor((pc - 1) / ppv) * ppv);
     const intent = pageIntentRef.current;
+    // A chapter intent (and a restore offset) may only be consumed by a pass
+    // whose DOM holds the intent's chapter: setCurrent re-runs the render
+    // effect (the annotation list changed) while the DOM still holds the
+    // previous chapter, and on a slow device that pass can beat the
+    // RenderChapter fetch. Consuming there lands the PREVIOUS chapter's
+    // maxIdx — after the swap the reader sits on a seemingly arbitrary page
+    // (device repro: a backward chapter turn stopped at 237/265 instead of
+    // 265/265). An unconsumed intent waits for the pass that follows the
+    // html swap; the peek handoff and the turn fade hold back with it.
+    const intentHere = !!intent && (!intent.cid || intent.cid === htmlChapterRef.current);
+    const restoreHere =
+      restoreCidRef.current === null || restoreCidRef.current === htmlChapterRef.current;
     let nextPage = 0;
+    let landed = false;
 
-    if (restoreOffsetRef.current !== null && offsetMapRef.current.length > 0) {
+    if (restoreOffsetRef.current !== null && restoreHere && offsetMapRef.current.length > 0) {
       // Explicit restore (bookmark / annotation / saved progress): land on the
       // page that currently holds this source offset regardless of layout.
       nextPage = Math.min(pageIndexForOffset(restoreOffsetRef.current), maxIdx);
       restoreOffsetRef.current = null;
-    } else if (intent?.type === 'last') {
+      restoreCidRef.current = null;
+      landed = true;
+    } else if (intentHere && intent?.type === 'last') {
       // Chapter switch backwards: open the previous chapter on its last page.
       nextPage = maxIdx;
-    } else if (intent?.type === 'first') {
+      landed = true;
+    } else if (intentHere && intent?.type === 'first') {
       // Chapter switch forwards (or TOC jump): open on the first page.
       nextPage = 0;
+      landed = true;
     } else if (keepOffset !== null) {
       // Layout change only (font size / window / DPI), same chapter: keep the
       // same text in view rather than the same (now wrong) page number.
@@ -1489,7 +1521,7 @@ export default function Reader() {
       nextPage = Math.max(0, Math.min(maxIdx, nextPage - (nextPage % ppv)));
     }
     setPageIndex(nextPage);
-    pageIntentRef.current = null;
+    if (landed) pageIntentRef.current = null;
 
     // A jump that wants its target selected (notebook word, annotation line)
     // raises the selection UI once the landed page has painted.
@@ -1500,13 +1532,13 @@ export default function Reader() {
     }
 
     // A cross-chapter turn was faded out and is still waiting (see startTurn).
-    // Fade the spread back in ONLY after this measurement has committed the new
-    // chapter's page count and starting page. If we faded in on the safeHtml
-    // change instead, the spread would fade in while pageIndex still pointed at
-    // the OLD chapter, and the index jump on the next frame reads as a visible
-    // "jolt". Deferring one frame guarantees the freshly measured page is
-    // already painted underneath before it becomes visible.
-    if (awaitingChapterRef.current) {
+    // Fade the spread back in ONLY once this measurement has committed the new
+    // chapter's page count and starting page — and only when that measurement
+    // actually consumed the chapter intent (see intentHere above): fading in
+    // on a pass that measured the previous chapter's DOM would reveal the
+    // wrong page mid-swap. If (landed) is deferred, the fade holds until the
+    // pass that follows the html swap.
+    if (awaitingChapterRef.current && landed) {
       awaitingChapterRef.current = false;
       requestAnimationFrame(() => {
         setFxOut(false);
@@ -1518,7 +1550,10 @@ export default function Reader() {
     // been covering the sheet since the slide landed, and the chapter loaded
     // behind it. Now that the new page is measured and painted, dropping the
     // drag offset and the peek together is invisible — both show the same page.
-    if (peekHandoffRef.current) {
+    // Hold the drop while the intent is still pending: letting go of the peek
+    // on the previous chapter's measure would expose the old text for the
+    // rest of the RenderChapter round-trip.
+    if (peekHandoffRef.current && landed) {
       peekHandoffRef.current = false;
       requestAnimationFrame(() => {
         dragTurnRef.current = null;
@@ -1812,10 +1847,11 @@ export default function Reader() {
     setTocOpen(false);
     if (intent?.type === 'restore') {
       restoreOffsetRef.current = intent.offset ?? 0;
+      restoreCidRef.current = cid;
     } else if (intent?.type === 'last') {
-      pageIntentRef.current = { type: 'last' };
+      pageIntentRef.current = { type: 'last', cid };
     } else {
-      pageIntentRef.current = { type: 'first' };
+      pageIntentRef.current = { type: 'first', cid };
     }
     if (cid === current) {
       // Same chapter: setCurrent is a no-op, so force a re-measure to apply the
@@ -2668,6 +2704,7 @@ export default function Reader() {
     }
     if (mode === 'paged') {
       restoreOffsetRef.current = origin.positionOffset;
+      restoreCidRef.current = current; // same chapter, but stamp it anyway
       scheduleMeasure();
       return;
     }
