@@ -169,6 +169,36 @@ of described.
 
 ### Changed
 
+- **「我的」is four intent groups, not a list of links** — the tab used to be
+  seven flat rows (书签 / 划线 / 回收站 / WebDAV / Wi-Fi 传书 / 设置 / 关于) with the
+  dictionary button floating outside the list, which gave 查词词库, WebDAV and
+  设置 the same weight and left no way to see where to start. It is now
+  阅读 / 笔记 / 书库 / AI 与系统, with 关于 demoted to a footer line. Two row
+  sizes carry the hierarchy — a 36px coloured icon tile and two lines for
+  阅读偏好 and 查词词库, a 32px grey tile for the rest — and every row answers
+  "what is the state" on its own: 书签 12, 回收站 3, WebDAV's saved host,
+  the AI model, 词库 100,214 词. The dictionary stays a sheet, but now opens on
+  a status card with the sources listed one by one (name, blurb, size) instead
+  of two bare lines of text.
+- **设置 has one structure for every row** — the whole font catalogue used to
+  be dumped inline (eight chips carrying "下载中…" and "↓") while AI was a
+  single line pointing at another page: the same kind of setting at two
+  different depths. Settings is grouped 外观 / 阅读 / AI / 诊断, and the rule is
+  now explicit — what needs a preview stays inline (the theme swatches, the
+  paged/scroll segment, the switches), what needs browsing or typing sinks a
+  level (the font list, AI 配置, 查看记录). 阅读字体 is therefore a one-line
+  summary that opens a sheet, the sibling of AI 配置.
+- **Theme swatches are mini pages** — five dots that only differed in paper
+  colour are five page previews that also show the ink colour, because the
+  paper alone says nothing about how a page will read.
+- **字号 is settable outside the reader** — the same 13–26 range the Aa panel
+  clamps to, writing the same `epubmaker.fontSize` key, so the setting can be
+  reached without opening a book first.
+- **Warm and status colours follow the dark themes** — `--warn` / `--warn-soft`
+  joined the palette (for 未安装 / 未配置, which must read as attention rather
+  than failure), and the dark and midnight themes now brighten `--ok` /
+  `--danger` and darken their soft fills, so badges and the dictionary status
+  card do not flash a light-theme block on a dark page.
 - **A new chat starts by choosing its prompt, in two steps** — the dropdown that
   mixed the prompt into the composer (and hid the prompt's text entirely) is
   replaced by a chooser: a list of titles with the selected prompt's full text
