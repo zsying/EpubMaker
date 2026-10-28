@@ -16,6 +16,14 @@ of described.
 
 ### Added
 
+- **The phone's shelf long-press menu gains 导出** — long-pressing a book now
+  offers building its EPUB and handing it to the system share sheet, next to
+  编辑 and 删除. The Go side writes the built file into an export staging dir
+  (swept of day-old copies on every export); a dedicated
+  `EpubMakerNative.shareExport` JS surface — its own name, because the v3
+  runtime overwrites `window.wails` and shadows the host bridge — wraps it in
+  a FileProvider URI and opens the Android chooser, so the book can go to
+  WeChat, another reader, or 另存为. The desktop keeps the browser download.
 - **Contextual gloss「✦ AI 释义」** — the word card's ✦ AI asks the model what
   the word means *in this sentence*, how the sentence reads in Chinese, and one
   thing worth noticing about its use. The sentence is the grounding: the word

@@ -3,4 +3,8 @@
     <!-- Camera captures are written here and shared with the camera app via the
          FileProvider. -->
     <cache-path name="captures" path="captures/" />
+
+    <!-- Built EPUB exports wait here for the system share sheet (written by
+         the Go ExportBookFile binding under the app files dir). -->
+    <files-path name="export" path=".epubmaker/tmp/export/" />
 </paths>

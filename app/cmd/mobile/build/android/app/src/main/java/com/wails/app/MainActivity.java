@@ -315,6 +315,10 @@ public class MainActivity extends AppCompatActivity {
         // Add JavaScript interface for Go communication
         webView.addJavascriptInterface(new WailsJSBridge(bridge, webView), "wails");
 
+        // The v3 runtime overwrites window.wails once it loads, shadowing every
+        // @JavascriptInterface on the bridge above — so 导出 gets its own name.
+        webView.addJavascriptInterface(new ExportShareBridge(this), "EpubMakerNative");
+
         // A WebChromeClient is required for HTML <input type="file"> elements to
         // work; without onShowFileChooser the WebView silently ignores clicks on
         // file inputs. It also forwards JS console messages to logcat for
@@ -578,6 +582,35 @@ public class MainActivity extends AppCompatActivity {
             int n = super.read(b, off, (int) Math.min(len, remaining));
             if (n > 0) remaining -= n;
             return n;
+        }
+    }
+
+    /**
+     * Hand a built EPUB to the system share sheet (导出). The file is written
+     * by the Go ExportBookFile binding into the app's export staging dir, which
+     * the FileProvider covers; the reader then sends it anywhere — another
+     * reader app, a cloud drive, "save to files". Called by WailsJSBridge on a
+     * JS thread; starting an activity must happen on the UI thread.
+     */
+    public void shareExportFile(String path, String filename) {
+        try {
+            File file = new File(path);
+            if (!file.exists() || !file.isFile()) {
+                Toast.makeText(this, "导出失败：文件不存在", Toast.LENGTH_SHORT).show();
+                return;
+            }
+            Uri uri = FileProvider.getUriForFile(this, getPackageName() + ".fileprovider", file);
+            Intent send = new Intent(Intent.ACTION_SEND);
+            send.setType("application/epub+zip");
+            send.putExtra(Intent.EXTRA_STREAM, uri);
+            if (filename != null && !filename.isEmpty()) {
+                send.putExtra(Intent.EXTRA_SUBJECT, filename);
+            }
+            send.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+            startActivity(Intent.createChooser(send, "导出 EPUB"));
+        } catch (Exception e) {
+            Log.e(TAG, "shareExportFile failed", e);
+            Toast.makeText(this, "导出失败：" + e.getMessage(), Toast.LENGTH_SHORT).show();
         }
     }
 

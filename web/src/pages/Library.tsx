@@ -11,11 +11,13 @@ import { useBackClose } from '../backNav';
 import {
   api,
   Book,
+  canShareEpubFile,
   DictStatus,
   downloadDataUrl,
   hasNativeDialogs,
   pickEpubFiles,
   pickImageFile,
+  shareEpubFile,
 } from '../api';
 import { canResolveDropPaths, onDroppedFiles } from '../filedrop';
 import { toast, toastError } from '../toast';
@@ -425,8 +427,17 @@ export default function Library() {
   const isFileDrag = (e: ReactDragEvent) =>
     Array.from(e.dataTransfer?.types ?? []).includes('Files');
 
+  // Desktop: build inline and let the browser download. Phone: there is no
+  // download to trigger, so the built file goes to the system share sheet and
+  // the reader sends it wherever they like.
   async function exportBook(book: Book) {
     try {
+      if (canShareEpubFile()) {
+        toast('正在生成 EPUB…');
+        const { path, filename } = await api.exportBookFile(book.id);
+        shareEpubFile(path, filename);
+        return;
+      }
       const { filename, dataUrl } = await api.exportBook(book.id);
       downloadDataUrl(filename, dataUrl);
     } catch (e) {
@@ -816,6 +827,16 @@ export default function Library() {
             <div className="sheet-title">{menuBook.title}</div>
             <button className="sheet-item" onClick={() => openEdit(menuBook)}>
               编辑（书名 / 作者 / 标签 / 封面）
+            </button>
+            <button
+              className="sheet-item"
+              onClick={() => {
+                const bk = menuBook;
+                setMenuBook(null);
+                void exportBook(bk);
+              }}
+            >
+              导出（生成 EPUB 分享）
             </button>
             <button
               className="sheet-item danger"

@@ -656,6 +656,21 @@ export function downloadDataUrl(filename: string, dataUrl: string): void {
   a.remove();
 }
 
+/**
+ * Whether this host can hand a file to the Android share sheet: only the
+ * Android runtime injects EpubMakerNative (the v3 runtime owns window.wails,
+ * so the export surface got its own name). A desktop or a plain browser
+ * preview has no such object and keeps the download flow.
+ */
+export function canShareEpubFile(): boolean {
+  return typeof (window as any).EpubMakerNative?.shareExport === 'function';
+}
+
+/** Opens the system share sheet for a built EPUB file (Android only). */
+export function shareEpubFile(path: string, filename: string): void {
+  (window as any).EpubMakerNative.shareExport(path, filename);
+}
+
 export const api = {
   paths: () => call<AppPaths>('Paths'),
 
@@ -794,6 +809,12 @@ export const api = {
 
   /** Builds the EPUB and returns it inline as { filename, dataUrl }. */
   exportBook: (bookId: string) => call<{ filename: string; dataUrl: string }>('ExportBook', bookId),
+
+  /** Builds the EPUB into the app's export staging dir and answers with the
+   * absolute path plus its file name — the phone's share sheet needs a real
+   * file, not a data URL. */
+  exportBookFile: (bookId: string) =>
+    call<{ path: string; filename: string }>('ExportBookFile', bookId),
 
   /* ---------------- WebDAV ---------------- */
   webdavTest: (conn: WebDavConn) => call<WebDavTestResult>('WebdavTest', conn),
