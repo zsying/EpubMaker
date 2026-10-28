@@ -224,6 +224,14 @@ export default function Library() {
   const visibleBooks = touch ? sortedBooks.slice(0, visibleCount) : sortedBooks;
   const totalRef = useRef(sortedBooks.length);
   totalRef.current = sortedBooks.length;
+  // Whether the sentinel is currently mounted (cards remain). The observer
+  // effect below must re-run when this flips: after the shelf was paged to the
+  // end the sentinel is gone, and the very next sort/filter change re-renders
+  // the full list in one commit — the effect runs while `sentinelRef.current`
+  // is still null, bails, and the paging-reset effect then re-mounts the
+  // sentinel WITHOUT re-running this effect. The observer would stay dead and
+  // the shelf would be stuck on one page until an unrelated dep changed.
+  const hasMore = visibleBooks.length < sortedBooks.length;
 
   // A fresh keyword or order restarts paging — otherwise the reader could be
   // parked on page 4 of a list that just changed underneath them.
@@ -249,7 +257,7 @@ export default function Library() {
     );
     io.observe(el);
     return () => io.disconnect();
-  }, [keyword, sort, dir, activeTag, books, loading, touch]);
+  }, [keyword, sort, dir, activeTag, books, loading, touch, hasMore]);
 
   /* ---- long-press: the phone's per-book menu ----
      A 500ms hold anywhere on the card opens the sheet; any movement cancels it
@@ -895,6 +903,10 @@ export default function Library() {
                 onClick={() => {
                   setSort(o.id);
                   setDirOverride(null);
+                  // Reset paging in the same batch: without this the commit
+                  // between the pick and the reset effect renders the whole
+                  // sorted shelf once — 169 covers decoded for one frame.
+                  setVisibleCount(PAGE_SIZE);
                   setSortOpen(false);
                 }}
               >

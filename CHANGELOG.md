@@ -342,6 +342,14 @@ of described.
 
 ### Fixed
 
+- **Paging no longer dies after the shelf was scrolled to its end** — the
+  load-more sentinel unmounts once every book is rendered, and the observer
+  effect (which bails when the sentinel ref is null) did not re-run when the
+  paging reset re-mounted it: change the sort or the filter after one full
+  scroll-through and the shelf went permanently stuck on its first page of
+  cards. The sentinel's mounted state is now a dependency of that effect, and
+  picking a sort key resets paging in the same batch, so the reset no longer
+  paints the whole sorted shelf for one frame on the way.
 - **Wi-Fi 传书 no longer refuses a book because an unrelated one carries the
   same epub identifier** — import dedupe matched the file's sha256 or the
   epub's `dc:identifier`, and z-library epubs reuse one urn:uuid across
