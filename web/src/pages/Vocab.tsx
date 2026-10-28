@@ -31,6 +31,10 @@ export default function Vocab() {
   const [stats, setStats] = useState<VocabStats | null>(null);
   const [filter, setFilter] = useState<Filter>('');
   const [keyword, setKeyword] = useState('');
+  // The shelf hides its search box behind the header magnifier on a phone and
+  // the notebook now does the same: a permanent 220px field costs a whole row
+  // of fixed chrome above a list that is the point of the page.
+  const [searchOpen, setSearchOpen] = useState(false);
   const [loading, setLoading] = useState(true);
   const [loadingMore, setLoadingMore] = useState(false);
   const [hasMore, setHasMore] = useState(false);
@@ -224,26 +228,87 @@ export default function Vocab() {
   }
 
   return (
-    <div className="page">
-      <div className="lib-head">
+    // Same skeleton as 书架 / AI / 我的 (2026-10-28): title bar fixed, filter row
+    // fixed, only the words scroll. Before this the whole header left the
+    // screen on the first flick — the page had no 生词本 in it while reading.
+    <div className="page shell">
+      <div className={`lib-head${searchOpen ? ' search-open' : ''}`}>
         <h1>生词本</h1>
+        {/* Two counts for two widths: the full one needs ~160px, which only
+            the desktop header has room for. */}
         {stats && (
-          <span className="tag">
+          <span className="tag desk-only">
             {stats.total} 词 · 今日到期 {due} · 已掌握 {stats.known}
+          </span>
+        )}
+        {stats && (
+          <span className="tag phone-only">
+            {stats.total} 词 · 到期 {due}
           </span>
         )}
         <span style={{ flex: 1 }} />
 
         <input
-          className="input vocab-search"
+          className="input vocab-search lib-search-input"
           placeholder="搜索单词或例句…"
           value={keyword}
           onChange={(e) => setKeyword(e.target.value)}
         />
         {/* The history is where the words the notebook declined live, so the
             way in sits next to the notebook it feeds. */}
-        <button className="btn sm" onClick={() => nav('/vocab/history')} title="看都查过哪些词">
+        <button
+          className="btn sm desk-only"
+          onClick={() => nav('/vocab/history')}
+          title="看都查过哪些词"
+        >
           查词历史
+        </button>
+        <button
+          className="btn ghost lib-search-toggle"
+          aria-label={searchOpen ? '收起搜索' : '搜索'}
+          onClick={() => setSearchOpen((v) => !v)}
+        >
+          <svg width="20" height="20" viewBox="0 0 20 20" aria-hidden="true">
+            <circle cx="8.6" cy="8.6" r="5.9" fill="none" stroke="currentColor" strokeWidth="1.7" />
+            <path
+              d="M13.2 13.2 L17.4 17.4"
+              stroke="currentColor"
+              strokeWidth="1.7"
+              strokeLinecap="round"
+            />
+          </svg>
+        </button>
+        {/* The text button above is desktop-only; a phone gets the same page
+            from an icon, named for screen readers and for `getByRole`. */}
+        <button
+          className="btn ghost head-icon"
+          aria-label="查词历史"
+          title="看都查过哪些词"
+          onClick={() => nav('/vocab/history')}
+        >
+          <svg width="20" height="20" viewBox="0 0 20 20" aria-hidden="true">
+            <path
+              d="M10 4.2 A5.8 5.8 0 1 0 15.8 10"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="1.7"
+              strokeLinecap="round"
+            />
+            <path
+              d="M10 6.6 V10 l2.5 1.6"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="1.7"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            />
+            <path
+              d="M13.6 4.4 16 6.2"
+              stroke="currentColor"
+              strokeWidth="1.7"
+              strokeLinecap="round"
+            />
+          </svg>
         </button>
         {/* A pass gets its own page: it is a mode with its own back header and
             no tab bar, and a route is the only way to give it both. */}
@@ -269,115 +334,117 @@ export default function Vocab() {
         ))}
       </div>
 
-      {/* The only network call the notebook makes, and it waits to be asked.
+      <div className="lib-scroll">
+        {/* The only network call the notebook makes, and it waits to be asked.
           Hidden when there is nothing to explain, so it never becomes chrome. */}
-      {gaps > 0 && !loading && (
-        <div className="vocab-gap-bar">
-          <span className="vocab-gap-text">{gaps} 个词还没有释义</span>
-          <button
-            className="btn sm"
-            disabled={filling}
-            onClick={() => void fillGlosses()}
-            title="从有道词典取中文释义（查不到时用 Free Dictionary 的英文释义），查到后存入本地词库，以后不再联网"
-          >
-            {filling ? '联网查词中…' : '联网补全'}
-          </button>
-        </div>
-      )}
+        {gaps > 0 && !loading && (
+          <div className="vocab-gap-bar">
+            <span className="vocab-gap-text">{gaps} 个词还没有释义</span>
+            <button
+              className="btn sm"
+              disabled={filling}
+              onClick={() => void fillGlosses()}
+              title="从有道词典取中文释义（查不到时用 Free Dictionary 的英文释义），查到后存入本地词库，以后不再联网"
+            >
+              {filling ? '联网查词中…' : '联网补全'}
+            </button>
+          </div>
+        )}
 
-      {loading ? (
-        <div className="loading">加载中…</div>
-      ) : items.length === 0 ? (
-        <div className="empty">
-          {keyword || filter
-            ? filter === 'learning'
-              ? '还没有「学习中」的词。复习时点「不记得」的词会落到这里。'
-              : '没有匹配的词。'
-            : '生词本还是空的。阅读时划选单词查一次，同一个词查第二次就会自动收录。'}
-        </div>
-      ) : (
-        <>
-          <div className="note-list">
-            {items.map((it) => {
-              const origin = it.bookTitle
-                ? `${it.bookTitle} · ${it.chapterTitle || '未知章节'}`
-                : '原书已删除';
-              // Two things share one line, and only one of them can give way. The
-              // study line is the reason the page exists, so it stays whole and
-              // short — the schedule, not a tally; the provenance truncates. The
-              // counters still exist, in the row's tooltip.
-              const learn = it.status === 'ignored' ? '' : scheduleLine(it.dueAt);
-              const counts = [
-                it.lookups > 1 ? `查过 ${it.lookups} 次` : '',
-                it.reviews > 0 ? `复习 ${it.reviews} 次` : '',
-                it.lapses > 0 ? `忘过 ${it.lapses} 次` : '',
-              ]
-                .filter(Boolean)
-                .join(' · ');
-              const detail = [origin, counts, learn].filter(Boolean).join(' · ');
+        {loading ? (
+          <div className="loading">加载中…</div>
+        ) : items.length === 0 ? (
+          <div className="empty">
+            {keyword || filter
+              ? filter === 'learning'
+                ? '还没有「学习中」的词。复习时点「不记得」的词会落到这里。'
+                : '没有匹配的词。'
+              : '生词本还是空的。阅读时划选单词查一次，同一个词查第二次就会自动收录。'}
+          </div>
+        ) : (
+          <>
+            <div className="note-list">
+              {items.map((it) => {
+                const origin = it.bookTitle
+                  ? `${it.bookTitle} · ${it.chapterTitle || '未知章节'}`
+                  : '原书已删除';
+                // Two things share one line, and only one of them can give way. The
+                // study line is the reason the page exists, so it stays whole and
+                // short — the schedule, not a tally; the provenance truncates. The
+                // counters still exist, in the row's tooltip.
+                const learn = it.status === 'ignored' ? '' : scheduleLine(it.dueAt);
+                const counts = [
+                  it.lookups > 1 ? `查过 ${it.lookups} 次` : '',
+                  it.reviews > 0 ? `复习 ${it.reviews} 次` : '',
+                  it.lapses > 0 ? `忘过 ${it.lapses} 次` : '',
+                ]
+                  .filter(Boolean)
+                  .join(' · ');
+                const detail = [origin, counts, learn].filter(Boolean).join(' · ');
 
-              return (
-                <div className="note-card" key={it.id}>
-                  <button
-                    className="note-card-main"
-                    onClick={() => setCardId(it.id)}
-                    title="查看释义、原句和 AI 解释"
-                  >
-                    <div className="vocab-wordline">
-                      <span className="vocab-word">{it.term}</span>
-                      {it.phonetic && <span className="dict-phon">/{it.phonetic}/</span>}
-                    </div>
-                    <div className="vocab-trans">{it.translation || '（词库无释义）'}</div>
-                    {it.context && (
-                      <div className="note-card-text">
-                        {emphasise(it.context, [it.surface, it.term])}
+                return (
+                  <div className="note-card" key={it.id}>
+                    <button
+                      className="note-card-main"
+                      onClick={() => setCardId(it.id)}
+                      title="查看释义、原句和 AI 解释"
+                    >
+                      <div className="vocab-wordline">
+                        <span className="vocab-word">{it.term}</span>
+                        {it.phonetic && <span className="dict-phon">/{it.phonetic}/</span>}
                       </div>
-                    )}
-                    {/* One line, always. A long book title used to fold this row in
+                      <div className="vocab-trans">{it.translation || '（词库无释义）'}</div>
+                      {it.context && (
+                        <div className="note-card-text">
+                          {emphasise(it.context, [it.surface, it.term])}
+                        </div>
+                      )}
+                      {/* One line, always. A long book title used to fold this row in
                       two and break '还没复习过' in the middle of a word, so the
                       provenance truncates with an ellipsis instead and the study
                       line beside it never wraps. Status is the last thing on the
                       line — a label, not a column of its own — and `new` is the
                       default, so only a word that has moved on wears a tag. */}
-                    <div className="note-card-meta vocab-meta" title={detail}>
-                      <span className="vocab-origin">{origin}</span>
-                      {learn && <span className="vocab-learn">{learn}</span>}
-                      {it.status !== 'new' && (
-                        <span
-                          className={`vocab-status s-${it.status}`}
-                          title={STATUS_HINT[it.status]}
-                        >
-                          {STATUS_LABEL[it.status]}
-                        </span>
-                      )}
-                    </div>
-                  </button>
-                </div>
-              );
-            })}
-          </div>
-          {/* The list arrives a screenful at a time. Scrolling to this point
+                      <div className="note-card-meta vocab-meta" title={detail}>
+                        <span className="vocab-origin">{origin}</span>
+                        {learn && <span className="vocab-learn">{learn}</span>}
+                        {it.status !== 'new' && (
+                          <span
+                            className={`vocab-status s-${it.status}`}
+                            title={STATUS_HINT[it.status]}
+                          >
+                            {STATUS_LABEL[it.status]}
+                          </span>
+                        )}
+                      </div>
+                    </button>
+                  </div>
+                );
+              })}
+            </div>
+            {/* The list arrives a screenful at a time. Scrolling to this point
               pulls the next one; the button is what the reader can press when
               the observer does not fire, and what says how much is left. */}
-          <div className="list-foot" ref={sentinel}>
-            {loadingMore ? (
-              <span className="list-foot-busy">加载更多…</span>
-            ) : hasMore ? (
-              <button
-                className="btn sm"
-                onClick={() => {
-                  setStalled(false);
-                  void loadMore();
-                }}
-              >
-                {stalled ? '重试' : '加载更多'} · 已显示 {items.length}/{total}
-              </button>
-            ) : total > PAGE ? (
-              <span className="list-foot-end">已显示全部 {total} 个词</span>
-            ) : null}
-          </div>
-        </>
-      )}
+            <div className="list-foot" ref={sentinel}>
+              {loadingMore ? (
+                <span className="list-foot-busy">加载更多…</span>
+              ) : hasMore ? (
+                <button
+                  className="btn sm"
+                  onClick={() => {
+                    setStalled(false);
+                    void loadMore();
+                  }}
+                >
+                  {stalled ? '重试' : '加载更多'} · 已显示 {items.length}/{total}
+                </button>
+              ) : total > PAGE ? (
+                <span className="list-foot-end">已显示全部 {total} 个词</span>
+              ) : null}
+            </div>
+          </>
+        )}
+      </div>
 
       {/* The word's own sheet. A row taps into it; the sheet is where the whole
           sentence and the AI can live, and where 定位原文 is a deliberate second

@@ -244,57 +244,65 @@ function ChatList() {
   }
 
   return (
-    <div className="page">
-      <SubHeader title="AI 对话" tag={total > 0 ? `${total} 条` : undefined} back={false}>
+    // The list is a top-level tab, so it wears the same skeleton as 书架 / 生词本 /
+    // 我的: a fixed title bar and a body that scrolls under it. SubHeader stays
+    // for the conversation page, which really does have something above it.
+    <div className="page shell">
+      <div className="lib-head">
+        <h1>AI 对话</h1>
+        {total > 0 && <span className="tag">{total} 条</span>}
+        <span style={{ flex: 1 }} />
         <button className="btn sm primary" onClick={() => nav('/ai/new')}>
           新对话
         </button>
-      </SubHeader>
+      </div>
 
-      {loading ? (
-        <div className="loading">加载中…</div>
-      ) : items.length === 0 ? (
-        <div className="empty">
-          还没有对话。阅读时点词卡或选区工具条上的 ✦ AI，或点右上角「新对话」直接提问。
-        </div>
-      ) : (
-        <>
-          <div className="note-list">
-            {items.map((c) => (
-              <SwipeRow
-                key={c.id}
-                open={openId === c.id}
-                onOpen={(open) => setOpenId(open ? c.id : null)}
-                onDelete={() => void remove(c.id)}
-              >
-                <div className="note-card">
-                  <button className="note-card-main" onClick={() => nav(`/ai/${c.id}`)}>
-                    <div className="ai-row-head">
-                      <span className={`ai-origin ai-origin-${c.origin}`}>
-                        {ORIGIN_LABEL[c.origin] ?? '对话'}
-                      </span>
-                      <span className="note-card-title">{c.title}</span>
-                    </div>
-                    {c.preview && <div className="ai-row-preview">{c.preview}</div>}
-                    <div className="note-card-meta">
-                      {stamp(c.updatedAt)} · {c.count} 条
-                    </div>
-                  </button>
-                </div>
-              </SwipeRow>
-            ))}
+      <div className="lib-scroll">
+        {loading ? (
+          <div className="loading">加载中…</div>
+        ) : items.length === 0 ? (
+          <div className="empty">
+            还没有对话。阅读时点词卡或选区工具条上的 ✦ AI，或点右上角「新对话」直接提问。
           </div>
-          <div className="ai-more" ref={sentinel}>
-            {hasMore ? (
-              <button className="btn sm" disabled={loadingMore} onClick={() => void loadMore()}>
-                {loadingMore ? '加载中…' : '加载更多'}
-              </button>
-            ) : (
-              <span className="ai-more-end">共 {total} 条</span>
-            )}
-          </div>
-        </>
-      )}
+        ) : (
+          <>
+            <div className="note-list">
+              {items.map((c) => (
+                <SwipeRow
+                  key={c.id}
+                  open={openId === c.id}
+                  onOpen={(open) => setOpenId(open ? c.id : null)}
+                  onDelete={() => void remove(c.id)}
+                >
+                  <div className="note-card">
+                    <button className="note-card-main" onClick={() => nav(`/ai/${c.id}`)}>
+                      <div className="ai-row-head">
+                        <span className={`ai-origin ai-origin-${c.origin}`}>
+                          {ORIGIN_LABEL[c.origin] ?? '对话'}
+                        </span>
+                        <span className="note-card-title">{c.title}</span>
+                      </div>
+                      {c.preview && <div className="ai-row-preview">{c.preview}</div>}
+                      <div className="note-card-meta">
+                        {stamp(c.updatedAt)} · {c.count} 条
+                      </div>
+                    </button>
+                  </div>
+                </SwipeRow>
+              ))}
+            </div>
+            <div className="ai-more" ref={sentinel}>
+              {hasMore ? (
+                <button className="btn sm" disabled={loadingMore} onClick={() => void loadMore()}>
+                  {loadingMore ? '加载中…' : '加载更多'}
+                </button>
+              ) : (
+                <span className="ai-more-end">共 {total} 条</span>
+              )}
+            </div>
+          </>
+        )}
+      </div>
     </div>
   );
 }

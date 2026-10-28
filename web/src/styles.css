@@ -541,13 +541,43 @@ a {
   flex-wrap: wrap;
 }
 
-/* 书架：标题/搜索/导入固定在上，只有书籍列表（含下方存储信息）滚动 */
+/* ------------------------------- 一级页骨架 -------------------------------
+   书架 / 生词本 / AI / 我的 share one skeleton (2026-10-28): a fixed title bar,
+   an optional fixed action row, and a body that scrolls between them. The shelf
+   had this shape first — it is what「我的」and「生词本」were missing, and it is
+   why switching tabs used to move the top of the page: 生词本 lost its title
+   the moment you scrolled, 我的 was never fixed at all, and the shelf's own
+   chip row scrolled away even though the header above it did not.
+
+   The rows are OUTSIDE the scroller rather than `position: sticky` inside it:
+   sticky has to be told where the row above ends, and that number changes when
+   the header wraps (a search box opening, a count pill growing) — two numbers
+   that drift apart leave a gap the content shows through. In a column, each
+   row's height is whatever it is and the scroller starts exactly where the
+   last one ends. */
+.page.shell {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  padding-top: 20px;
+  padding-bottom: 0;
+  overflow: hidden;
+}
+.page.shell > .lib-head,
+.page.shell > .lib-tags,
+.page.shell > .vocab-filters {
+  flex: none;
+}
+/* `.library` stays: the drop outline below is keyed to it. */
 .page.library {
   height: 100%;
   display: flex;
   flex-direction: column;
+  min-height: 0;
   padding-top: 20px;
   padding-bottom: 0;
+  overflow: hidden;
 }
 .page.library .lib-head {
   flex: none;
@@ -720,12 +750,15 @@ a {
 
 /* ---- shelf tag chips ---- */
 
-/* The category row under the shelf header: 全部 + one chip per used tag,
-   horizontally scrollable when the vocabulary grows. */
+/* The category row under the shelf header: 全部 + one chip per used tag.
+   A fixed row now (it used to live inside the scroller), and it bleeds into
+   `.page`'s gutter so a long tag list scrolls to the screen edge instead of
+   being clipped at the padding line. */
 .lib-tags {
   display: flex;
   gap: 6px;
-  padding: 2px 16px 10px;
+  margin: 0 -20px;
+  padding: 2px 20px 10px;
   overflow-x: auto;
   scrollbar-width: none;
   flex: 0 0 auto;
@@ -3601,7 +3634,9 @@ html[data-app-theme='midnight'] .turn-veil-band {
    Bottom tabs + reworked shelf. Everything below is off on the desktop: the
    defaults hide the new affordances, and one media query switches them in. */
 
+.phone-only,
 .tabbar,
+.head-icon,
 .lib-search-toggle,
 .lib-sort-toggle,
 .lib-plus-toggle {
@@ -3620,21 +3655,10 @@ html[data-app-theme='midnight'] .turn-veil-band {
      on the desktop, where /me is reachable only by URL. */
   max-width: 640px;
   margin: 0 auto;
-  padding-bottom: 40px;
 }
 
-.me-head {
-  display: flex;
-  align-items: baseline;
-  gap: 8px;
-  margin: 0 0 2px 2px;
-}
-.me-head h1 {
-  margin: 0;
-  font-size: 21px;
-  font-weight: 650;
-  letter-spacing: 0.2px;
-}
+/* The subtitle under the title: the page is local, and saying so once is more
+   useful than a row of its own. */
 .me-head-note {
   font-size: 11.5px;
   color: var(--text-3);
@@ -4443,6 +4467,7 @@ html[data-app-theme='midnight'] .turn-veil-band {
   /* Icon buttons: .btn's 13px horizontal padding would leave ~12px of content
      box inside a 38px circle and flex-shrink the svg to 10px — the squinty
      search icon this block replaces. */
+  .head-icon,
   .lib-search-toggle,
   .lib-sort-toggle,
   .lib-plus-toggle {
@@ -4456,10 +4481,44 @@ html[data-app-theme='midnight'] .turn-veil-band {
     flex: none;
   }
 
+  .head-icon:active,
   .lib-sort-toggle:active,
   .lib-plus-toggle:active,
   .lib-search-toggle:active {
     background: var(--panel-2);
+  }
+
+  /* One line, always. A header that wraps moves every row below it down, so a
+     fixed bar that can grow is not fixed at all — the title, the count and the
+     icons share the row and the count ellipsises first. `.search-open` is the
+     one exception: the input is meant to take a line of its own. */
+  .page.shell > .lib-head:not(.search-open) {
+    flex-wrap: nowrap;
+    gap: 8px;
+    margin-bottom: 12px;
+  }
+  .page.shell > .lib-head > .tag {
+    min-width: 0;
+    max-width: 40vw;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  /* The notebook's search rides in the header like the shelf's: hidden behind
+     the magnifier, full width once opened. */
+  .lib-head .vocab-search {
+    display: none;
+  }
+  .lib-head.search-open .vocab-search {
+    display: block;
+    width: 100% !important;
+    flex: 1 1 100%;
+  }
+
+  /* Pairs with `.desk-only`: a control or count that only one of the two
+     layouts has room for. */
+  .phone-only {
+    display: inline-flex;
   }
 
   /* A long-press on a cover must open the book sheet, not start a text
@@ -4502,25 +4561,24 @@ html[data-app-theme='midnight'] .turn-veil-band {
     display: none;
   }
 
-  /* Filter buttons become a swipeable chip row. */
+  /* Filter buttons become a swipeable chip row. It is a fixed row now, so it
+     bleeds into the page gutter like the shelf's tag row: a chip clipped at
+     the padding line looks like the list ends there. */
   .vocab-filters {
     flex-wrap: nowrap;
     overflow-x: auto;
     gap: 8px;
-    padding-bottom: 4px;
+    margin: 0 -20px;
+    padding: 0 20px 10px;
+    scrollbar-width: none;
+  }
+  .vocab-filters::-webkit-scrollbar {
+    display: none;
   }
 
   .vocab-filters .btn {
     flex: 0 0 auto;
     white-space: nowrap;
-  }
-
-  /* A 220px search box plus its buttons cannot share a phone-width row: the
-     search takes a line of its own and the buttons sit under it, instead of
-     leaving one button stranded on a third row. */
-  .vocab-search {
-    flex: 1 1 100%;
-    width: 100%;
   }
 
   /* Review pass: the dock leaves the page flow and pins itself to the bottom
@@ -4676,12 +4734,36 @@ html[data-app-theme='midnight'] .turn-veil-band {
   background: var(--chrome-thumb);
   box-shadow: 0 1px 4px rgba(0, 0, 0, 0.4);
 }
-.m-slider-pct {
-  text-align: center;
+/* Page footer: page number left, whole-book progress right. Two ends of one
+   row rather than one centred line — the centre of a phone screen is where
+   neither thumb rests, and it left the percentage as the only thing saying
+   "how far through the book am I" with nothing to anchor it. */
+.m-foot {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 0 2px;
   font-size: 11px;
   line-height: 1.2;
   color: var(--chrome-muted);
+  font-variant-numeric: tabular-nums;
   user-select: none;
+}
+.m-foot-page {
+  /* Empty before the first layout pass; keep the row's height stable so the
+     slider does not jump when the page count arrives. */
+  min-height: 13px;
+}
+.m-foot-pct {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 3px;
+  color: var(--chrome-fg);
+}
+.m-foot-pct-lb {
+  font-size: 10px;
+  opacity: 0.6;
 }
 .m-tabs {
   display: flex;

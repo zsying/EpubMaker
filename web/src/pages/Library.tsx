@@ -621,7 +621,7 @@ export default function Library() {
 
   return (
     <div
-      className={`page library${over ? ' dropping' : ''}`}
+      className={`page library shell${over ? ' dropping' : ''}`}
       // The whole shelf is the drop target, not just the dashed box: a file
       // dragged over a book cover is aimed at the same place in the reader's
       // head, and refusing it there would look broken.
@@ -734,30 +734,35 @@ export default function Library() {
         ) : null}
       </div>
 
-      <div className="lib-scroll">
-        {/* Category chips (历史 / 传记 / 侦探小说…): one tap to a class of
-            books, tap again (or 全部) to release. Rendered only once some
-            book actually carries a tag; 单选, session-only. */}
-        {tagCounts.length > 0 && (
-          <div className="lib-tags" role="group" aria-label="按标签筛选">
+      {/* Category chips (历史 / 传记 / 侦探小说…): one tap to a class of
+          books, tap again (or 全部) to release. Rendered only once some book
+          actually carries a tag; 单选, session-only.
+
+          Outside `.lib-scroll` since 2026-10-28: the chips are the shelf's
+          action row, and they used to slide under the header while the header
+          itself stayed. */}
+      {tagCounts.length > 0 && (
+        <div className="lib-tags" role="group" aria-label="按标签筛选">
+          <button
+            className={`lib-tag-chip${activeTag === null ? ' on' : ''}`}
+            onClick={() => setActiveTag(null)}
+          >
+            全部
+          </button>
+          {tagCounts.map(([t, n]) => (
             <button
-              className={`lib-tag-chip${activeTag === null ? ' on' : ''}`}
-              onClick={() => setActiveTag(null)}
+              key={t}
+              className={`lib-tag-chip${activeTag === t ? ' on' : ''}`}
+              title={`${n} 本`}
+              onClick={() => setActiveTag(activeTag === t ? null : t)}
             >
-              全部
+              {t}
             </button>
-            {tagCounts.map(([t, n]) => (
-              <button
-                key={t}
-                className={`lib-tag-chip${activeTag === t ? ' on' : ''}`}
-                title={`${n} 本`}
-                onClick={() => setActiveTag(activeTag === t ? null : t)}
-              >
-                {t}
-              </button>
-            ))}
-          </div>
-        )}
+          ))}
+        </div>
+      )}
+
+      <div className="lib-scroll">
         {desktop ? (
           <div className={`dropzone${over ? ' over' : ''}`} onClick={() => void pickAndImport()}>
             {importing ? '正在解析 EPUB…' : '把 .epub 文件拖到这里，或点击选择文件（支持多选）'}

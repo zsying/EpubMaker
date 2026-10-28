@@ -350,140 +350,145 @@ export default function Me() {
       : '尚未安装';
 
   return (
-    <div className="page me-page">
-      <div className="me-head">
+    // `.shell` is the four-tab skeleton: the title bar is fixed, everything
+    // below it scrolls (2026-10-28). Same header component as 书架 / 生词本 / AI,
+    // so the four pages agree on where the top of the page is.
+    <div className="page me-page shell">
+      <div className="lib-head">
         <h1>我的</h1>
         <span className="me-head-note">本地 · 离线可用</span>
       </div>
 
-      <div className="me-grp">
-        <div className="me-grp-title">阅读</div>
-        <div className="me-card">
-          <Link className="me-row tall" to="/settings">
-            <span className="me-tile accent">{ICON.prefs}</span>
-            <span className="me-row-text">
-              <span className="me-rt">阅读偏好</span>
-              <span className="me-rs">
-                {prefs.theme} · {prefs.mode} · {prefs.font} {prefs.size}
+      <div className="lib-scroll">
+        <div className="me-grp">
+          <div className="me-grp-title">阅读</div>
+          <div className="me-card">
+            <Link className="me-row tall" to="/settings">
+              <span className="me-tile accent">{ICON.prefs}</span>
+              <span className="me-row-text">
+                <span className="me-rt">阅读偏好</span>
+                <span className="me-rs">
+                  {prefs.theme} · {prefs.mode} · {prefs.font} {prefs.size}
+                </span>
               </span>
-            </span>
-            {CHEV}
-          </Link>
-          <button
-            type="button"
-            className="me-row tall"
-            disabled={!!busy}
-            onClick={() => setSheetOpen(true)}
-          >
-            <span className="me-tile amber">{ICON.dict}</span>
-            <span className="me-row-text">
-              <span className="me-rt">查词词库</span>
-              <span className="me-rs">{dictState}</span>
-            </span>
-            {dict?.installed ? (
-              <span className="me-badge ok">已安装</span>
-            ) : (
-              <span className="me-badge warn">未安装</span>
-            )}
-          </button>
+              {CHEV}
+            </Link>
+            <button
+              type="button"
+              className="me-row tall"
+              disabled={!!busy}
+              onClick={() => setSheetOpen(true)}
+            >
+              <span className="me-tile amber">{ICON.dict}</span>
+              <span className="me-row-text">
+                <span className="me-rt">查词词库</span>
+                <span className="me-rs">{dictState}</span>
+              </span>
+              {dict?.installed ? (
+                <span className="me-badge ok">已安装</span>
+              ) : (
+                <span className="me-badge warn">未安装</span>
+              )}
+            </button>
+          </div>
         </div>
-      </div>
 
-      <div className="me-grp">
-        <div className="me-grp-title">笔记</div>
-        <div className="me-card">
-          <Link className="me-row" to="/bookmarks">
-            <span className="me-tile">{ICON.bookmark}</span>
-            <span className="me-row-text">
-              <span className="me-rt">书签</span>
-            </span>
-            {marks && <span className="me-val">{marks.bookmarks}</span>}
-            {CHEV}
-          </Link>
-          <Link className="me-row" to="/annotations">
-            <span className="me-tile">{ICON.pen}</span>
-            <span className="me-row-text">
-              <span className="me-rt">划线与批注</span>
-            </span>
-            {marks && <span className="me-val">{marks.annotations}</span>}
-            {CHEV}
+        <div className="me-grp">
+          <div className="me-grp-title">笔记</div>
+          <div className="me-card">
+            <Link className="me-row" to="/bookmarks">
+              <span className="me-tile">{ICON.bookmark}</span>
+              <span className="me-row-text">
+                <span className="me-rt">书签</span>
+              </span>
+              {marks && <span className="me-val">{marks.bookmarks}</span>}
+              {CHEV}
+            </Link>
+            <Link className="me-row" to="/annotations">
+              <span className="me-tile">{ICON.pen}</span>
+              <span className="me-row-text">
+                <span className="me-rt">划线与批注</span>
+              </span>
+              {marks && <span className="me-val">{marks.annotations}</span>}
+              {CHEV}
+            </Link>
+          </div>
+        </div>
+
+        <div className="me-grp">
+          <div className="me-grp-title">书库</div>
+          <div className="me-card">
+            <Link className="me-row" to="/webdav">
+              <span className="me-tile">{ICON.cloud}</span>
+              <span className="me-row-text">
+                <span className="me-rt">WebDAV</span>
+              </span>
+              <span className="me-val">{webdav || '未连接'}</span>
+              {CHEV}
+            </Link>
+            <Link className="me-row" to="/wifi">
+              <span className="me-tile">{ICON.wifi}</span>
+              <span className="me-row-text">
+                <span className="me-rt">Wi-Fi 传书</span>
+              </span>
+              {CHEV}
+            </Link>
+            <Link className="me-row" to="/trash">
+              <span className="me-tile">{ICON.trash}</span>
+              <span className="me-row-text">
+                <span className="me-rt">回收站</span>
+              </span>
+              {trashed !== null && (
+                <span className={trashed > 0 ? 'me-val warn' : 'me-val'}>{trashed}</span>
+              )}
+              {CHEV}
+            </Link>
+          </div>
+        </div>
+
+        <div className="me-grp">
+          <div className="me-grp-title">AI 与系统</div>
+          <div className="me-card">
+            <Link className="me-row" to="/llm">
+              <span className="me-tile">{ICON.spark}</span>
+              <span className="me-row-text">
+                <span className="me-rt">AI 配置</span>
+              </span>
+              {ai?.configured ? (
+                <span className="me-val">{ai.model}</span>
+              ) : (
+                <span className="me-badge warn">未配置</span>
+              )}
+              {CHEV}
+            </Link>
+            <Link className="me-row" to="/logs">
+              <span className="me-tile">{ICON.log}</span>
+              <span className="me-row-text">
+                <span className="me-rt">诊断日志</span>
+              </span>
+              {logOn !== null && <span className="me-val">{logOn ? '已开启' : '已关闭'}</span>}
+              {CHEV}
+            </Link>
+          </div>
+        </div>
+
+        <div className="me-foot">
+          <span className="me-foot-line" />
+          <Link className="me-foot-link" to="/about">
+            关于 EpubMaker
+            {version ? ` · ${version}` : ''}
+            <svg width="10" height="10" viewBox="0 0 14 14" aria-hidden="true">
+              <path
+                d="M5 3l5 4-5 4"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="1.8"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              />
+            </svg>
           </Link>
         </div>
-      </div>
-
-      <div className="me-grp">
-        <div className="me-grp-title">书库</div>
-        <div className="me-card">
-          <Link className="me-row" to="/webdav">
-            <span className="me-tile">{ICON.cloud}</span>
-            <span className="me-row-text">
-              <span className="me-rt">WebDAV</span>
-            </span>
-            <span className="me-val">{webdav || '未连接'}</span>
-            {CHEV}
-          </Link>
-          <Link className="me-row" to="/wifi">
-            <span className="me-tile">{ICON.wifi}</span>
-            <span className="me-row-text">
-              <span className="me-rt">Wi-Fi 传书</span>
-            </span>
-            {CHEV}
-          </Link>
-          <Link className="me-row" to="/trash">
-            <span className="me-tile">{ICON.trash}</span>
-            <span className="me-row-text">
-              <span className="me-rt">回收站</span>
-            </span>
-            {trashed !== null && (
-              <span className={trashed > 0 ? 'me-val warn' : 'me-val'}>{trashed}</span>
-            )}
-            {CHEV}
-          </Link>
-        </div>
-      </div>
-
-      <div className="me-grp">
-        <div className="me-grp-title">AI 与系统</div>
-        <div className="me-card">
-          <Link className="me-row" to="/llm">
-            <span className="me-tile">{ICON.spark}</span>
-            <span className="me-row-text">
-              <span className="me-rt">AI 配置</span>
-            </span>
-            {ai?.configured ? (
-              <span className="me-val">{ai.model}</span>
-            ) : (
-              <span className="me-badge warn">未配置</span>
-            )}
-            {CHEV}
-          </Link>
-          <Link className="me-row" to="/logs">
-            <span className="me-tile">{ICON.log}</span>
-            <span className="me-row-text">
-              <span className="me-rt">诊断日志</span>
-            </span>
-            {logOn !== null && <span className="me-val">{logOn ? '已开启' : '已关闭'}</span>}
-            {CHEV}
-          </Link>
-        </div>
-      </div>
-
-      <div className="me-foot">
-        <span className="me-foot-line" />
-        <Link className="me-foot-link" to="/about">
-          关于 EpubMaker
-          {version ? ` · ${version}` : ''}
-          <svg width="10" height="10" viewBox="0 0 14 14" aria-hidden="true">
-            <path
-              d="M5 3l5 4-5 4"
-              fill="none"
-              stroke="currentColor"
-              strokeWidth="1.8"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-            />
-          </svg>
-        </Link>
       </div>
 
       {sheetOpen && (

@@ -3741,8 +3741,19 @@ export default function Reader() {
           下一章
         </button>
       </div>
-      <div className="m-slider-pct">
-        {Math.round(progressPct)}% · 第 {pageIndex + 1}/{pageCount} 页
+      {/* The footer splits what used to be one centred string: page number at
+          the left edge, whole-book progress at the right — both under a thumb,
+          neither in the dead centre of the screen. 全书 has to be spelled out:
+          the percentage counts chapters, not this chapter's pages, and an
+          unlabelled "38%" next to "第 3/12 页" reads like the same number twice. */}
+      <div className="m-foot">
+        <span className="m-foot-page">
+          {pageCount ? `第 ${pageIndex + 1}/${pageCount} 页` : ''}
+        </span>
+        <span className="m-foot-pct">
+          <span className="m-foot-pct-lb">全书</span>
+          {Math.round(progressPct)}%
+        </span>
       </div>
       {mTabsRow}
     </div>
