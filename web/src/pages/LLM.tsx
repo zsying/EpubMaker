@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import SubHeader from '../components/SubHeader';
 import AISettings from '../components/AISettings';
+import { useBackClose } from '../backNav';
 import { api, type AIPrompt } from '../api';
 import { toast, toastError } from '../toast';
 
@@ -22,7 +23,15 @@ import { toast, toastError } from '../toast';
 
 /* ------------------------------ the library ------------------------------- */
 
-type Draft = { id: string; name: string; content: string; system: boolean };
+// `default` carries the built-in text of a system row from the list answer,
+// so the dialog can offer 恢复默认内容 without a second round trip.
+type Draft = {
+  id: string;
+  name: string;
+  content: string;
+  system: boolean;
+  default?: string;
+};
 
 const EMPTY_DRAFT: Draft = { id: '', name: '', content: '', system: false };
 
@@ -31,6 +40,10 @@ function PromptLibraryCard() {
   const [draft, setDraft] = useState<Draft | null>(null);
   const [confirming, setConfirming] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
+
+  // The edit form is a dialog: while it is open, one hardware back closes it
+  // instead of leaving the page.
+  useBackClose(!!draft, () => setDraft(null));
 
   useEffect(() => {
     api
@@ -74,6 +87,9 @@ function PromptLibraryCard() {
         const rest = prev.filter((x) => x.id !== p.id);
         return [p, ...rest];
       });
+      setDraft((d) =>
+        d && d.id === id ? { ...d, name: p.name, content: p.content } : d,
+      );
       toast('已恢复默认', 'success');
     } catch (e) {
       toastError(e);
@@ -106,17 +122,26 @@ function PromptLibraryCard() {
             <button
               className="btn sm"
               onClick={() =>
-                setDraft({ id: p.id, name: p.name, content: p.content, system: p.system })
+                setDraft({
+                  id: p.id,
+                  name: p.name,
+                  content: p.content,
+                  system: p.system,
+                  default: p.default,
+                })
               }
             >
               编辑
             </button>
             {p.system ? (
-              drifted && (
-                <button className="btn sm" onClick={() => void reset(p.id)}>
-                  恢复默认
-                </button>
-              )
+              <button
+                className="btn sm"
+                disabled={!drifted}
+                title={drifted ? '恢复为应用内置文本' : '未修改过，无需恢复'}
+                onClick={() => void reset(p.id)}
+              >
+                恢复默认
+              </button>
             ) : confirming === p.id ? (
               <button className="btn sm danger" onClick={() => void remove(p.id)}>
                 确认删除
@@ -130,51 +155,67 @@ function PromptLibraryCard() {
         );
       })}
 
-      {draft ? (
-        <div className="llm-prompt-form">
-          <div className="field">
-            <label>名称</label>
-            <input
-              className="input"
-              value={draft.name}
-              placeholder="例如：苏格拉底式提问"
-              maxLength={40}
-              onChange={(e) => setDraft({ ...draft, name: e.target.value })}
-            />
+      <div className="ai-set-actions">
+        <button className="btn primary" onClick={() => setDraft({ ...EMPTY_DRAFT })}>
+          ＋ 新增提示词
+        </button>
+      </div>
+
+      {draft && (
+        <div className="llm-dialog-mask" onClick={() => setDraft(null)}>
+          <div className="llm-dialog" onClick={(e) => e.stopPropagation()}>
+            <div className="llm-dialog-title">
+              {draft.id ? '编辑提示词' : '新增提示词'}
+              {draft.system && <span className="llm-badge">系统</span>}
+            </div>
+            <div className="field">
+              <label>名称</label>
+              <input
+                className="input"
+                value={draft.name}
+                placeholder="例如：苏格拉底式提问"
+                maxLength={40}
+                onChange={(e) => setDraft({ ...draft, name: e.target.value })}
+              />
+            </div>
+            <div className="field">
+              <label>提示词内容</label>
+              <textarea
+                className="input llm-prompt"
+                rows={7}
+                value={draft.content}
+                onChange={(e) => setDraft({ ...draft, content: e.target.value })}
+              />
+            </div>
+            {draft.system && draft.default != null && draft.content !== draft.default && (
+              <button
+                className="btn sm llm-dialog-reset"
+                onClick={() =>
+                  setDraft({ ...draft, name: draft.name, content: draft.default ?? '' })
+                }
+              >
+                恢复默认内容
+              </button>
+            )}
+            <div className="ai-set-actions">
+              <button
+                className="btn primary"
+                disabled={saving || !draft.name.trim() || !draft.content.trim()}
+                onClick={() => void save()}
+              >
+                {saving ? '保存中…' : draft.id ? '保存修改' : '保存'}
+              </button>
+              <button className="btn" disabled={saving} onClick={() => setDraft(null)}>
+                取消
+              </button>
+            </div>
+            {draft.system && (
+              <p className="ai-set-note">
+                这是系统提示词：改坏了可以随时「恢复默认」；查词 / 拆句 /
+                导读的改动会直接进入对应功能。
+              </p>
+            )}
           </div>
-          <div className="field">
-            <label>提示词内容</label>
-            <textarea
-              className="input llm-prompt"
-              rows={5}
-              value={draft.content}
-              onChange={(e) => setDraft({ ...draft, content: e.target.value })}
-            />
-          </div>
-          <div className="ai-set-actions">
-            <button
-              className="btn primary"
-              disabled={saving || !draft.name.trim() || !draft.content.trim()}
-              onClick={() => void save()}
-            >
-              {saving ? '保存中…' : draft.id ? '保存修改' : '保存'}
-            </button>
-            <button className="btn" disabled={saving} onClick={() => setDraft(null)}>
-              取消
-            </button>
-          </div>
-          {draft.system && (
-            <p className="ai-set-note">
-              这是系统提示词：改坏了可以随时「恢复默认」；查词 / 拆句 /
-              导读的改动会直接进入对应功能。
-            </p>
-          )}
-        </div>
-      ) : (
-        <div className="ai-set-actions">
-          <button className="btn primary" onClick={() => setDraft({ ...EMPTY_DRAFT })}>
-            ＋ 新增提示词
-          </button>
         </div>
       )}
     </div>

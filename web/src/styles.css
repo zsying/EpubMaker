@@ -5614,10 +5614,41 @@ button.me-dict:disabled {
   -webkit-box-orient: vertical;
   overflow: hidden;
 }
-.llm-prompt-form {
-  margin-top: 12px;
-  padding-top: 12px;
-  border-top: 1px solid var(--border);
+/* the edit dialog: a prompt list can be long, so editing opens centered over
+   the page instead of appending a form under the last row (which used to
+   mean scrolling past every prompt to reach it) */
+.llm-dialog-mask {
+  position: fixed;
+  inset: 0;
+  z-index: 70;
+  background: rgba(15, 23, 42, 0.45);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 18px;
+}
+.llm-dialog {
+  width: 100%;
+  max-width: 560px;
+  max-height: min(85vh, 640px);
+  overflow-y: auto;
+  background: var(--panel);
+  border-radius: 14px;
+  padding: 16px;
+  box-shadow: 0 18px 50px rgba(15, 23, 42, 0.28);
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.llm-dialog-title {
+  font-size: 15px;
+  font-weight: 600;
+}
+.llm-dialog .field {
+  margin: 0;
+}
+.llm-dialog-reset {
+  align-self: flex-start;
 }
 
 /* the seeded-system badge on a library row */

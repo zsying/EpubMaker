@@ -159,6 +159,17 @@ of described.
   deleted, editing is allowed but discouraged (the note says so; a broken edit
   to the JSON-shaped ones feeds straight into the feature), and a drifted row
   offers 恢复默认, which puts the built-in name and text back in one tap.
+- **Editing a prompt opens a dialog, not a form at the bottom of the list** —
+  the old inline editor sat under the last row, so with a long library you had
+  to scroll past every prompt to reach it. The dialog is centered, capped at
+  85vh with its own scroll, closes on a mask tap (and on one hardware back,
+  via the same back-close contract as every other overlay), and for a drifted
+  system row it offers 恢复默认内容 — the built-in text back in the editor,
+  still one 保存 away from being real.
+- **恢复默认 is always on a system row** — it used to appear only after the
+  text had drifted, so a reader who had never edited had no way to see (or
+  trust) that the way back exists. The button is now always there, disabled
+  while pristine, enabled the moment the text leaves the built-in.
 
 - **A page turn moves like paper, and moves nothing but pixels** — turning a page
   inside a chapter used to land in a single frame: the column strip's
