@@ -76,11 +76,11 @@ func ImportEpub(filePath, originalName string) (*BookDTO, error) {
 	}
 
 	// Dedupe before any resource is written: the same file (or, for books from
-	// before hashing existed, the same epub identifier) must not land on the
-	// shelf twice.
+	// before hashing existed, the same epub identifier AND title) must not land
+	// on the shelf twice.
 	sum := sha256.Sum256(data)
 	fileHash := hex.EncodeToString(sum[:])
-	if dupTitle, found, err := findDuplicate(fileHash, parsed.Metadata.Identifier); err != nil {
+	if dupTitle, found, err := findDuplicate(fileHash, parsed.Metadata.Identifier, parsed.Metadata.Title); err != nil {
 		return nil, err
 	} else if found {
 		return nil, fmt.Errorf("%w:%s", ErrDuplicate, dupTitle)
@@ -203,26 +203,56 @@ func insertBookStmt(d *sql.DB, id, title, author, language, publisher, descripti
 
 // findDuplicate reports whether an identical book is already on the shelf.
 // Two keys match: the exact file (sha256), or — for books imported before
-// hashing existed — the epub's dc:identifier. Trashed copies don't count:
-// re-importing while a book sits in the trash gives a fresh copy.
-func findDuplicate(fileHash, identifier string) (string, bool, error) {
+// hashing existed — the epub's dc:identifier, but only when the title matches
+// too. The title guard is not paranoia: z-library epubs have been observed
+// reusing one urn:uuid across unrelated books (a Kissinger set and a 150-book
+// erotica bundle shipped the same identifier), and the identifier alone then
+// vetoes a book the reader never had. Trashed copies don't count: re-importing
+// while a book sits in the trash gives a fresh copy.
+func findDuplicate(fileHash, identifier, title string) (string, bool, error) {
 	d, err := db.Open()
 	if err != nil {
 		return "", false, err
 	}
-	var title string
+	var dupTitle string
 	err = d.QueryRow(
-		`SELECT title FROM books
-		 WHERE deleted_at IS NULL AND (file_hash = ? OR (length(?) > 0 AND identifier = ?))
-		 LIMIT 1`,
-		fileHash, identifier, identifier).Scan(&title)
-	if err == sql.ErrNoRows {
+		`SELECT title FROM books WHERE deleted_at IS NULL AND file_hash = ? LIMIT 1`,
+		fileHash).Scan(&dupTitle)
+	if err == nil {
+		return dupTitle, true, nil
+	}
+	if err != sql.ErrNoRows {
+		return "", false, err
+	}
+	if identifier == "" {
 		return "", false, nil
 	}
+	rows, err := d.Query(
+		`SELECT title FROM books WHERE deleted_at IS NULL AND identifier = ?`, identifier)
 	if err != nil {
 		return "", false, err
 	}
-	return title, true, nil
+	defer rows.Close()
+	for rows.Next() {
+		var t string
+		if err := rows.Scan(&t); err != nil {
+			return "", false, err
+		}
+		if sameTitle(t, title) {
+			return t, true, nil
+		}
+	}
+	return "", false, rows.Err()
+}
+
+// sameTitle compares two metadata titles loosely: case and whitespace are
+// noise between different rips of the same book, not evidence of a different
+// one. A genuinely different book almost never shares both identifier and
+// title with the candidate — and when it does, one extra shelf copy is the
+// cheap wrong answer compared with silently refusing a wanted book.
+func sameTitle(a, b string) bool {
+	return strings.Join(strings.Fields(strings.ToLower(a)), " ") ==
+		strings.Join(strings.Fields(strings.ToLower(b)), " ")
 }
 
 func copyFile(src, dst string) error {

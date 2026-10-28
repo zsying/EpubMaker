@@ -318,6 +318,16 @@ of described.
 
 ### Fixed
 
+- **Wi-Fi 传书 no longer refuses a book because an unrelated one carries the
+  same epub identifier** — import dedupe matched the file's sha256 or the
+  epub's `dc:identifier`, and z-library epubs reuse one urn:uuid across
+  unrelated books: a Kissinger set was rejected as 「已有《TABOO: MEGA Bundle
+  150 BOOKS…》」, a shelf entry the reader could never have confused it with.
+  The identifier now only counts as a duplicate when the title matches too
+  (case- and whitespace-insensitive) — the same-file key is the sha256, and
+  a legacy (pre-hashing) re-import has the same title by construction, so
+  nothing that used to be caught is let through except collisions like this
+  one.
 - **Long chapters from some Chinese EPUBs no longer collapse to a single page
   in paged mode** — txt-converted books wrap whole chapters in
   `<div class="main">`, which collided with the app shell's own `.main
