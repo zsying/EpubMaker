@@ -4328,6 +4328,13 @@ button.me-dict:disabled {
   font-weight: 600;
 }
 
+/* Small section label between the sort keys and the 顺序/倒序 row. */
+.sheet-dir-label {
+  padding: 10px 16px 4px;
+  font-size: 12px;
+  color: var(--text-3);
+}
+
 /* ------------------------------ mobile reader chrome ------------------------------
    WeChat Read / Tomato style: top bar = back + chapter title + page star;
    bottom = chapter slider + a five-slot action row. Phone-only (touchPrimary);

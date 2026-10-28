@@ -82,6 +82,19 @@ const SORT_OPTIONS: Array<{ id: ShelfSort; label: string }> = [
   { id: 'created', label: '按添加时间' },
 ];
 
+const SORT_DIR_KEY = 'epubmaker.shelfSortDir';
+type SortDir = 'asc' | 'desc';
+// Natural direction per key: 书名/作者 read A→Z, 添加时间 shows the newest
+// book first (that was the only direction before this existed, so shelves
+// sorted by time must not flip for users who never touch the toggle).
+// 'default' is the backend's own order — it has no direction at all.
+const DEFAULT_DIR: Record<ShelfSort, SortDir> = {
+  default: 'asc',
+  title: 'asc',
+  author: 'asc',
+  created: 'desc',
+};
+
 // How many cards render before the reader has to scroll for more. The backend
 // returns the whole shelf in one query (local SQLite), so paging is purely a
 // rendering budget: 30 covers as base64 data URLs is real decode work, and a
@@ -155,6 +168,18 @@ export default function Library() {
   const [sort, setSort] = useState<ShelfSort>(
     () => (localStorage.getItem(SORT_KEY) as ShelfSort) || 'default',
   );
+  // Direction (顺序/倒序). Stored only once the user picks one explicitly;
+  // until then every key falls back to its natural direction, so upgrading
+  // users keep the ordering they already had. Picking a different sort key
+  // clears the override — each key starts at its natural direction again.
+  const [dirOverride, setDirOverride] = useState<SortDir | null>(
+    () => (localStorage.getItem(SORT_DIR_KEY) as SortDir | null) || null,
+  );
+  const dir = dirOverride ?? DEFAULT_DIR[sort];
+  useEffect(() => {
+    if (dirOverride === null) localStorage.removeItem(SORT_DIR_KEY);
+    else localStorage.setItem(SORT_DIR_KEY, dirOverride);
+  }, [dirOverride]);
   // How many cards are currently rendered (paging, see PAGE_SIZE). Paging is a
   // phone affordance only: the desktop always painted the whole shelf, and the
   // desktop regressions (drop / shelf) pin that — import must be visible
@@ -183,13 +208,19 @@ export default function Library() {
   const sortedBooks = useMemo(() => {
     const base = activeTag ? books.filter((b) => (b.tags ?? []).includes(activeTag)) : books;
     if (sort === 'default') return base;
+    const mul = dir === 'asc' ? 1 : -1;
     const arr = [...base];
-    if (sort === 'title') arr.sort((a, b) => a.title.localeCompare(b.title, 'zh'));
+    if (sort === 'title') arr.sort((a, b) => mul * a.title.localeCompare(b.title, 'zh'));
     else if (sort === 'author')
-      arr.sort((a, b) => (a.author || '未知作者').localeCompare(b.author || '未知作者', 'zh'));
-    else arr.sort((a, b) => (a.createdAt < b.createdAt ? 1 : a.createdAt > b.createdAt ? -1 : 0));
+      arr.sort(
+        (a, b) => mul * (a.author || '未知作者').localeCompare(b.author || '未知作者', 'zh'),
+      );
+    else
+      arr.sort(
+        (a, b) => mul * (a.createdAt < b.createdAt ? -1 : a.createdAt > b.createdAt ? 1 : 0),
+      );
     return arr;
-  }, [books, sort, activeTag]);
+  }, [books, sort, dir, activeTag]);
   const visibleBooks = touch ? sortedBooks.slice(0, visibleCount) : sortedBooks;
   const totalRef = useRef(sortedBooks.length);
   totalRef.current = sortedBooks.length;
@@ -198,7 +229,7 @@ export default function Library() {
   // parked on page 4 of a list that just changed underneath them.
   useEffect(() => {
     if (touch) setVisibleCount(PAGE_SIZE);
-  }, [keyword, sort, activeTag, touch]);
+  }, [keyword, sort, dir, activeTag, touch]);
 
   // Load more when the sentinel drifts into view. The scroll container is
   // .lib-scroll (the only scroller on this page), the sentinel renders just
@@ -218,7 +249,7 @@ export default function Library() {
     );
     io.observe(el);
     return () => io.disconnect();
-  }, [keyword, sort, activeTag, books, loading, touch]);
+  }, [keyword, sort, dir, activeTag, books, loading, touch]);
 
   /* ---- long-press: the phone's per-book menu ----
      A 500ms hold anywhere on the card opens the sheet; any movement cancels it
@@ -530,11 +561,7 @@ export default function Library() {
     const have = parseTagInput(editForm.tags);
     if (have.includes(t)) return;
     const raw = editForm.tags.trimEnd();
-    const next = !raw
-      ? t
-      : /[,，、;；]$/.test(raw)
-        ? `${raw} ${t}`
-        : `${raw}, ${t}`;
+    const next = !raw ? t : /[,，、;；]$/.test(raw) ? `${raw} ${t}` : `${raw}, ${t}`;
     setEditForm((f) => ({ ...f, tags: next }));
   }
 
@@ -855,7 +882,8 @@ export default function Library() {
       )}
 
       {/* Shelf ordering. Persisted; the phone reaches it from the header
-          sort icon. */}
+          sort icon. Picking a key resets to its natural direction; the
+          方向 row flips 顺序/倒序 and stays open so the ✓ is visible. */}
       {sortOpen && (
         <div className="sheet-mask" onClick={() => setSortOpen(false)}>
           <div className="sheet" role="menu" onClick={(e) => e.stopPropagation()}>
@@ -866,6 +894,7 @@ export default function Library() {
                 className={`sheet-item${sort === o.id ? ' sort-on' : ''}`}
                 onClick={() => {
                   setSort(o.id);
+                  setDirOverride(null);
                   setSortOpen(false);
                 }}
               >
@@ -873,6 +902,26 @@ export default function Library() {
                 {o.label}
               </button>
             ))}
+            {sort !== 'default' && (
+              <>
+                <div className="sheet-dir-label">方向</div>
+                {(
+                  [
+                    { id: 'asc', label: '顺序' },
+                    { id: 'desc', label: '倒序' },
+                  ] as Array<{ id: SortDir; label: string }>
+                ).map((d) => (
+                  <button
+                    key={d.id}
+                    className={`sheet-item${dir === d.id ? ' sort-on' : ''}`}
+                    onClick={() => setDirOverride(d.id)}
+                  >
+                    {dir === d.id ? '✓ ' : ''}
+                    {d.label}
+                  </button>
+                ))}
+              </>
+            )}
             <button className="sheet-item cancel" onClick={() => setSortOpen(false)}>
               取消
             </button>
@@ -964,7 +1013,12 @@ export default function Library() {
               {tagCounts.length > 0 && (
                 <div className="edit-tags-used">
                   {tagCounts.map(([t]) => (
-                    <button key={t} type="button" className="lib-tag-chip" onClick={() => appendEditTag(t)}>
+                    <button
+                      key={t}
+                      type="button"
+                      className="lib-tag-chip"
+                      onClick={() => appendEditTag(t)}
+                    >
                       {t}
                     </button>
                   ))}

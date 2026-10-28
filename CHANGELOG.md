@@ -16,6 +16,13 @@ of described.
 
 ### Added
 
+- **Sort direction on the shelf (顺序 / 倒序)** — the sort sheet gains a
+  方向 row below the sort keys. Every key has a natural direction (titles and
+  authors read A→Z, 添加时间 shows the newest first — exactly what it did
+  before), and the row flips it; the choice persists and a reload keeps it.
+  默认排序 has no direction — it is the backend's own order. Picking a
+  different sort key falls back to that key's natural direction, so a direction
+  left on 倒序 never surprises the next sort.
 - **Tag categories on the shelf** — the tags the metadata editor already took
   are finally visible and useful. A chips row under the shelf header (全部 +
   every used label, most used first) narrows the grid to one class of books
