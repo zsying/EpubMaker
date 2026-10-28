@@ -60,7 +60,10 @@ function sameShelf(a: Book[], b: Book[]): boolean {
       x.updatedAt !== y.updatedAt ||
       x.chapterCount !== y.chapterCount ||
       x.thumbUrl !== y.thumbUrl ||
-      x.coverUrl !== y.coverUrl
+      x.coverUrl !== y.coverUrl ||
+      // Tags draw on the card and drive the chips filter; a re-tagged book
+      // must repaint (arrays are tiny, so string compare is fine).
+      JSON.stringify(x.tags ?? []) !== JSON.stringify(y.tags ?? [])
     ) {
       return false;
     }
@@ -163,15 +166,30 @@ export default function Library() {
   // Ordering is a display concern: the backend returns the shelf in its own
   // order (默认), everything else sorts client-side. localeCompare with the
   // Chinese locale keeps 「书名」 ordering sane for mixed CJK/Latin shelves.
+  // Shelf categories (历史 / 传记 / 侦探小说…): the tags users put on books.
+  // Session-only on purpose — a filter left on overnight must never make the
+  // shelf look like it lost books.
+  const [activeTag, setActiveTag] = useState<string | null>(null);
+
+  // tag -> book count, most used first (ties by name). Only tags that are
+  // actually on books appear here; the chips row and the editor's reuse
+  // suggestions are both built from it.
+  const tagCounts = useMemo(() => {
+    const m = new Map<string, number>();
+    for (const b of books) for (const t of b.tags ?? []) m.set(t, (m.get(t) ?? 0) + 1);
+    return [...m.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0], 'zh'));
+  }, [books]);
+
   const sortedBooks = useMemo(() => {
-    if (sort === 'default') return books;
-    const arr = [...books];
+    const base = activeTag ? books.filter((b) => (b.tags ?? []).includes(activeTag)) : books;
+    if (sort === 'default') return base;
+    const arr = [...base];
     if (sort === 'title') arr.sort((a, b) => a.title.localeCompare(b.title, 'zh'));
     else if (sort === 'author')
       arr.sort((a, b) => (a.author || '未知作者').localeCompare(b.author || '未知作者', 'zh'));
     else arr.sort((a, b) => (a.createdAt < b.createdAt ? 1 : a.createdAt > b.createdAt ? -1 : 0));
     return arr;
-  }, [books, sort]);
+  }, [books, sort, activeTag]);
   const visibleBooks = touch ? sortedBooks.slice(0, visibleCount) : sortedBooks;
   const totalRef = useRef(sortedBooks.length);
   totalRef.current = sortedBooks.length;
@@ -180,7 +198,7 @@ export default function Library() {
   // parked on page 4 of a list that just changed underneath them.
   useEffect(() => {
     if (touch) setVisibleCount(PAGE_SIZE);
-  }, [keyword, sort, touch]);
+  }, [keyword, sort, activeTag, touch]);
 
   // Load more when the sentinel drifts into view. The scroll container is
   // .lib-scroll (the only scroller on this page), the sentinel renders just
@@ -200,7 +218,7 @@ export default function Library() {
     );
     io.observe(el);
     return () => io.disconnect();
-  }, [keyword, sort, books, loading, touch]);
+  }, [keyword, sort, activeTag, books, loading, touch]);
 
   /* ---- long-press: the phone's per-book menu ----
      A 500ms hold anywhere on the card opens the sheet; any movement cancels it
@@ -505,6 +523,21 @@ export default function Library() {
       .filter(Boolean);
   }
 
+  // Reuse chip: append a tag that is already on some book, skipping ones the
+  // input already carries. A comma is appended first when the field does not
+  // end with one, so typing and tapping mix freely.
+  function appendEditTag(t: string) {
+    const have = parseTagInput(editForm.tags);
+    if (have.includes(t)) return;
+    const raw = editForm.tags.trimEnd();
+    const next = !raw
+      ? t
+      : /[,，、;；]$/.test(raw)
+        ? `${raw} ${t}`
+        : `${raw}, ${t}`;
+    setEditForm((f) => ({ ...f, tags: next }));
+  }
+
   async function saveEdit() {
     if (!editBook || editBusy) return;
     setEditBusy(true);
@@ -667,6 +700,29 @@ export default function Library() {
       </div>
 
       <div className="lib-scroll">
+        {/* Category chips (历史 / 传记 / 侦探小说…): one tap to a class of
+            books, tap again (or 全部) to release. Rendered only once some
+            book actually carries a tag; 单选, session-only. */}
+        {tagCounts.length > 0 && (
+          <div className="lib-tags" role="group" aria-label="按标签筛选">
+            <button
+              className={`lib-tag-chip${activeTag === null ? ' on' : ''}`}
+              onClick={() => setActiveTag(null)}
+            >
+              全部
+            </button>
+            {tagCounts.map(([t, n]) => (
+              <button
+                key={t}
+                className={`lib-tag-chip${activeTag === t ? ' on' : ''}`}
+                title={`${n} 本`}
+                onClick={() => setActiveTag(activeTag === t ? null : t)}
+              >
+                {t}
+              </button>
+            ))}
+          </div>
+        )}
         {desktop ? (
           <div className={`dropzone${over ? ' over' : ''}`} onClick={() => void pickAndImport()}>
             {importing ? '正在解析 EPUB…' : '把 .epub 文件拖到这里，或点击选择文件（支持多选）'}
@@ -723,6 +779,21 @@ export default function Library() {
                           author span shrinks instead of ever covering it. */}
                       {pctLabel && <span className="book-progress">{pctLabel}</span>}
                     </div>
+                    {(b.tags?.length ?? 0) > 0 && (
+                      <div className="book-tags">
+                        {/* Two chips fit the card body; the rest collapse into
+                            +n so a heavily tagged book cannot stretch it. The
+                            active filter's tag lights up on its card. */}
+                        {b.tags.slice(0, 2).map((t) => (
+                          <span key={t} className={`book-tag${t === activeTag ? ' hit' : ''}`}>
+                            {t}
+                          </span>
+                        ))}
+                        {b.tags.length > 2 && (
+                          <span className="book-tag more">+{b.tags.length - 2}</span>
+                        )}
+                      </div>
+                    )}
                   </div>
                   {/* These go somewhere of their own — 整理 / 拆分 / 导出 /
                       删除 must not also be read as a tap on the card. */}
@@ -888,6 +959,17 @@ export default function Library() {
                 placeholder="如：小说, 历史"
                 onChange={(e) => setEditForm((f) => ({ ...f, tags: e.target.value }))}
               />
+              {/* Already-in-use labels, most used first: a tap appends instead
+                  of typing, so the same word is never re-typed per book. */}
+              {tagCounts.length > 0 && (
+                <div className="edit-tags-used">
+                  {tagCounts.map(([t]) => (
+                    <button key={t} type="button" className="lib-tag-chip" onClick={() => appendEditTag(t)}>
+                      {t}
+                    </button>
+                  ))}
+                </div>
+              )}
             </label>
             <div className="edit-cover-row">
               <div className="edit-cover">

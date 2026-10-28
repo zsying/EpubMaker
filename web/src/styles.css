@@ -702,6 +702,71 @@ a {
   font-variant-numeric: tabular-nums;
 }
 
+/* ---- shelf tag chips ---- */
+
+/* The category row under the shelf header: 全部 + one chip per used tag,
+   horizontally scrollable when the vocabulary grows. */
+.lib-tags {
+  display: flex;
+  gap: 6px;
+  padding: 2px 16px 10px;
+  overflow-x: auto;
+  scrollbar-width: none;
+  flex: 0 0 auto;
+}
+.lib-tags::-webkit-scrollbar {
+  display: none;
+}
+
+.lib-tag-chip {
+  flex: 0 0 auto;
+  padding: 4px 12px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--text-2);
+  font-size: 12.5px;
+  line-height: 1.4;
+  cursor: pointer;
+  touch-action: manipulation;
+}
+.lib-tag-chip.on {
+  background: var(--accent, #4b7bec);
+  border-color: var(--accent, #4b7bec);
+  color: #fff;
+  font-weight: 600;
+}
+
+/* Tag chips on a card body: quiet pills, at most two + a +n counter. */
+.book-tags {
+  display: flex;
+  gap: 4px;
+  margin-top: 4px;
+  min-width: 0;
+  overflow: hidden;
+}
+.book-tag {
+  flex: 0 1 auto;
+  max-width: 88px;
+  padding: 1px 7px;
+  border-radius: 999px;
+  background: var(--accent-soft, #eaf0ff);
+  color: var(--accent, #4b7bec);
+  font-size: 10.5px;
+  line-height: 1.6;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.book-tag.hit {
+  font-weight: 700;
+}
+.book-tag.more {
+  background: transparent;
+  color: var(--text-3);
+  padding-right: 2px;
+}
+
 .book-actions {
   display: flex;
   gap: 5px;
@@ -4035,6 +4100,14 @@ button.me-dict:disabled {
   width: 100%;
   font-size: 15px;
   padding: 9px 10px;
+}
+
+/* Reuse suggestions under the tags input: tap to append, no retyping. */
+.edit-tags-used {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 2px;
 }
 
 .edit-cover-row {
