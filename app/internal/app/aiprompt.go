@@ -19,14 +19,16 @@ func (b *Backend) AIPromptList() ([]aiprompt.Prompt, error) {
 }
 
 // AIPromptSave creates (blank id) or updates one prompt, and answers with the
-// stored row so the form can adopt the real id without a re-list.
+// stored row so the form can adopt the real id without a re-list. The row is
+// read back rather than echoed: Save does not populate the built-in text a
+// system row carries for the 恢复默认 affordance, and the form needs it.
 func (b *Backend) AIPromptSave(id, name, content string) (*aiprompt.Prompt, error) {
 	p := &aiprompt.Prompt{ID: id, Name: name, Content: content}
 	if err := aiprompt.Save(p); err != nil {
 		return nil, err
 	}
 	logx.Event(logx.LevelInfo, "ai", "提示词已保存", "prompt", p.ID, "name", p.Name)
-	return p, nil
+	return aiprompt.Get(p.ID)
 }
 
 // AIPromptDelete removes one prompt. System prompts refuse: they are part of
