@@ -169,6 +169,27 @@ of described.
 
 ### Changed
 
+- **The four tabs share one skeleton** — 书架 / 生词本 / AI / 我的 used to be four
+  variations of the same idea: the shelf split its header from its scroller so
+  the title stayed, 生词本 used the same header class but inside the page, so
+  scrolling lost the title entirely, the AI list stuck its header down with
+  `position: sticky`, and 我的 was never fixed at all. They now all wear
+  `.page.shell` — a fixed title bar, an optional fixed action row (the shelf's
+  tag chips, the notebook's filter chips), and one scroller between them, which
+  is the shelf's own shape adopted by the other three. Rows sit outside the
+  scroller rather than being sticky inside it: sticky needs to know how tall the
+  row above is, and that number moves whenever the header grows.
+- **生词本's header is one row on a phone** — title, count, 搜索, 查词历史 and
+  复习 used to take three lines (a full-width search box, then the buttons under
+  it). The count now shows the short form (96 词 · 到期 7) where the full one
+  does not fit, 查词历史 becomes a clock icon (still named for screen readers),
+  and the search box hides behind the magnifier exactly like the shelf's — it
+  opens to a full-width field instead of owning a permanent row.
+- **The reader's footer splits in two** — the page number and the progress
+  percentage shared one centred line ("38% · 第 3/12 页"), which put both in the
+  middle of the screen where neither thumb rests. 第 3/12 页 now sits at the left
+  edge and 全书 38% at the right; the label is spelled out because the number
+  counts chapters, not this chapter's pages.
 - **「我的」is four intent groups, not a list of links** — the tab used to be
   seven flat rows (书签 / 划线 / 回收站 / WebDAV / Wi-Fi 传书 / 设置 / 关于) with the
   dictionary button floating outside the list, which gave 查词词库, WebDAV and
