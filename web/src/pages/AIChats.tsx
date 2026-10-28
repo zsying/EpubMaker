@@ -332,12 +332,17 @@ function ChatRoom({ id }: { id: string }) {
   const [sending, setSending] = useState(false);
   const [error, setError] = useState('');
   // The prompt a brand-new conversation opens with, picked before the first
-  // message. '' is the standing prompt from the LLM settings page; a library
-  // id wins over it. The choice only matters while the conversation is still
-  // unnamed: once the first answer lands, the transcript stores the prompt it
-  // was born with, and the picker's job is done.
+  // message. The seeded 对话 row (sys-chat) is the standing prompt the LLM
+  // page maintains; '' falls back to it server-side. The choice only matters
+  // while the conversation is still unnamed: once the first answer lands, the
+  // transcript stores the prompt it was born with, and choosing is over.
   const [prompts, setPrompts] = useState<AIPrompt[]>([]);
   const [promptId, setPromptId] = useState('');
+  // Step 1 of a new chat is the prompt chooser: a list of titles with the
+  // selected prompt's text shown underneath, and 开始对话 to confirm. Only a
+  // chat that has not started can choose — after that the transcript owns
+  // its prompt.
+  const [choosing, setChoosing] = useState(isNew);
   const transcript = useRef<HTMLDivElement | null>(null);
   // The live conversation id: `new` until the first answer creates one.
   const liveId = conv?.id ?? (isNew ? '' : id);
@@ -346,7 +351,14 @@ function ChatRoom({ id }: { id: string }) {
     if (!isNew) return;
     api
       .aiPromptList()
-      .then((ps) => setPrompts(ps ?? []))
+      .then((ps) => {
+        const rows = ps ?? [];
+        setPrompts(rows);
+        // Preselect the standing prompt (the seeded 对话 row) so 开始对话 is
+        // always one tap away; '' covers a list that came back empty.
+        const standing = rows.find((p) => p.id === 'sys-chat') ?? rows[0];
+        if (standing) setPromptId(standing.id);
+      })
       .catch(() => setPrompts([]));
   }, [isNew]);
 
@@ -425,82 +437,105 @@ function ChatRoom({ id }: { id: string }) {
   }
 
   const title = isNew ? '新对话' : (conv?.title ?? 'AI 对话');
+  const picked = prompts.find((p) => p.id === promptId) ?? null;
   return (
     <div className="page ai-room">
       <SubHeader title={title} backTo="/ai" />
 
-      {loading ? (
-        <div className="loading">加载中…</div>
-      ) : (
-        <div className="ai-transcript" ref={transcript}>
-          {msgs.length === 0 && (
-            <div className="empty">
-              直接提问就好：词汇、语法、句子理解，或者任何和阅读有关的问题。
-            </div>
-          )}
-          {msgs.map((m) => (
-            <MessageBubble key={m.id} m={m} />
-          ))}
-          {sending && (
-            <div className="ai-msg ai-msg-assistant">
-              <div className="ai-msg-body ai-msg-pending">AI 思考中…</div>
-            </div>
-          )}
-          {error && (
-            <div className="ai-send-error">
-              <p>{error}</p>
-              <button className="btn sm" onClick={() => void send()}>
-                重试
-              </button>
-            </div>
-          )}
-        </div>
-      )}
-
-      {/* The prompt picker: only a conversation that has not started yet can
-          choose. Once messages exist the transcript has its prompt stored —
-          shown above — and swapping it would make the record lie. */}
-      {isNew && msgs.length === 0 && (
-        <div className="ai-prompt-pick">
-          <label htmlFor="ai-prompt-sel">提示词</label>
-          <select
-            id="ai-prompt-sel"
-            className="select"
-            value={promptId}
-            onChange={(e) => setPromptId(e.target.value)}
-          >
-            <option value="">默认（跟随 LLM 配置）</option>
+      {choosing && isNew ? (
+        /* Step 1 of a new chat: choose the opening prompt. Titles on top,
+           the selected prompt's full text underneath, 开始对话 to commit.
+           The old dropdown mixed the choice into the composer and hid the
+           text entirely — a prompt is the whole point, so it gets shown. */
+        <div className="ai-choose">
+          <p className="ai-choose-hint">选一个提示词开场；进入对话后随时可以直接提问。</p>
+          <div className="ai-choose-list" role="radiogroup" aria-label="提示词">
             {prompts.map((p) => (
-              <option key={p.id} value={p.id}>
-                {p.name}
-              </option>
+              <button
+                key={p.id}
+                type="button"
+                role="radio"
+                aria-checked={promptId === p.id}
+                className={`ai-choose-row${promptId === p.id ? ' on' : ''}`}
+                onClick={() => setPromptId(p.id)}
+              >
+                <span className="ai-choose-name">{p.name}</span>
+                {p.system && <span className="ai-choose-badge">系统</span>}
+              </button>
             ))}
-          </select>
+            {prompts.length === 0 && <div className="empty">提示词库是空的，直接开始就好。</div>}
+          </div>
+          <div className="ai-choose-preview" aria-live="polite">
+            {picked ? picked.content : '未选择提示词：将跟随 LLM 配置的默认开场。'}
+          </div>
+          <div className="ai-choose-actions">
+            <button className="btn primary" onClick={() => setChoosing(false)}>
+              开始对话
+            </button>
+          </div>
         </div>
+      ) : (
+        <>
+          {loading ? (
+            <div className="loading">加载中…</div>
+          ) : (
+            <div className="ai-transcript" ref={transcript}>
+              {msgs.length === 0 && (
+                <div className="empty">
+                  直接提问就好：词汇、语法、句子理解，或者任何和阅读有关的问题。
+                  {isNew && (
+                    <div className="ai-open-prompt">
+                      开场提示词：{picked ? picked.name : '默认'}
+                      <button className="btn sm" onClick={() => setChoosing(true)}>
+                        更换
+                      </button>
+                    </div>
+                  )}
+                </div>
+              )}
+              {msgs.map((m) => (
+                <MessageBubble key={m.id} m={m} />
+              ))}
+              {sending && (
+                <div className="ai-msg ai-msg-assistant">
+                  <div className="ai-msg-body ai-msg-pending">AI 思考中…</div>
+                </div>
+              )}
+              {error && (
+                <div className="ai-send-error">
+                  <p>{error}</p>
+                  <button className="btn sm" onClick={() => void send()}>
+                    重试
+                  </button>
+                </div>
+              )}
+            </div>
+          )}
+          <div className="ai-composer">
+            <textarea
+              value={draft}
+              rows={1}
+              placeholder="问问词汇、语法、阅读理解…"
+              onChange={(e) => setDraft(e.target.value)}
+              onKeyDown={(e) => {
+                // Desktop habit: Enter sends, Shift+Enter breaks a line. On a
+                // phone the keyboard's own send key and the button do the job.
+                if (e.key === 'Enter' && !e.shiftKey) {
+                  e.preventDefault();
+                  void send();
+                }
+              }}
+            />
+            <button
+              className="btn primary"
+              disabled={sending || !draft.trim()}
+              onClick={() => void send()}
+            >
+              发送
+            </button>
+          </div>
+        </>
       )}
-      <div className="ai-composer">
-        <textarea
-          value={draft}
-          rows={1}
-          placeholder="问问词汇、语法、阅读理解…"
-          onChange={(e) => setDraft(e.target.value)}
-          onKeyDown={(e) => {
-            // Desktop habit: Enter sends, Shift+Enter breaks a line. On a
-            // phone the keyboard's own send key and the button do the job.
-            if (e.key === 'Enter' && !e.shiftKey) {
-              e.preventDefault();
-              void send();
-            }
-          }}
-        />
-        <button
-          className="btn primary"
-          disabled={sending || !draft.trim()}
-          onClick={() => void send()}
-        >
-          发送
-        </button>
-      </div>
     </div>
   );
 }

@@ -8,6 +8,7 @@ import (
 	"epubmaker-desktop/internal/ai"
 	"epubmaker-desktop/internal/aichat"
 	"epubmaker-desktop/internal/aiconfig"
+	"epubmaker-desktop/internal/aiprompt"
 )
 
 // stubAIChat replaces the multi-turn seam (used by AIChatSend) with a fake.
@@ -480,17 +481,17 @@ func TestAIChatSendPicksTheOpeningPrompt(t *testing.T) {
 		t.Fatalf("calls = %d, want 1", n)
 	}
 
-	// The reader's configured standing prompt replaces the default, and a
-	// blank one restores it — 配置和恢复 is saving text and saving empty.
-	saveAIConfig(t, ai.Config{
-		BaseURL: "http://ai.test/v1", APIKey: "sk-test", Model: "m",
-		ChatSystem: "你是考研英语家教，回答要给出考点编号。",
-	})
+	// The 对话 row IS the standing prompt now — the LLM page maintains it
+	// inside the library. Editing it changes what future unprompted chats
+	// open with; the built-in default was the seed.
+	if _, err := b.AIPromptSave(aiprompt.SysChat, "对话", "你是考研英语家教，回答要给出考点编号。"); err != nil {
+		t.Fatalf("AIPromptSave(sys-chat): %v", err)
+	}
 	if _, err := b.AIChatSend("", "再讲讲虚拟语气", ""); err != nil {
-		t.Fatalf("AIChatSend(configured): %v", err)
+		t.Fatalf("AIChatSend(standing): %v", err)
 	}
 	if sys := rec.transcripts[1][0]; sys.Content != "你是考研英语家教，回答要给出考点编号。" {
-		t.Errorf("configured opening = %q", sys.Content)
+		t.Errorf("standing opening = %q", sys.Content)
 	}
 
 	// A library prompt wins over both, and keeps its text even after the
@@ -530,12 +531,13 @@ func TestAIChatSendPicksTheOpeningPrompt(t *testing.T) {
 	}
 
 	// An unknown prompt id falls back to the standing resolution, so a picker
-	// row outliving its prompt degrades to the default, not to an error.
+	// row outliving its prompt degrades to the default, not to an error. The
+	// 对话 row was left customized above, so the fallback answers its text.
 	if _, err := b.AIChatSend("", "四讲虚拟语气", "gone"); err != nil {
 		t.Fatalf("AIChatSend(unknown prompt): %v", err)
 	}
 	if sys := rec.transcripts[3][0]; sys.Content != "你是考研英语家教，回答要给出考点编号。" {
-		t.Errorf("unknown-prompt opening = %q, want the configured prompt", sys.Content)
+		t.Errorf("unknown-prompt opening = %q, want the standing prompt", sys.Content)
 	}
 
 	// Continuing an existing conversation keeps its own opening prompt even
@@ -572,15 +574,34 @@ func TestAIPromptBackendCRUD(t *testing.T) {
 	}
 
 	list, err := b.AIPromptList()
-	if err != nil || len(list) != 1 || list[0].Name != "词汇教练 v2" {
-		t.Fatalf("AIPromptList = %+v, %v", list, err)
+	if err != nil {
+		t.Fatalf("AIPromptList: %v", err)
+	}
+	users := 0
+	for _, p := range list {
+		if !p.System {
+			users++
+			if p.Name != "词汇教练 v2" {
+				t.Errorf("user row = %+v", p)
+			}
+		}
+	}
+	if users != 1 {
+		t.Errorf("user rows = %d, want 1 (list %+v)", users, list)
 	}
 
 	if err := b.AIPromptDelete(saved.ID); err != nil {
 		t.Fatalf("AIPromptDelete: %v", err)
 	}
 	list, _ = b.AIPromptList()
-	if len(list) != 0 {
-		t.Errorf("list after delete = %+v, want empty", list)
+	for _, p := range list {
+		if !p.System {
+			t.Errorf("user row survived delete: %+v", p)
+		}
+	}
+
+	// A system row refuses to go away: it is part of the app.
+	if err := b.AIPromptDelete(aiprompt.SysGuide); err == nil {
+		t.Error("deleting a system prompt must be refused")
 	}
 }

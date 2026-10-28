@@ -36,16 +36,30 @@ var aiAskMsgs = func(ctx context.Context, cfg ai.Config, msgs []ai.Message) (ai.
 	return ai.NewClient(cfg).AskMessages(ctx, msgs)
 }
 
-// chatSystemFor a hand-made conversation: a prompt picked from the library
-// wins, then the reader's configured standing prompt, then the built-in
-// default. The chosen text is stored as the conversation's first message, so
-// the transcript always shows what actually shaped the answers, and later
-// edits to the library or the setting never reach back into it.
-func chatSystemFor(promptID string, cfg ai.Config) string {
-	if p, err := aiprompt.Get(promptID); err == nil && p != nil {
+// standingSystem resolves the standing prompt: the 对话 row (sys-chat, which
+// the LLM page maintains inside the library), then the reader's configured
+// text, then the built-in default. The configured text is nearly always
+// shadowed — seeding copied it into the row — but it stays in the chain so an
+// old config still answers even if its row vanished.
+func standingSystem(cfg ai.Config) string {
+	if p, err := aiprompt.Get(aiprompt.SysChat); err == nil && p != nil && strings.TrimSpace(p.Content) != "" {
 		return p.Content
 	}
 	return aiconfig.ChatSystemFor(cfg)
+}
+
+// chatSystemFor a hand-made conversation: a prompt picked from the library
+// wins; otherwise (no pick, or a picked row that has since been deleted) the
+// standing prompt opens the chat. The chosen text is stored as the
+// conversation's first message, so the transcript always shows what actually
+// shaped the answers, and later edits to the library never reach back into it.
+func chatSystemFor(promptID string, cfg ai.Config) string {
+	if promptID != "" && promptID != aiprompt.SysChat {
+		if p, err := aiprompt.Get(promptID); err == nil && p != nil {
+			return p.Content
+		}
+	}
+	return standingSystem(cfg)
 }
 
 // recordConversation files one completed exchange. It is idempotent per cache

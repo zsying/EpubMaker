@@ -14,6 +14,7 @@ import (
 	"epubmaker-desktop/internal/aicache"
 	"epubmaker-desktop/internal/aichat"
 	"epubmaker-desktop/internal/aiconfig"
+	"epubmaker-desktop/internal/aiprompt"
 	"epubmaker-desktop/internal/html"
 	"epubmaker-desktop/internal/library"
 	"epubmaker-desktop/internal/logx"
@@ -313,19 +314,10 @@ func (b *Backend) ExplainInContext(word, sentence string) (*ExplainResult, error
 }
 
 func explainPrompt(word, sentence string) (string, string) {
-	system := `你是英语阅读助手。读者正在读原版书，遇到了一个词，给你这个词和它所在的句子。
-请结合句子回答三件事：
-1. 这个词在本句中的意思；
-2. 整句的中文翻译；
-3. 一条最值得注意的用法、搭配或语法点，没有就留空。
-只输出 JSON，格式：
-{"meaning":"本句中的意思","translation":"整句翻译","pos":"n./v./adj. 这样的词性","note":"用法提示"}
-规则：
-- meaning 用一句中文说清「在这个句子里它是什么意思」，不要罗列词典释义。
-- translation 要通顺自然，像人话，不要逐词直译。
-- pos 只填词性缩写，拿不准就填空字符串。
-- note 最多一条，不要重复 meaning 的内容。
-- 不要输出 JSON 以外的任何内容。`
+	// The prompt lives in the library (fixed id sys-word) so the reader can
+	// tune it in the settings page; ContentFor falls back to the built-in
+	// text when the row is missing, and Reset puts a broken edit back.
+	system := aiprompt.ContentFor(aiprompt.SysWord)
 	return system, "单词：" + word + "\n句子：" + sentence
 }
 
@@ -416,16 +408,9 @@ func (b *Backend) ParseSentence(sentence string) (*ParseResult, error) {
 }
 
 func parsePrompt(sentence string) (string, string) {
-	system := `你是英语语法老师。用户给你一个英文句子，请翻译并拆解它。
-只输出 JSON，格式：
-{"translation": "整句中文翻译",
- "segments": [{"text": "原文片段", "role": "语法角色", "gloss": "该片段的中文"}],
- "notes": ["语法点提示"]}
-规则：
-- translation 在前，要通顺自然，像人话。
-- segments 按句子结构切分且覆盖整个句子，role 用「主语/谓语/宾语/定语/状语/补语」等中文术语。
-- notes 最多 2 条，讲这个句子最值得学的语法点；没有值得讲的就给空数组。
-- 不要输出 JSON 以外的任何内容。`
+	// Same deal as explainPrompt: the text lives in the library (sys-sentence)
+	// and is reader-tunable there.
+	system := aiprompt.ContentFor(aiprompt.SysSentence)
 	return system, "句子：" + sentence
 }
 
@@ -530,16 +515,8 @@ func (b *Backend) SummarizeChapter(bookID, chapterID string) (*SummaryResult, er
 }
 
 func summarizePrompt(title, text string) (string, string) {
-	system := `你是阅读伴侣。用户给你一本书某一章的标题和正文（可能被截断）。
-只输出 JSON，格式：
-{"summary": "本章内容的中文摘要，100 字以内",
- "points": ["本章要点，2-4 条，每条不超过 30 字"],
- "terms": [{"term": "值得记住的英文词", "gloss": "中文释义"}]}
-规则：
-- summary 概括本章讲了什么或发生了什么。
-- points 是章节要点，按行文顺序。
-- terms 挑 3-5 个值得学习的词，优先生词和反复出现的词。
-- 不要输出 JSON 以外的任何内容。`
+	// The 导读 prompt lives in the library (sys-guide), reader-tunable there.
+	system := aiprompt.ContentFor(aiprompt.SysGuide)
 	return system, "章节标题：" + title + "\n正文：\n" + text
 }
 

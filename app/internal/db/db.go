@@ -234,6 +234,7 @@ CREATE TABLE IF NOT EXISTS ai_prompts (
   id         TEXT PRIMARY KEY,
   name       TEXT NOT NULL DEFAULT '',
   content    TEXT NOT NULL DEFAULT '',
+  is_system  INTEGER NOT NULL DEFAULT 0,
   created_at TEXT NOT NULL DEFAULT '',
   updated_at TEXT NOT NULL DEFAULT ''
 );
@@ -303,6 +304,11 @@ func migrate(d *sql.DB) error {
 	                 SELECT MIN(rowid) FROM bookmarks GROUP BY book_id, chapter_id, anchor)`)
 	_, _ = d.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_bookmarks_page
 	               ON bookmarks(book_id, chapter_id, anchor)`)
+	// Migration: ai_prompts grew the is_system flag (seeded system prompts:
+	// 对话 / 查词 / 拆句 / 导读). Older databases get the column with every
+	// row a plain user prompt; aiprompt.seed() then fills the system rows in.
+	_, _ = d.Exec(`ALTER TABLE ai_prompts ADD COLUMN is_system INTEGER NOT NULL DEFAULT 0`)
+	_, _ = d.Exec(`UPDATE ai_prompts SET is_system = 0 WHERE is_system IS NULL`)
 	return nil
 }
 

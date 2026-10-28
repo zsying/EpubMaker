@@ -154,6 +154,10 @@ export interface AIPrompt {
   id: string;
   name: string;
   content: string;
+  /** A seeded system prompt (对话 / 查词 / 拆句 / 导读): no delete, one-tap restore. */
+  system: boolean;
+  /** The built-in text of a system prompt, for the 恢复默认 affordance. */
+  default?: string;
   createdAt: string;
   updatedAt: string;
 }
@@ -943,6 +947,12 @@ export const api = {
 
   /** Deletes one prompt. Conversations already started keep their copy. */
   aiPromptDelete: (id: string) => call<boolean>('AIPromptDelete', id),
+
+  /**
+   * Puts a system prompt back to its built-in name and text. Only the seeded
+   * prompts (对话 / 查词 / 拆句 / 导读) qualify; anything else is refused.
+   */
+  aiPromptReset: (id: string) => call<AIPrompt>('AIPromptReset', id),
 
   /**
    * The cached explanation for one word in one sentence, if the AI already

@@ -29,12 +29,25 @@ func (b *Backend) AIPromptSave(id, name, content string) (*aiprompt.Prompt, erro
 	return p, nil
 }
 
-// AIPromptDelete removes one prompt. Conversations that were started with it
-// keep their stored copy.
+// AIPromptDelete removes one prompt. System prompts refuse: they are part of
+// the app and would seed right back. Conversations that were started with a
+// deleted prompt keep their stored copy.
 func (b *Backend) AIPromptDelete(id string) error {
 	if err := aiprompt.Delete(id); err != nil {
 		return err
 	}
 	logx.Event(logx.LevelInfo, "ai", "提示词已删除", "prompt", id)
 	return nil
+}
+
+// AIPromptReset puts a system prompt back to its built-in name and text. The
+// settings page offers it for the seeded prompts (对话 / 查词 / 拆句 / 导读)
+// because they are editable — a broken edit to the JSON-shaped ones feeds
+// straight into the lookup / parse / guide features, and this is the way back.
+func (b *Backend) AIPromptReset(id string) (*aiprompt.Prompt, error) {
+	if err := aiprompt.Reset(id); err != nil {
+		return nil, err
+	}
+	logx.Event(logx.LevelInfo, "ai", "系统提示词已恢复默认", "prompt", id)
+	return aiprompt.Get(id)
 }

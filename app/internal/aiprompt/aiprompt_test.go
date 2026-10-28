@@ -21,7 +21,10 @@ func TestMain(m *testing.M) {
 	os.Exit(code)
 }
 
-// reset empties the library so every test starts from nothing.
+// reset empties the library so every test starts from nothing. Seeding is a
+// check-and-fill (not a sync.Once), so the first List/Get after a reset puts
+// the system rows back — tests filter them out with userOnly where order or
+// counts matter.
 func reset(t *testing.T) {
 	t.Helper()
 	d, err := db.Open()
@@ -31,6 +34,18 @@ func reset(t *testing.T) {
 	if _, err := d.Exec(`DELETE FROM ai_prompts`); err != nil {
 		t.Fatalf("clear ai_prompts: %v", err)
 	}
+}
+
+// userOnly keeps the user-created rows: tests about CRUD order should not
+// count the seeded system prompts.
+func userOnly(all []Prompt) []Prompt {
+	out := []Prompt{}
+	for _, p := range all {
+		if !p.System {
+			out = append(out, p)
+		}
+	}
+	return out
 }
 
 func TestPromptCRUDRounds(t *testing.T) {
@@ -45,6 +60,9 @@ func TestPromptCRUDRounds(t *testing.T) {
 	}
 	if p.Name != "面试官" || !strings.HasPrefix(p.Content, "你是英语面试官") {
 		t.Errorf("fields not trimmed: %+v", p)
+	}
+	if p.System {
+		t.Error("a blank-id save must create a user prompt")
 	}
 
 	got, err := Get(p.ID)
@@ -78,8 +96,9 @@ func TestPromptCRUDRounds(t *testing.T) {
 	if err != nil {
 		t.Fatalf("List: %v", err)
 	}
-	if len(all) != 2 || all[0].Name != "语法教练" || all[1].ID != p.ID {
-		t.Errorf("List order = %+v, want newest first", all)
+	users := userOnly(all)
+	if len(users) != 2 || users[0].Name != "语法教练" || users[1].ID != p.ID {
+		t.Errorf("List order = %+v, want newest first", users)
 	}
 
 	if err := Delete(p.ID); err != nil {
@@ -119,5 +138,92 @@ func TestGetUnknownIsQuietNil(t *testing.T) {
 	got, err := Get("does-not-exist")
 	if err != nil || got != nil {
 		t.Errorf("Get(unknown) = %v, %v; want nil, nil", got, err)
+	}
+}
+
+func TestSeedIsIdempotentAndSystem(t *testing.T) {
+	reset(t)
+
+	seed() // seedOnce already fired in an earlier test — a no-op either way
+	all, err := List()
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	sys := map[string]Prompt{}
+	for _, p := range all {
+		if p.System {
+			sys[p.ID] = p
+		}
+	}
+	for _, id := range []string{SysChat, SysWord, SysSentence, SysGuide} {
+		p, ok := sys[id]
+		if !ok {
+			t.Errorf("seeded prompt %s missing", id)
+			continue
+		}
+		if p.Default == "" {
+			t.Errorf("%s carries no built-in text for 恢复默认", id)
+		}
+	}
+
+	// The 查词 row IS the built-in text: the lookup feature reads it.
+	if sys[SysWord].Content != BuiltinWord {
+		t.Error("seeded 查词 prompt drifted from the built-in text")
+	}
+
+	// Reset puts an edited system row back.
+	if err := Save(&Prompt{ID: SysWord, Name: "查词（魔改）", Content: "输出诗歌。"}); err != nil {
+		t.Fatalf("Save(system edit): %v", err)
+	}
+	if err := Reset(SysWord); err != nil {
+		t.Fatalf("Reset: %v", err)
+	}
+	p, _ := Get(SysWord)
+	if p == nil || p.Name != "查词" || p.Content != BuiltinWord {
+		t.Errorf("Reset left %+v", p)
+	}
+}
+
+func TestSystemRowsAreProtected(t *testing.T) {
+	reset(t)
+
+	if err := Delete(SysChat); err == nil {
+		t.Error("deleting a system prompt must be refused")
+	}
+	if err := Delete(SysWord); err == nil {
+		t.Error("deleting a system prompt must be refused")
+	}
+	if err := Reset("not-a-system-id"); err == nil {
+		t.Error("Reset on a user prompt must be refused")
+	}
+
+	// Editing is allowed — that is the point of the entry — but the row
+	// stays system and cannot be turned into a user prompt by a save.
+	if err := Save(&Prompt{ID: SysGuide, Name: "导读（自定义）", Content: "换个风格写摘要。"}); err != nil {
+		t.Fatalf("Save(system edit): %v", err)
+	}
+	p, _ := Get(SysGuide)
+	if p == nil || !p.System {
+		t.Errorf("system row lost its flag: %+v", p)
+	}
+}
+
+func TestContentForFallsBackToBuiltin(t *testing.T) {
+	reset(t)
+
+	// A feature must keep working even with its row gone: the built-in text
+	// is the floor, the library row is the override.
+	if got := ContentFor(SysWord); got != BuiltinWord {
+		t.Error("ContentFor(sys-word) with no row must answer the built-in text")
+	}
+	if got := ContentFor("user-gone"); got != "" {
+		t.Errorf("ContentFor(unknown user id) = %q, want empty", got)
+	}
+	// A row overrides the built-in.
+	if err := Save(&Prompt{ID: SysSentence, Name: "拆句", Content: "自定义拆句提示词。"}); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+	if got := ContentFor(SysSentence); got != "自定义拆句提示词。" {
+		t.Errorf("ContentFor override = %q", got)
 	}
 }

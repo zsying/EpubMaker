@@ -5620,24 +5620,101 @@ button.me-dict:disabled {
   border-top: 1px solid var(--border);
 }
 
-/* the prompt picker in a chat that has not started yet */
-.ai-prompt-pick {
-  flex: none;
+/* the seeded-system badge on a library row */
+.llm-badge {
+  display: inline-block;
+  margin-left: 6px;
+  padding: 1px 6px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: normal;
+  color: var(--rd-muted);
+  vertical-align: 1px;
+}
+
+/* step 1 of a new chat: choose the opening prompt */
+.ai-choose {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  max-width: 720px;
+  width: 100%;
+  margin: 0 auto;
+  padding: 10px 0 0;
+}
+.ai-choose-hint {
+  margin: 0;
+  font-size: 12.5px;
+  color: var(--rd-muted);
+}
+.ai-choose-list {
+  display: flex;
+  flex-direction: column;
+  overflow-y: auto;
+}
+.ai-choose-row {
   display: flex;
   gap: 8px;
   align-items: center;
-  max-width: 720px;
-  width: 100%;
-  padding: 8px 0 0;
+  padding: 11px 12px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: transparent;
+  color: inherit;
+  text-align: left;
+  font-size: 14px;
+  cursor: pointer;
 }
-.ai-prompt-pick label {
-  font-size: 12.5px;
-  color: var(--rd-muted);
-  white-space: nowrap;
+.ai-choose-row + .ai-choose-row {
+  margin-top: 8px;
 }
-.ai-prompt-pick .select {
+.ai-choose-row.on {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+.ai-choose-name {
   flex: 1;
   min-width: 0;
+}
+.ai-choose-badge {
+  flex: none;
+  padding: 1px 6px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  font-size: 11px;
+  color: var(--rd-muted);
+}
+.ai-choose-preview {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 12px;
+  border: 1px dashed var(--border);
+  border-radius: 10px;
+  font-size: 12.5px;
+  line-height: 1.7;
+  white-space: pre-wrap;
+  color: var(--rd-muted);
+}
+.ai-choose-actions {
+  flex: none;
+  display: flex;
+  justify-content: flex-end;
+  padding-bottom: 4px;
+}
+
+/* the standing prompt shown in a chat room that has not started yet */
+.ai-open-prompt {
+  margin-top: 10px;
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  justify-content: center;
+  font-size: 12.5px;
+  color: var(--rd-muted);
 }
 
 /* the composer */

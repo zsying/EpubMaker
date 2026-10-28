@@ -145,6 +145,21 @@ of described.
 
 ### Changed
 
+- **A new chat starts by choosing its prompt, in two steps** — the dropdown that
+  mixed the prompt into the composer (and hid the prompt's text entirely) is
+  replaced by a chooser: a list of titles with the selected prompt's full text
+  previewed underneath, and one 开始对话 button to commit. The seeded 对话 row
+  is preselected, so confirming is one tap; before the first message the room
+  still shows which prompt is opening it, with a 更换 way back.
+- **The prompt library absorbed the 对话提示词 card** — /llm is two cards now.
+  The library ships with four seeded system prompts: 对话 (the standing prompt
+  every hand-made chat opens with, migrated from the old setting), and the
+  built-in texts of 查词 / 拆句 / 导读, which those features now read from the
+  library — editing them is real, for better or worse. System rows cannot be
+  deleted, editing is allowed but discouraged (the note says so; a broken edit
+  to the JSON-shaped ones feeds straight into the feature), and a drifted row
+  offers 恢复默认, which puts the built-in name and text back in one tap.
+
 - **A page turn moves like paper, and moves nothing but pixels** — turning a page
   inside a chapter used to land in a single frame: the column strip's
   `translate3d` jumped from one page to the next. It now slides over 210 ms, with
