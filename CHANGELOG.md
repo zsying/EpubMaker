@@ -16,6 +16,15 @@ of described.
 
 ### Added
 
+- **Tag categories on the shelf** — the tags the metadata editor already took
+  are finally visible and useful. A chips row under the shelf header (全部 +
+  every used label, most used first) narrows the grid to one class of books
+  with a tap and releases it with another; filtering is single-select and
+  lives only for the session, so the shelf never comes back looking smaller
+  than it was left. Cards draw up to two tag chips (+n past that), the active
+  tag lighting up on its card, and the phone's editor offers already-used
+  labels as reuse chips so the same word is never retyped per book. No
+  backend change: ListBooks already carried the tags.
 - **The phone's shelf long-press menu gains 导出** — long-pressing a book now
   offers building its EPUB and handing it to the system share sheet, next to
   编辑 and 删除. The Go side writes the built file into an export staging dir
