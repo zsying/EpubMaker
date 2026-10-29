@@ -188,8 +188,10 @@ of described.
 - **The reader's footer splits in two** — the page number and the progress
   percentage shared one centred line ("38% · 第 3/12 页"), which put both in the
   middle of the screen where neither thumb rests. 第 3/12 页 now sits at the left
-  edge and 全书 38% at the right; the label is spelled out because the number
-  counts chapters, not this chapter's pages.
+  edge and 全书 38% at the right. The label is spelled out because the two
+  numbers have different denominators — this chapter's pages against the whole
+  book — and an unlabelled percentage beside a page counter invites reading one
+  as a restatement of the other.
 - **「我的」is four intent groups, not a list of links** — the tab used to be
   seven flat rows (书签 / 划线 / 回收站 / WebDAV / Wi-Fi 传书 / 设置 / 关于) with the
   dictionary button floating outside the list, which gave 查词词库, WebDAV and
@@ -393,6 +395,22 @@ of described.
 
 ### Fixed
 
+- **生词本's title no longer breaks in two on a 360px phone** — the fixed bar
+  put the title, the count and four controls in one 360px row and came to
+  ~357px, so flex took the difference out of the `h1` and 生词本 rendered as
+  生词 / 本, doubling the height of a bar that is supposed to be fixed. The
+  title is now `flex: 0 0 auto; white-space: nowrap`; whatever has to give is
+  the count, via ellipsis. The phone count also drops 「· 到期 N」 — the 复习
+  button beside it already carries that number, and the duplicate was a large
+  part of what filled the row.
+- **The search box no longer turns the header into three rows** — the input is
+  ordered after the buttons in the DOM (right for the desktop row, where it
+  reads left of them), and on a phone `flex: 1 1 100%` claimed a whole line and
+  pushed 搜索 / 查词历史 / 复习 onto a third. `order: 10` sends the input to the
+  end of the row: opening the search costs one line (38px → 78px) instead of
+  two, and closing it returns to 38px. The collapsed and open states also share
+  one `margin-bottom` now, so the scroller shrinks by exactly what the header
+  grows and the list keeps ending at the tab bar.
 - **Paging no longer dies after the shelf was scrolled to its end** — the
   load-more sentinel unmounts once every book is rendered, and the observer
   effect (which bails when the sentinel ref is null) did not re-run when the
