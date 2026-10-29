@@ -204,7 +204,19 @@ Push-Location $AndroidDir
 try {
   # -PabiDir keeps the other ABI's libwails.so out of the APK: jniLibs is a
   # plain source directory, so it accumulates one subdirectory per build.
-  & cmd /c "gradlew.bat assembleDebug --no-daemon -PabiDir=$AbiDir"
+  #
+  # Gradle writes warnings to stderr (javac's notes are localized, so they read
+  # as 「注: 某些文件使用或覆盖了已过时的 API」), and under
+  # $ErrorActionPreference = 'Stop' a native command's stderr becomes a
+  # terminating error: the build succeeded and the script reported a failure.
+  # Same relaxation as Get-JavaMajor above; the exit code is what decides.
+  $previous = $ErrorActionPreference
+  $ErrorActionPreference = 'Continue'
+  try {
+    & cmd /c "gradlew.bat assembleDebug --no-daemon -PabiDir=$AbiDir"
+  } finally {
+    $ErrorActionPreference = $previous
+  }
   if ($LASTEXITCODE -ne 0) { throw 'gradle assembleDebug failed' }
 } finally { Pop-Location }
 
