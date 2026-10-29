@@ -939,9 +939,17 @@ export const api = {
 
   /* ------------- AI conversations: the transcripts, and continuing them ------------- */
 
-  /** One page of conversations, newest activity first (30 unless told otherwise). */
-  aiConversations: (offset = 0, limit = 30) =>
-    call<AIConversationPage>('AIConversations', offset, limit),
+  /**
+   * One page of conversations, newest activity first (30 unless told otherwise).
+   *
+   * `origin` narrows the list to one kind (lookup / parse / summarize / manual),
+   * `keyword` searches titles and message bodies; both empty is the whole
+   * library. The filter is the backend's job, not the page's: only thirty rows
+   * are in hand at a time, so a client-side filter would search one page and
+   * silently miss the rest.
+   */
+  aiConversations: (origin = '', keyword = '', offset = 0, limit = 30) =>
+    call<AIConversationPage>('AIConversations', origin, keyword, offset, limit),
 
   /** One transcript in full — system prompt included. */
   aiConversation: (id: string) => call<AIConversationDetail | null>('AIConversation', id),

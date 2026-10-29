@@ -35,6 +35,23 @@ const ORIGIN_LABEL: Record<string, string> = {
   manual: '对话',
 };
 
+/**
+ * The classification chips above the list: 全部, then one per origin. Same row,
+ * same chips as the shelf's tags and the notebook's statuses — the three tabs
+ * are one design, and a filter that looks different on each page reads as
+ * three different products.
+ */
+const ORIGIN_FILTERS: Array<{ key: string; label: string }> = [
+  { key: '', label: '全部' },
+  { key: 'lookup', label: '查词' },
+  { key: 'parse', label: '拆句' },
+  { key: 'summarize', label: '导读' },
+  { key: 'manual', label: '对话' },
+];
+
+/** Debounce for the search box: one keystroke is one query, not one per letter. */
+const SEARCH_MS = 180;
+
 /** Rows per request. The list grows on scroll; it never asks for everything. */
 const PAGE = 30;
 
@@ -167,6 +184,20 @@ function ChatList() {
   const [loading, setLoading] = useState(true);
   const [loadingMore, setLoadingMore] = useState(false);
   const [openId, setOpenId] = useState<string | null>(null);
+  // 全部 / 查词 / 拆句 / 导读 / 对话, and a search box. Both narrow the list on
+  // the backend: only a page of rows is in hand at a time, so filtering here
+  // would search the thirty on screen and quietly miss the rest.
+  const [filter, setFilter] = useState('');
+  const [keyword, setKeyword] = useState('');
+  // The phone hides the field behind the magnifier, like the shelf and the
+  // notebook: a permanent 220px search box is a row of fixed chrome above a
+  // list that is the point of the page.
+  const [searchOpen, setSearchOpen] = useState(false);
+  // Whether the library holds anything at all, independent of the current
+  // filter. The chips row is drawn from this: hiding it the moment a filter
+  // matches nothing would strand the reader inside an empty list with no way
+  // back to 全部.
+  const [anyTotal, setAnyTotal] = useState(0);
   const sentinel = useRef<HTMLDivElement | null>(null);
   // The page cursor is "how many rows I already hold", read inside the scroll
   // observer — which is created once, so it cannot close over the latest state.
@@ -174,32 +205,53 @@ function ChatList() {
   held.current = items.length;
   const busy = useRef(false);
   const more = useRef<() => void>(() => {});
+  // Bumped on every new query. A page that lands for a previous filter is
+  // dropped instead of being mixed into a list it does not belong to.
+  const query = useRef(0);
+  // The first query is not a keystroke: it opens the page, and paying the
+  // debounce there would put a 180ms blank in front of the list for nothing.
+  const firstLoad = useRef(true);
 
   useEffect(() => {
     let alive = true;
-    api
-      .aiConversations(0, PAGE)
-      .then((p) => {
-        if (!alive) return;
+    const seq = ++query.current;
+    setLoading(true);
+    // A page still in flight when the filter changed belongs to the old list;
+    // its `finally` will not run for this query, so clear the flag here or the
+    // new list could never load a second screenful.
+    setLoadingMore(false);
+    const delay = firstLoad.current ? 0 : SEARCH_MS;
+    firstLoad.current = false;
+    const timer = setTimeout(async () => {
+      try {
+        const p = await api.aiConversations(filter, keyword.trim(), 0, PAGE);
+        if (!alive || seq !== query.current) return;
         setItems(p.items);
         setTotal(p.total);
         setHasMore(p.hasMore);
-      })
-      .catch((e) => toastError(e))
-      .finally(() => {
-        if (alive) setLoading(false);
-      });
+        // The unfiltered answer is the only one that says how big the library
+        // is; captured whenever the list is asked for without a filter.
+        if (!filter && !keyword.trim()) setAnyTotal(p.total);
+      } catch (e) {
+        if (alive && seq === query.current) toastError(e);
+      } finally {
+        if (alive && seq === query.current) setLoading(false);
+      }
+    }, delay);
     return () => {
       alive = false;
+      clearTimeout(timer);
     };
-  }, []);
+  }, [filter, keyword]);
 
   async function loadMore() {
-    if (busy.current || !hasMore) return;
+    if (busy.current || !hasMore || loading) return;
     busy.current = true;
+    const seq = query.current;
     setLoadingMore(true);
     try {
-      const page = await api.aiConversations(held.current, PAGE);
+      const page = await api.aiConversations(filter, keyword.trim(), held.current, PAGE);
+      if (seq !== query.current) return;
       // A page boundary moves when a new lookup lands while the list is open,
       // so the offset alone is not a promise: dedupe by id.
       setItems((prev) => {
@@ -238,31 +290,83 @@ function ChatList() {
       await api.aiConversationDelete(id);
       setItems((prev) => prev.filter((c) => c.id !== id));
       setTotal((t) => Math.max(0, t - 1));
+      // The chips row is drawn from the unfiltered count: deleting one of many
+      // must leave it standing, deleting the last one must take it away.
+      setAnyTotal((t) => Math.max(0, t - 1));
     } catch (e) {
       toastError(e);
     }
   }
 
+  const narrowed = Boolean(filter || keyword.trim());
+
   return (
     // The list is a top-level tab, so it wears the same skeleton as 书架 / 生词本 /
-    // 我的: a fixed title bar and a body that scrolls under it. SubHeader stays
-    // for the conversation page, which really does have something above it.
+    // 我的: a fixed title bar, a fixed chip row, and a body that scrolls under
+    // them. SubHeader stays for the conversation page, which really does have
+    // something above it.
     <div className="page shell">
-      <div className="lib-head">
+      <div className={`lib-head${searchOpen ? ' search-open' : ''}`}>
         <h1>AI 对话</h1>
-        {total > 0 && <span className="tag">{total} 条</span>}
+        {/* The count follows the list, so a filtered view says how much it
+            found — including 0. Tying it to `total` alone made the pill vanish
+            on an empty result, which moved the title row every keystroke. */}
+        {anyTotal > 0 && <span className="tag">{total} 条</span>}
         <span style={{ flex: 1 }} />
-        <button className="btn sm primary" onClick={() => nav('/ai/new')}>
+        {/* The same search box the shelf and the notebook have, in the same
+            place: always out on the desktop, behind the magnifier on a phone
+            (where it takes a row of its own once opened). */}
+        <input
+          className="input lib-search-input"
+          placeholder="搜索标题或对话内容…"
+          value={keyword}
+          onChange={(e) => setKeyword(e.target.value)}
+        />
+        <button
+          className="btn ghost lib-search-toggle"
+          aria-label={searchOpen ? '收起搜索' : '搜索'}
+          onClick={() => setSearchOpen((v) => !v)}
+        >
+          <svg width="20" height="20" viewBox="0 0 20 20" aria-hidden="true">
+            <circle cx="8.6" cy="8.6" r="5.9" fill="none" stroke="currentColor" strokeWidth="1.7" />
+            <path
+              d="M13.2 13.2 L17.4 17.4"
+              stroke="currentColor"
+              strokeWidth="1.7"
+              strokeLinecap="round"
+            />
+          </svg>
+        </button>
+        <button className="btn primary" onClick={() => nav('/ai/new')}>
           新对话
         </button>
       </div>
 
+      {/* 分类 row: one chip per origin, exactly the chips the shelf uses for
+          tags and the notebook for statuses. Drawn from the *unfiltered* count
+          so a filter that matches nothing cannot hide the way back to 全部. */}
+      {anyTotal > 0 && (
+        <div className="lib-tags" role="group" aria-label="按来源筛选">
+          {ORIGIN_FILTERS.map((o) => (
+            <button
+              key={o.key || 'all'}
+              className={`lib-tag-chip${filter === o.key ? ' on' : ''}`}
+              onClick={() => setFilter(o.key)}
+            >
+              {o.label}
+            </button>
+          ))}
+        </div>
+      )}
+
       <div className="lib-scroll">
-        {loading ? (
+        {loading && items.length === 0 ? (
           <div className="loading">加载中…</div>
         ) : items.length === 0 ? (
           <div className="empty">
-            还没有对话。阅读时点词卡或选区工具条上的 ✦ AI，或点右上角「新对话」直接提问。
+            {narrowed
+              ? '没有匹配的对话。换一个关键词，或点「全部」看所有对话。'
+              : '还没有对话。阅读时点词卡或选区工具条上的 ✦ AI，或点右上角「新对话」直接提问。'}
           </div>
         ) : (
           <>

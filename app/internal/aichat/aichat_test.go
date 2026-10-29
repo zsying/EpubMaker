@@ -219,7 +219,7 @@ func TestListDetailed(t *testing.T) {
 	if _, err := Append(c.ID, "assistant", "有，turn up 表示出现。"); err != nil {
 		t.Fatalf("Append: %v", err)
 	}
-	items, err := ListDetailed(50, 0)
+	items, err := ListDetailed(Filter{}, 50, 0)
 	if err != nil {
 		t.Fatalf("ListDetailed: %v", err)
 	}
@@ -243,15 +243,15 @@ func TestListDetailedPagesTileTheSet(t *testing.T) {
 	for _, title := range []string{"一", "二", "三", "四", "五"} {
 		mkConv(t, title, "lookup", "k-"+title)
 	}
-	first, err := ListDetailed(2, 0)
+	first, err := ListDetailed(Filter{}, 2, 0)
 	if err != nil {
 		t.Fatalf("ListDetailed page 1: %v", err)
 	}
-	second, err := ListDetailed(2, 2)
+	second, err := ListDetailed(Filter{}, 2, 2)
 	if err != nil {
 		t.Fatalf("ListDetailed page 2: %v", err)
 	}
-	last, err := ListDetailed(2, 4)
+	last, err := ListDetailed(Filter{}, 2, 4)
 	if err != nil {
 		t.Fatalf("ListDetailed page 3: %v", err)
 	}
@@ -278,12 +278,62 @@ func TestListDetailedPagesTileTheSet(t *testing.T) {
 		t.Errorf("order = %s", strings.Join(order, ","))
 	}
 
-	total, err := Total()
+	total, err := CountFiltered(Filter{})
 	if err != nil {
 		t.Fatalf("Total: %v", err)
 	}
 	if total != 5 {
 		t.Errorf("total = %d, want 5", total)
+	}
+}
+
+// The list page can be narrowed to one origin and/or a search term, and the
+// header count has to agree with the page it labels — they share Filter.where
+// for exactly that reason.
+//
+// The keyword searches message bodies too: what a reader remembers about a
+// conversation is usually something that was said in it, not the twelve
+// characters the row's title clips to.
+func TestFilterNarrowsListAndCount(t *testing.T) {
+	reset(t)
+	mkConv(t, "harbour", "lookup", "k-h")
+	mkConv(t, "虚拟语气怎么用", "manual", "k-v")
+	if err := Create(&Conversation{Title: "语法", Origin: "manual", CacheKey: "k-body"},
+		[]Message{
+			{Role: "system", Content: "system prompt"},
+			{Role: "user", Content: "这句什么意思？"},
+			{Role: "assistant", Content: "这里用的是 subjunctive mood。"},
+		}); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	// A title with LIKE's wildcard in it: "10%" must be a literal, or one
+	// search would list the whole library.
+	mkConv(t, "10% 折扣", "manual", "k-pct")
+
+	for _, tc := range []struct {
+		name string
+		f    Filter
+		want int
+	}{
+		{"everything", Filter{}, 4},
+		{"by origin", Filter{Origin: "lookup"}, 1},
+		{"by title", Filter{Keyword: "虚拟"}, 1},
+		{"by message body", Filter{Keyword: "SUBJUNCTIVE"}, 1},
+		{"wildcard is literal", Filter{Keyword: "10%"}, 1},
+		{"origin and keyword together", Filter{Origin: "lookup", Keyword: "虚拟"}, 0},
+		{"no match", Filter{Keyword: "无关的词"}, 0},
+	} {
+		items, err := ListDetailed(tc.f, 50, 0)
+		if err != nil {
+			t.Fatalf("%s: ListDetailed: %v", tc.name, err)
+		}
+		n, err := CountFiltered(tc.f)
+		if err != nil {
+			t.Fatalf("%s: Count: %v", tc.name, err)
+		}
+		if len(items) != tc.want || n != tc.want {
+			t.Errorf("%s: rows = %d, count = %d, want %d", tc.name, len(items), n, tc.want)
+		}
 	}
 }
 
@@ -301,7 +351,7 @@ func TestPreviewKeepsTheAnswerNotThePunctuation(t *testing.T) {
 	if err := Create(c, msgs); err != nil {
 		t.Fatalf("Create: %v", err)
 	}
-	items, err := ListDetailed(10, 0)
+	items, err := ListDetailed(Filter{}, 10, 0)
 	if err != nil {
 		t.Fatalf("ListDetailed: %v", err)
 	}

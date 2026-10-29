@@ -324,6 +324,45 @@ type ListItem struct {
 	Preview string `json:"preview"`
 }
 
+// Filter narrows the list page. The zero value matches everything — that is
+// what the page opens on.
+//
+// Origin is one of the Origin* constants ("" = 全部). Keyword is matched
+// against the title *and* every message body: a reader looks for "那段讲虚拟
+// 语气的对话", which lives in the transcript, not in the twelve-character
+// title the list shows.
+type Filter struct {
+	Origin  string
+	Keyword string
+}
+
+// likeEscaper keeps a typed % or _ literal. Without it, searching for "10%"
+// would list every conversation in the library.
+var likeEscaper = strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`)
+
+// where renders the filter as a WHERE fragment over the alias `c` plus its
+// bind arguments. ListDetailed and Count share it so the page can never
+// disagree with its own header about how many rows match.
+func (f Filter) where() (string, []any) {
+	var b strings.Builder
+	var args []any
+	if o := strings.TrimSpace(f.Origin); o != "" {
+		b.WriteString(` AND c.origin = ?`)
+		args = append(args, o)
+	}
+	if kw := strings.TrimSpace(f.Keyword); kw != "" {
+		like := "%" + likeEscaper.Replace(kw) + "%"
+		// ESCAPE '\' is what makes likeEscaper's backslashes mean anything;
+		// without it SQLite treats the backslash as an ordinary character and
+		// "10\%" searches for a literal backslash.
+		b.WriteString(` AND (c.title LIKE ? ESCAPE '\' OR EXISTS (
+		        SELECT 1 FROM ai_messages m
+		         WHERE m.conversation_id = c.id AND m.content LIKE ? ESCAPE '\'))`)
+		args = append(args, like, like)
+	}
+	return b.String(), args
+}
+
 // ListDetailed fetches one page in a single query. The subqueries are per-row
 // but the table is small and indexed; N+1 round trips through database/sql
 // would be slower than one scan with subselects.
@@ -332,18 +371,19 @@ type ListItem struct {
 // appends nudge the timestamp forward, so no two rows tie, and a page boundary
 // cannot skip or repeat an entry. A limit of zero means "to the end", which is
 // only for tests and export — the page always asks for a bounded slice.
-func ListDetailed(limit, offset int) ([]ListItem, error) {
+func ListDetailed(f Filter, limit, offset int) ([]ListItem, error) {
 	d, err := db.Open()
 	if err != nil {
 		return nil, err
 	}
+	cond, args := f.where()
 	q := `SELECT c.id, c.title, c.origin, c.cache_key, c.created_at, c.updated_at,
 	          (SELECT COUNT(*) FROM ai_messages m WHERE m.conversation_id = c.id),
 	          (SELECT m.content FROM ai_messages m
 	            WHERE m.conversation_id = c.id AND m.role != 'system'
 	            ORDER BY m.rowid DESC LIMIT 1)
-	      FROM ai_conversations c ORDER BY c.updated_at DESC`
-	args := []any{}
+	      FROM ai_conversations c WHERE 1 = 1` + cond + `
+	      ORDER BY c.updated_at DESC`
 	if limit > 0 {
 		q += ` LIMIT ? OFFSET ?`
 		args = append(args, limit, offset)
@@ -405,15 +445,17 @@ func oneLine(s string) string {
 	return strings.Join(strings.Fields(s), " ")
 }
 
-// Total is how many conversations exist, independent of the page in hand: the
-// list page needs it to decide whether there is a next page and to label the
-// header without loading everything.
-func Total() (int, error) {
+// CountFiltered is how many conversations match the filter, independent of the
+// page in hand: the list page needs it to decide whether there is a next page
+// and to label the header without loading everything. (Count below counts the
+// messages inside one conversation — different question, hence the long name.)
+func CountFiltered(f Filter) (int, error) {
 	d, err := db.Open()
 	if err != nil {
 		return 0, err
 	}
+	cond, args := f.where()
 	var n int
-	err = d.QueryRow(`SELECT COUNT(*) FROM ai_conversations`).Scan(&n)
+	err = d.QueryRow(`SELECT COUNT(*) FROM ai_conversations c WHERE 1 = 1`+cond, args...).Scan(&n)
 	return n, err
 }

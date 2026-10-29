@@ -114,9 +114,15 @@ const (
 )
 
 // AIConversations lists the transcripts, newest activity first, one page at a
-// time. A non-positive limit means "the default page", not "everything": the
-// caller that genuinely wants all of them pages through.
-func (b *Backend) AIConversations(offset, limit int) (*AIConversationPage, error) {
+// time. origin narrows the list to one kind (查词 / 拆句 / 导读 / 对话) and
+// keyword searches titles and message bodies; both empty is the whole library,
+// which is what the page opens on. Filtering lives here rather than in the
+// page because the list is paged: a client-side filter would only ever search
+// the thirty rows already on screen.
+//
+// A non-positive limit means "the default page", not "everything": the caller
+// that genuinely wants all of them pages through.
+func (b *Backend) AIConversations(origin, keyword string, offset, limit int) (*AIConversationPage, error) {
 	if limit <= 0 {
 		limit = defaultConvPage
 	}
@@ -126,11 +132,12 @@ func (b *Backend) AIConversations(offset, limit int) (*AIConversationPage, error
 	if offset < 0 {
 		offset = 0
 	}
-	total, err := aichat.Total()
+	f := aichat.Filter{Origin: origin, Keyword: keyword}
+	total, err := aichat.CountFiltered(f)
 	if err != nil {
 		return nil, err
 	}
-	items, err := aichat.ListDetailed(limit, offset)
+	items, err := aichat.ListDetailed(f, limit, offset)
 	if err != nil {
 		return nil, err
 	}

@@ -43,7 +43,7 @@ func listConvs(t *testing.T, b *Backend) []AIConversationDTO {
 	t.Helper()
 	var all []AIConversationDTO
 	for offset := 0; ; {
-		page, err := b.AIConversations(offset, maxConvPage)
+		page, err := b.AIConversations("", "", offset, maxConvPage)
 		if err != nil {
 			t.Fatalf("AIConversations(offset=%d): %v", offset, err)
 		}
@@ -200,7 +200,7 @@ func TestAIConversationsPages(t *testing.T) {
 			t.Fatalf("Create: %v", err)
 		}
 	}
-	page, err := b.AIConversations(0, 2)
+	page, err := b.AIConversations("", "", 0, 2)
 	if err != nil {
 		t.Fatalf("AIConversations: %v", err)
 	}
@@ -208,7 +208,7 @@ func TestAIConversationsPages(t *testing.T) {
 		t.Fatalf("page 1 = %d items, total %d, hasMore %v; want 2/3/true",
 			len(page.Items), page.Total, page.HasMore)
 	}
-	rest, err := b.AIConversations(2, 2)
+	rest, err := b.AIConversations("", "", 2, 2)
 	if err != nil {
 		t.Fatalf("AIConversations page 2: %v", err)
 	}
@@ -219,11 +219,11 @@ func TestAIConversationsPages(t *testing.T) {
 		t.Error("the second page repeated a row from the first")
 	}
 	// A caller that passes nothing gets a page, not the table.
-	if def, _ := b.AIConversations(0, 0); len(def.Items) != 3 {
+	if def, _ := b.AIConversations("", "", 0, 0); len(def.Items) != 3 {
 		t.Errorf("default page = %d items, want all 3 here", len(def.Items))
 	}
 	// …and an absurd limit is clamped rather than obeyed.
-	if big, _ := b.AIConversations(0, 5000); len(big.Items) != 3 {
+	if big, _ := b.AIConversations("", "", 0, 5000); len(big.Items) != 3 {
 		t.Errorf("clamped page = %d items", len(big.Items))
 	}
 }
