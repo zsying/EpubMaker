@@ -3477,6 +3477,31 @@ html[data-app-theme='midnight'] .turn-veil-band {
   max-width: 440px;
 }
 
+/* The AI gloss sits on the answer side of the card, under the sentence it is
+   about. It is the same block the word sheet shows (`.dict-ai`), but the card
+   is a centred column of labels while this is prose about the sentence: it goes
+   left-aligned and takes the card's width, not the word's. */
+.review-card .dict-ai {
+  width: 100%;
+  max-width: 440px;
+  margin-top: 16px;
+  text-align: left;
+}
+
+/* The way to ask, for a word nobody has asked about yet. A quiet link under the
+   answer rather than a dock button: grading stays the only thumb-sized action
+   on this page, and the ✦ must not compete with it. */
+.review-ai-ask {
+  margin-top: 12px;
+  border: 0;
+  background: transparent;
+  padding: 4px 8px;
+  color: var(--accent);
+  font: inherit;
+  font-size: 12.5px;
+  cursor: pointer;
+}
+
 .review-dock {
   width: 100%;
   max-width: 520px;

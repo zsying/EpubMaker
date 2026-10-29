@@ -16,6 +16,17 @@ of described.
 
 ### Added
 
+- **The review card shows the AI gloss it already has, and offers to ask when it
+  does not** — a word explained while reading had its answer sitting in the cache
+  while the review card showed only the dictionary line. The card now asks what
+  the reader and the notebook sheet already ask, keyed by the word *and the
+  sentence printed on it*, so a repeat costs nothing: the stored gloss appears
+  with the answer, its sentence translation, and the way into the transcript. A
+  word nobody has asked about offers ✦ 查 AI 释义, which opens the same panel the
+  reader uses and leaves the answer on the card afterwards instead of turning
+  back into a link. None of it is on screen before 显示释义 is tapped — an AI
+  explanation is a bigger spoiler than the gloss, and this page exists for
+  recall. See ADR-23.
 - **AI 对话 can be searched and filtered** — the transcript list is where a
   reader goes to find something the model said, and it offered no way to look:
   thirty rows in recency order and a scroll. It now wears the same header as the

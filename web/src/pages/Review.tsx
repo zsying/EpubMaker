@@ -1,8 +1,11 @@
 import { useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { api, VocabItem } from '../api';
+import { api, ExplainResult, VocabItem } from '../api';
 import { toastError } from '../toast';
 import { speakWord } from '../speech';
+import { useBackClose } from '../backNav';
+import AIPanel from '../components/AIPanel';
+import AISentence from '../components/AISentence';
 import SubHeader from '../components/SubHeader';
 import { emphasise } from '../highlight';
 
@@ -35,6 +38,16 @@ type Tally = { hit: number; miss: number; skipped: number };
  * interval × ease, a miss drops back to a ten-minute step. The receipt line
  * says what the last grade just did, because a schedule nobody can see is
  * indistinguishable from no schedule at all.
+ *
+ * The answer side also carries the AI gloss when there is one. It is not a
+ * second gloss: the dictionary says what the word means, the AI says what it
+ * means *here*, in the sentence printed under it — which is the thing a card
+ * that has the sentence in hand can answer and a dictionary cannot. It hangs
+ * off the same cache key as the reader and the notebook sheet (word + that
+ * sentence), so a word looked up while reading shows its answer here for free,
+ * and only the words never asked about offer the ✦ link. Nothing of it appears
+ * before the reveal: an AI explanation is a bigger spoiler than the gloss, and
+ * a pass that hands out the meaning is a pass that teaches nothing.
  */
 export default function Review() {
   const nav = useNavigate();
@@ -43,7 +56,14 @@ export default function Review() {
   const [revealed, setRevealed] = useState(false);
   const [tally, setTally] = useState<Tally>({ hit: 0, miss: 0, skipped: 0 });
   const [receipt, setReceipt] = useState('');
+  /** The stored AI gloss for this word in this sentence, if it was ever asked. */
+  const [ai, setAi] = useState<ExplainResult | null>(null);
+  const [asking, setAsking] = useState(false);
   const busy = useRef(false);
+
+  const cur = list?.[index];
+  const done = list !== null && !cur;
+  const sentence = (cur?.context ?? '').trim();
 
   // The queue is fetched here rather than handed over by the notebook: the
   // route is then self-contained, and a back press followed by a fresh start
@@ -73,8 +93,33 @@ export default function Review() {
     else nav('/vocab', { replace: true });
   }
 
-  const cur = list?.[index];
-  const done = list !== null && !cur;
+  // "Has this word been explained with AI before?" — the same cache read the
+  // reader and the notebook sheet make, keyed by the word *and the sentence*,
+  // so it answers for exactly the question this card is showing. A miss is a
+  // quiet null: the card offers ✦ instead of printing nothing.
+  useEffect(() => {
+    setAi(null);
+    setAsking(false);
+    if (!cur || !sentence) return;
+    let alive = true;
+    api
+      .aiExplainCached(cur.term, sentence)
+      .then((r) => {
+        if (alive) setAi(r ?? null);
+      })
+      .catch(() => {
+        /* a cache read that failed is a miss, not a problem for the reader */
+      });
+    return () => {
+      alive = false;
+    };
+    // The card's identity is the pair below: a re-render of the same card must
+    // not re-ask, and the next word must not inherit the previous answer.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [cur?.id, cur?.term, sentence]);
+
+  // The hardware back on a phone closes the AI panel before it leaves the pass.
+  useBackClose(asking, () => setAsking(false));
 
   async function grade(didKnow: boolean) {
     if (!cur || busy.current) return;
@@ -169,6 +214,40 @@ export default function Review() {
                     {emphasise(cur.context, [cur.surface, cur.term])}
                   </div>
                 )}
+                {/* The AI gloss, when this word + sentence was ever asked about.
+                    Same block the notebook sheet shows, so the answer a reader
+                    already paid for is never asked for twice. */}
+                {ai ? (
+                  <div className="dict-ai">
+                    <div className="dict-ai-head">
+                      <span className="dict-ai-star" aria-hidden="true">
+                        ✦
+                      </span>
+                      AI 释义 · 本句
+                    </div>
+                    {ai.meaning && <div className="dict-ai-meaning">{ai.meaning}</div>}
+                    {ai.translation && <div className="dict-ai-trans">整句：{ai.translation}</div>}
+                    {ai.note && <div className="dict-ai-note">{ai.note}</div>}
+                    {ai.conversationId && (
+                      <button
+                        className="dict-ai-open"
+                        onClick={() => nav(`/ai/${ai.conversationId}`)}
+                      >
+                        查看对话 <span aria-hidden="true">›</span>
+                      </button>
+                    )}
+                  </div>
+                ) : (
+                  sentence && (
+                    <button
+                      className="review-ai-ask"
+                      onClick={() => setAsking(true)}
+                      title="结合这一句解释这个词，并翻译整句"
+                    >
+                      <span aria-hidden="true">✦</span> 查 AI 释义
+                    </button>
+                  )
+                )}
               </>
             ) : (
               <div className="review-hint">先在心里回想，再看释义</div>
@@ -210,6 +289,55 @@ export default function Review() {
           </div>
         )}
       </div>
+
+      {/* The panel over the card, exactly as the reader and the notebook stack
+          it. `run` also files the answer into `ai`, so closing the panel leaves
+          the gloss on the card instead of turning back into a ✦ link. */}
+      {asking && cur && sentence && (
+        <AIPanel<ExplainResult>
+          title={`✦ AI 释义 · ${cur.term}`}
+          run={() =>
+            api.explainInContext(cur.term, sentence).then((r) => {
+              setAi(r ?? null);
+              return r;
+            })
+          }
+          render={(r) => (
+            <>
+              {r.cached && <span className="ai-cache-badge">缓存结果</span>}
+              <AISentence text={sentence}>
+                {emphasise(sentence, [cur.surface, cur.term], 'ai-hl')}
+              </AISentence>
+              {r.meaning && (
+                <>
+                  <div className="ai-label">
+                    在本句中
+                    {r.pos && <span className="ai-pos">{r.pos}</span>}
+                  </div>
+                  <p className="ai-explain">{r.meaning}</p>
+                </>
+              )}
+              {r.note && <p className="ai-note">{r.note}</p>}
+              {r.translation && (
+                <>
+                  <div className="ai-label">整句翻译</div>
+                  <p className="ai-trans">{r.translation}</p>
+                </>
+              )}
+            </>
+          )}
+          onClose={() => setAsking(false)}
+          onGoSettings={() => {
+            setAsking(false);
+            nav('/settings');
+          }}
+          chatId={(r) => r.conversationId}
+          onOpenChat={(id) => {
+            setAsking(false);
+            nav(`/ai/${id}`);
+          }}
+        />
+      )}
     </div>
   );
 }
