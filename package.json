@@ -9,12 +9,11 @@
   "scripts": {
     "dev:web": "npm run dev --workspace web",
     "build:web": "npm run build --workspace web",
-    "dev:app": "cd app && wails dev",
-    "build:app": "cd app && wails build",
-    "build:app:nsis": "cd app && wails build -nsis",
-    "test:e2e": "cd app && go test ./internal/api/... -run TestE2ELifecycle",
-    "format": "prettier --write web/src",
-    "format:check": "prettier --check web/src"
+    "dev:app": "powershell -NoProfile -ExecutionPolicy Bypass -File run.ps1 dev",
+    "build:app": "powershell -NoProfile -ExecutionPolicy Bypass -File run.ps1 build",
+    "build:app:nsis": "powershell -NoProfile -ExecutionPolicy Bypass -File run.ps1 nsis",
+    "format": "prettier --write web",
+    "format:check": "prettier --check web"
   },
   "engines": {
     "node": ">=20"

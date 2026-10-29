@@ -1,8 +1,12 @@
 // Package app holds the Wails application bindings. Two structs are bound to
-// the frontend:
-//   - App:          native OS integrations (file dialogs, startup, file association)
-//   - Backend:      the entire data surface, exposed as direct in-process calls
-//                  (window.go.app.Backend.*) — no HTTP, no ports.
+// the frontend, both through the host's own runtime since 0.4:
+//
+//   - App:     native OS integrations — the file dialogs (SelectEpubFiles,
+//     SelectCoverFile, SelectDictFile). Window creation, the file association
+//     and command-line parsing live in main.go, not here.
+//   - Backend: the entire data surface, exposed as direct in-process calls:
+//     Call.ByName('epubmaker-desktop/internal/app.Backend.<Method>') — no
+//     HTTP, no ports.
 //
 // This replaces the old HTTP /api mux. Binary responses (cover images, chapter
 // render, exported EPUB) are inlined as base64 data URLs / data strings so the

@@ -28,7 +28,9 @@ func platformInit() {
 // directory. Android does not route a Go process's stderr into logcat in
 // c-shared mode, so when the process dies before the Java layer can report
 // anything this file is the only evidence of how far startup got. Read it with
-//   adb shell run-as com.wails.app cat files/trace.log
+//
+//	adb shell run-as com.wails.app cat files/trace.log
+//
 // (or `adb root` + cat on an emulator). Desktop builds compile this to a no-op.
 func trace(msg string) {
 	dir := androidFilesDir()

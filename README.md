@@ -57,7 +57,7 @@ cd app && ./build-windows.ps1 -Installer
 > Wails CLI 只用来生成资源（`generate syso` / `android overlay:gen`）。
 
 > 涉及 SQLite 的测试在沙箱环境里会卡住，需要放开沙箱运行。
-> `npm run dev:web` 单独跑前端时 `window.go` 不存在，业务功能不可用。
+> `npm run dev:web` 单独跑前端时没有宿主（`/wails/runtime.js` 拿不到），业务功能不可用。
 
 ## 词库
 

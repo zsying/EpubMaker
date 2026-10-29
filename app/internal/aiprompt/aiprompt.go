@@ -101,10 +101,10 @@ func builtinFor(id string) (name, content string, ok bool) {
 
 // Prompt is one saved system prompt.
 type Prompt struct {
-	ID        string `json:"id"`
-	Name      string `json:"name"`
-	Content   string `json:"content"`
-	System    bool   `json:"system"`
+	ID      string `json:"id"`
+	Name    string `json:"name"`
+	Content string `json:"content"`
+	System  bool   `json:"system"`
 	// Default is the built-in text of a system prompt, carried so the form
 	// can show 恢复默认 only when the text has drifted. Empty for user rows.
 	Default   string `json:"default,omitempty"`

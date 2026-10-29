@@ -23,10 +23,10 @@ import (
 
 // Connection holds a normalized WebDAV connection.
 type Connection struct {
-	BaseURL   string
-	Username  string
-	Password  string
-	Insecure  bool
+	BaseURL  string
+	Username string
+	Password string
+	Insecure bool
 }
 
 // Entry is one file or directory returned by a PROPFIND listing.
