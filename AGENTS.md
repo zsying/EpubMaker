@@ -1,11 +1,12 @@
 # AGENTS.md
 
 改这个项目前必读。README 讲**能做什么、怎么跑**；本文件只讲**怎么改才不出错**。
-更细的排查步骤见 `docs/troubleshooting.md`，设计取舍的历史原因见 `docs/decisions.md`。
+更细的排查步骤见 `docs/troubleshooting.md`，设计取舍的历史原因见 `docs/decisions.md`，
+多平台（Windows/macOS/Linux/Android/iOS）的兼容性现状、风险清单与新增平台检查表见 `docs/platforms.md`。
 
 ## 是什么
 
-本地桌面应用（Wails v2，Go 后端 + React/TS 前端，WebView2）：EPUB 的导入 → 阅读 → 整理 → 拆分 → 导出，
+本地桌面 / 安卓应用（Wails v3，Go 后端 + React/TS 前端，WebView2 / Android WebView）：EPUB 的导入 → 阅读 → 整理 → 拆分 → 导出，
 外加英文阅读学习（划词查词 + 生词本）。后端全 Go，**无 Node 服务、无 HTTP、无端口**。
 
 | 路径 | 职责 |
@@ -25,8 +26,9 @@
 
 1. **资源主键 = 原 zip 内完整路径**。落盘 `books/<id>/content/<原路径>`，导出原样还原，章节间相对引用
    （`../images/x.png`）因此永远有效。禁止扁平化命名。
-2. **没有 HTTP、没有端口**。前端只用 `window.go.app.Backend.*` 进程内绑定；二进制（封面/图片/渲染章节/导出）
-   一律内联 base64。禁止引入 `/api` 路由、TCP 监听、multipart 上传。
+2. **没有 HTTP、没有端口**。前端只用进程内绑定（`web/src/api.ts` 的 `Call.ByName`，运行时由宿主自己的
+   `/wails/runtime.js` 提供）；二进制（封面/图片/渲染章节/导出）一律内联 base64。禁止引入 `/api` 路由、
+   TCP 监听、multipart 上传。
    **出站请求是另一回事**：`internal/webdav` 和 `internal/dict/online.go` 确实会主动 GET 外部服务。
    新加出站请求必须同时满足三条——(a) 由用户的显式动作触发，不在打开页面时偷偷发；(b) 有超时，
    且失败不阻塞 UI；(c) 结果落到本地（`dictcache` 那张表），同一个词不重复问。生词本的
@@ -76,15 +78,23 @@
 7. **生词是跨书资产**：`vocab.book_id/chapter_id` 只是指针，**不加外键**。书删了词还在。
 8. 所有 content 目录内的文件访问走 `storage.ContentPath()`（含路径穿越防护），别自己拼路径。
 9. 删除章节只从目录移除，正文文件保留（可能被别处引用）。
-10. **导入只认文件路径，不接受上传**。拖放走 Wails 原生桥（`main.go` 的 `DragAndDrop.EnableFileDrop`
-    + `web/src/filedrop.ts`），**不要**改用 `e.dataTransfer.files` 读文件：webview 给的 `File`
-    没有路径，而且缺了原生监听连默认行为都拦不住（拖进来会把 webview 导航到那个文件）。
+10. **导入只认文件路径，不接受上传**。拖放由原生处理（`main.go` 的 `WebviewWindowOptions.EnableFileDrop`
+    收到 `WindowFilesDropped` 后把路径转成 `epub:dropped` 事件，`web/src/filedrop.ts` 订阅它），
+    **不要**改用 `e.dataTransfer.files` 读文件：webview 给的 `File` 没有路径，而且缺了原生监听连默认行为
+    都拦不住（拖进来会把 webview 导航到那个文件）。
 
 ## 移动端（Android）
 
-宿主是独立入口 `app/cmd/mobile`（Wails **v3**），桌面仍是 `app/main.go`（v2），两份共用一个
-`internal/app.Backend` 和一份 `web/dist`；`web/src/api.ts` 按宿主选传输层。构建 **只走
-`app/cmd/mobile/build-android.ps1`**（`wails3 task` 在 Windows 上跑不通，见 `app/README-mobile.md`）。
+**只有一个宿主、一份 main**：`app/main.go` 同时是桌面和安卓的入口 —— 桌面 `go build` 出 exe，手机
+`go build -buildmode=c-shared`，由 `wails3 android overlay:gen` 生成的 `main_android.gen.go` 在
+`init()` 里注册 `main()`。平台差异只落在两个文件：`platform_android.go`（`EPUBMAKER_HOME` 与
+`trace.log`）和 `platform_desktop.go`（空实现）。业务层、`web/dist`、传输层都只有一份。
+
+构建：桌面 `app/build-windows.ps1`（`run.ps1 build|nsis` 转发），手机 `app/cmd/mobile/build-android.ps1`。
+**两个脚本都不走 `wails3 build|dev|package`**——它们只是壳，实际跑 go-task 的 Taskfile，而 go-task 在
+本仓库需要的 shell wrapper 上跑不通（`gradlew` 无扩展名、`gradlew.bat` 也被拒；见
+`app/README-mobile.md`）。wails3 CLI 只用在两处：`generate syso`（图标/manifest/版本资源）与
+`android overlay:gen`。
 
 11. **只能用 arm64 真机验证，x86_64 模拟器必崩**。`modernc.org/sqlite` 经 `modernc.org/libc`
     访问文件，libc 在 amd64 上照 musl 的做法，`fstatat` 先试已废弃的 `stat`/`lstat`（系统调用
@@ -98,10 +108,22 @@
     `trace()` 往 `files/trace.log` 写启动标记（含 `db.Open` 失败原因），用
     `adb shell run-as com.wails.app cat files/trace.log` 读，别指望 logcat。
 
+12. **路由必须由 `internal/webassets` 回退到 `index.html`，别换回 `application.AssetFileServerFS`**。
+    两个宿主都只把 `/` 与 `/index.html` 当外壳，其它路径交给用户 handler；而安卓的
+    `WailsPathHandler` 把「这个路径没有字节」映射成 `null`——对 Chromium 来说 `null` 不是 404，
+    是「不归我管，去问网络」。`https://wails.localhost` 是 loopback:443，没人监听，于是一张
+    整页 `net::ERR_CONNECTION_REFUSED`。任何整页导航到深链接（WebView 解冻后的第一次点击、
+    空闲后被回收的渲染进程恢复、reload）都会中招，而且因为不产生 `nav` 日志看起来像随机故障。
+    Java 侧还要把**主框架**的 MIME 强制成 `text/html`：类型是按扩展名猜的，无扩展名的路由
+    会被当成 `application/octet-stream` 下载而不是渲染。
+
 ## 开发约定
 
-- **首选入口 `.\run.ps1`**（无参数打印帮助）：`dev` / `build` / `nsis` / `test` / `clean` / `web` / `install`。
-  底层是 `wails dev`、`wails build`，`web` 模式**没有 Go 后端**（`window.go` 不存在），只能调样式。
+- **首选入口 `.\run.ps1`**（无参数打印帮助）：`dev` / `build` / `nsis` / `mobile` / `mobile-install`
+  / `test` / `clean` / `web` / `install`。它只做转发：`build` → `app/build-windows.ps1`，
+  `dev` → `app/dev-windows.ps1`，`mobile` → `app/cmd/mobile/build-android.ps1`。
+  `web` 模式**没有 Go 后端**（宿主的 `/wails/runtime.js` 不存在），只能调样式。
+  **不要用 `wails3 build|dev|package`**，理由见下面的移动端一节。
 - 改后端必须过：`cd app && go build ./... && go vet ./... && go test ./...`；
   改前端必须过 `cd web && npx tsc --noEmit`。改了前端还要 `cd web && npm run build &&
   node ../scripts/sync-frontend-dist.js` 才会进入二进制（`//go:embed all:frontend/dist`）——

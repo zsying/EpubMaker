@@ -623,6 +623,37 @@ of described.
   hanging downwards: the same card settles at 8..432, above the word it
   explains, which stays visible instead of disappearing under it.
 
+### Tooling
+
+- **The desktop build moved to Wails v3, so there is one host instead of two** —
+  `app/main.go` now serves both the Windows window and the Android package; the
+  only platform-specific code left is two `//go:build` files (`platform_android.go`
+  pins `EPUBMAKER_HOME` and writes `trace.log`, `platform_desktop.go` is the
+  no-op twin) and `cmd/mobile/main.go` is gone. The v2 API turned out to be used
+  in six call sites across two files, so the work was in the build chain, not in
+  the app: the frontend's two-transport switch (`window.go` vs `Call.ByName`,
+  plus `hasV3Runtime()` / `hasNativeDialogs`) is deleted and every call now goes
+  through the host's own `/wails/runtime.js`. Native dialogs and file drop are
+  v3 APIs (`Dialog.OpenFile`, `EnableFileDrop` + `WindowFilesDropped` → an
+  `epub:dropped` event), which is why the phone and the desktop finally share one
+  implementation. See ADR-22.
+- **The build scripts are ours, and the CLI only generates** — `wails3 build`,
+  `dev` and `package` drive Taskfiles through go-task, which cannot run this
+  repo's wrappers on Windows (same reason the Android build has always had its
+  own script). `app/build-windows.ps1` (web bundle → version resource → `go build`
+  → optional NSIS) and `app/dev-windows.ps1` (vite on :7800, the app proxied to
+  it, rebuild + relaunch on a Go change) replace them; `wails3` keeps exactly two
+  jobs, `generate syso` and `android overlay:gen`. `run.ps1` is now a thin
+  dispatcher and its `Set-WailsToolchain` workaround is gone.
+- **A version number is written in one place** — `app/build/config.yml`'s
+  `info.version`; both build scripts inject `-X …AppVersion=` from it, and the
+  NSIS build passes `-DINFO_PRODUCTVERSION` instead of inheriting v2's stale
+  fallbacks. `app/wails.json` and the Android-only `build/config.yml` are deleted.
+- **The desktop can be driven over CDP** — `EPUBMAKER_DEBUG_PORT` becomes
+  `--remote-debugging-port` in `Windows.AdditionalBrowserArgs` (v3 ignores the
+  `WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS` environment variable), so the release
+  binary can be inspected and asserted the way the phone already could.
+
 ## [0.3.0] — 2026-10-25
 
 EpubMaker runs on a phone. A second entry point (Wails v3) binds the same

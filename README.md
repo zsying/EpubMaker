@@ -1,7 +1,8 @@
 # EpubMaker
 
-EPUB 电子书维护与生成工具。本地运行的**桌面应用**（Wails v2，Go 后端 + React 前端），
+EPUB 电子书维护与生成工具。本地运行的**桌面应用**（Wails v3，Go 后端 + React 前端），
 把手上的 epub 导进来，读、改、拆、再导出去。同时兼顾英文原著的阅读与学习。
+同一份 Go 后端也交叉编译成 Android 包（WebView），见 [`app/README-mobile.md`](app/README-mobile.md)。
 
 ## 功能
 
@@ -18,13 +19,14 @@ EPUB 电子书维护与生成工具。本地运行的**桌面应用**（Wails v2
 | 层 | 选型 |
 | --- | --- |
 | 语言 | Go（后端）+ TypeScript（前端） |
-| 桌面框架 | Wails v2（WebView2，单可执行文件） |
+| 桌面框架 | Wails v3（WebView2，单可执行文件；同一份 `main.go` 也编 Android） |
 | 后端 | Go，零依赖 EPUB/XML/WebDAV（`app/internal/*`） |
 | 数据库 | SQLite（modernc.org/sqlite，纯 Go 无 cgo） |
 | 词库 | ECDICT（CSV 导入 → 独立 SQLite） |
 | 前端 | React 18 + Vite + React Router，DOMPurify 净化正文 |
 
-前后端之间**只有 Wails 进程内绑定**（`window.go.app.Backend.*`），没有 HTTP、没有端口。
+前后端之间**只有 Wails 进程内绑定**（`Call.ByName('epubmaker-desktop/internal/app.Backend.*')`，
+经由宿主自己的 `/wails/runtime.js`），没有 HTTP、没有端口。
 
 ## 快速开始
 
@@ -32,9 +34,10 @@ EPUB 电子书维护与生成工具。本地运行的**桌面应用**（Wails v2
 
 ```powershell
 .\run.ps1            # 帮助
-.\run.ps1 dev        # 桌面开发：vite watcher + 编译 Go + 窗口热更新
+.\run.ps1 dev        # 桌面开发：vite watcher + 编译 Go + 窗口随 Go 改动重启
 .\run.ps1 build      # 生产 exe
 .\run.ps1 nsis       # 生产 exe + NSIS 安装包（需本机装 NSIS）
+.\run.ps1 mobile     # Android APK（arm64，交叉编译同一个 main.go）
 .\run.ps1 test       # 前端 typecheck + go vet + go test
 .\run.ps1 web        # 仅前端 vite（7800）；没有 Go 后端，只能调样式
 .\run.ps1 clean      # 清 web/dist、app/frontend/dist、app/build/bin
@@ -46,9 +49,12 @@ EPUB 电子书维护与生成工具。本地运行的**桌面应用**（Wails v2
 
 ```bash
 cd app && go build ./... && go vet ./... && go test ./...
-cd app && wails dev        # 首次会静默编译几十秒才弹窗
-cd app && wails build -nsis
+cd app && ./build-windows.ps1          # 等价于 wails build：go build + wails3 generate syso
+cd app && ./build-windows.ps1 -Installer
 ```
+
+> `wails3 build|dev|package` 不用：它们通过 go-task 驱动 Taskfile，在 Windows 上跑不了本仓库的脚本。
+> Wails CLI 只用来生成资源（`generate syso` / `android overlay:gen`）。
 
 > 涉及 SQLite 的测试在沙箱环境里会卡住，需要放开沙箱运行。
 > `npm run dev:web` 单独跑前端时 `window.go` 不存在，业务功能不可用。
@@ -105,13 +111,19 @@ cd app && go run ./cmd/dictimport /path/to/ecdict.csv
 ```
 EpubMaker/
 ├── app/
-│   ├── main.go              # Wails 入口：绑定原生能力、解析命令行 .epub
-│   ├── wails.json           # 前端目录、NSIS、.epub 文件关联
-│   ├── build/               # 构建资产：appicon.png、epubFileIcon.png、NSIS 模板
+│   ├── main.go              # 唯一宿主入口：窗口、服务绑定、.epub 命令行、拖放
+│   ├── platform_android.go  # Android 专属的 HOME/trace（desktop 侧是同名空实现）
+│   ├── platform_desktop.go
+│   ├── build-windows.ps1    # 生产构建：web bundle → 版本资源 → go build →（可选）NSIS
+│   ├── dev-windows.ps1      # 开发循环：vite + 反向代理 + Go 改动自动重编重启
+│   ├── build/config.yml     # 版本号与产品信息的唯一来源（桌面 + Android 共用）
+│   ├── build/               # 构建资产：图标、manifest、info.json、NSIS 模板
 │   ├── frontend/dist/       # 构建时由 scripts/sync-frontend-dist.js 镜像，再被 //go:embed 打包
 │   ├── cmd/dictimport/      # 命令行词库安装器
+│   ├── cmd/mobile/          # Android 构建脚本 + Gradle 工程
 │   └── internal/
 │       ├── app/             # Wails 绑定（Backend / App / learning）
+│       ├── webassets/       # 静态资源 + SPA 深链接回退（桌面与 Android 共用）
 │       ├── epub/            # OCF/OPF/NCX/NAV 解析与流式构建
 │       ├── library/         # 导入 / 渲染 / 导出 / 封面 / 拆分
 │       ├── dict/            # ECDICT 词库
@@ -121,7 +133,7 @@ EpubMaker/
 │       └── go.mod
 ├── web/src/
 │   ├── pages/               # Library Reader Editor Split Bookmarks Annotations Trash WebDav
-│   ├── api.ts               # 绑定的唯一封装层
+│   ├── api.ts               # 绑定的唯一封装层（含测试用的注入缝）
 │   ├── overlay.ts           # 浮层定位（保证不越出视窗）
 │   └── styles.css
 ├── docs/                    # 排查手册、设计取舍

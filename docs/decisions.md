@@ -6,7 +6,8 @@
 ## ADR-1 无 HTTP、无端口
 
 原来是 Express 后端 + `/api` 路由，迁移到 Wails 后留了一层薄 HTTP。后来全部删掉：
-前端只调 `window.go.app.Backend.*`，二进制响应内联 base64。
+前端只调 `api.ts` 封装的进程内绑定（v2 时代是 `window.go.app.Backend.*`，v3 起是宿主自己的
+`/wails/runtime.js` + `Call.ByName`），二进制响应内联 base64。
 
 原因：桌面单机应用里，HTTP 层只带来三个问题——端口冲突、dev 与生产两份路径、CORS/代理配置。
 进程内绑定让 dev 和生产走同一条路径，打包成单 exe 也不再有资源服务器。
@@ -952,3 +953,67 @@ class 碰撞构造章全部正常分栏；`pageturn-chapter` 29/29、`pageturn-d
 真机 360×758：骨架 20/20、底部两端 9/9、触摸契约 9/9、头部交互 17/17、百分比口径 7/7。
 测试资产同步：`.sub-head`（AI 列表）→ `.lib-head`、`.sub-tag` → `.lib-head .tag`、
 AI 列表的 `scrollTop` 从 `.main` 改为 `.lib-scroll`。
+
+## ADR-22 桌面也搬到 Wails v3：一份 `main.go`，一套绑定
+
+**问题。** 0.3 的时候桌面是 v2、手机是 v3，两个宿主（`app/main.go` 与 `app/cmd/mobile/main.go`），
+两套传输（`window.go.app.Backend.*` 与 `Call.ByName`），两条构建链（`wails build|dev` 与
+`build-android.ps1`），`api.ts` 里靠运行时判定同时伺候两套。用户的话：「能否将 wails 桌面版本的
+v2 迁移到 v3 中，这样就不用维护 2 个版本了」。
+
+先量了一次成本，结论和直觉相反——业务层几乎没有活：
+
+- v2 的 API 一共只出现在**两个 Go 文件、六处调用**里：`main.go`（窗口/绑定/文件关联/命令行）
+  与 `internal/app/app.go`（原生对话框 + `EventsEmit`）。
+- `internal/app.Backend` 与 `internal/webassets.Handler` 本来就是宿主无关的；同一份 `web/dist`
+  已经能在两个 WebView 里跑。
+- 真正的成本全在构建链：`wails.json`、NSIS 传参、`run.ps1` 的前置检查、dev 循环。
+
+而且 v2 那条链已经**开始坏了**：v2.11 内置的 `x/tools` 读不了 Go 1.27 的导出数据
+（`internal error: package "fmt" without types`），当时靠把 `GOTOOLCHAIN` 钉到 `go.mod` 的版本
+糊过去；`wails.json` 的 `frontend:dev:watcher` / `serverUrl` 每改一次都要翻文档。
+
+**决定。**
+
+- **`app/main.go` 是唯一入口**，桌面与 Android 都是它编译出来的。平台差异只有两个
+  `//go:build` 文件：`platform_android.go`（钉 `EPUBMAKER_HOME`、写 `trace.log`）与
+  `platform_desktop.go`（同名空实现）。`cmd/mobile/main.go` 删掉。
+- **绑定只有一个形状**：`Call.ByName('epubmaker-desktop/internal/app.Backend.<Method>')`，走宿主
+  自己的 `/wails/runtime.js`，没有 npm 运行时依赖。`web/src/api.ts` 里"两套传输 + 运行时判定"
+  整段删除（`hasV3Runtime` / `hasNativeDialogs` 都没了）。保留一处**注入缝**：`window.go` 存在时
+  优先用它——那是给 60 个离线 Playwright 脚本伪造后端用的，不是第二套传输。
+- **原生对话框改走 v3 API**：`App.SelectEpubFiles` / `SelectCoverFile` / `SelectDictFile` 用
+  `application.App.Dialog.OpenFile()`，手机与桌面同一份实现（手机原先自己拼 `Dialogs.OpenFile`）。
+- **拖放改成宿主事件**：`EnableFileDrop: true` + `window.OnWindowEvent(WindowFilesDropped)` →
+  `window.EmitEvent('epub:dropped', paths)`，前端 `filedrop.ts` 订阅后扇出。原先靠 v2 的
+  `OnFileDrop` 把路径直接塞给 `window`。
+- **构建链自写，CLI 只留两件事**：`build-windows.ps1`（web bundle → 版本资源 → `go build`
+  →（可选）NSIS）与 `dev-windows.ps1`（vite + 反向代理 + Go 改动自动重编重启）；`wails3` 只用来
+  `generate syso` 和 `android overlay:gen`。`run.ps1` 只做转发，`Set-WailsToolchain` 整个删掉。
+- **版本号单一来源**：`app/build/config.yml` 的 `info.version`，两个脚本各自
+  `-X ...AppVersion=` 注入；`wails.json` 与 `cmd/mobile/build/config.yml` 都删。
+- **桌面调试走 CDP**：`EPUBMAKER_DEBUG_PORT` → `Windows.AdditionalBrowserArgs` 里的
+  `--remote-debugging-port`（v3 不读 `WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS` 环境变量）。
+
+**代价与边界。**
+
+- `wails3 build|dev|package` 用不了（go-task 在本机跑不了本仓库的脚本），所以构建链是自写的；
+  但它本来就是自写的（Android 从 0.3 起就这样），只是现在两边共用同一套约定。
+- **dev 没有 HMR**：反向代理拦不住 websocket 升级（asset server 对 upgrade 回 501），前端改动是
+  整页刷新。`EPUBMAKER_DEV_URL` 只编译进 `!production` 构建，release 里这段代码不存在。
+- **`production` tag 的语义要记住**：它关掉 WebView2 的 devtools（v3 的
+  `application_production.go`），所以 `-Dev` 构建既没有 `-w -s` 也没有 `-H windowsgui`，体积
+  17.3 → 25.7 MB。
+- **版本资源写的是语言中立表**（`000004b0`，沿用 v2 的 `info.json` 模板）：资源本身完整，
+  但本机的 PS 5.1 `.VersionInfo` 读不出字符串（`FileVersionRaw` 有值）。v2 时代一样，不是迁移引入的。
+- **测试缝不许扩散**：`injected()` 只在 `api.ts` 内部用，别在组件里再判一次宿主。
+
+**回归（都跑在真实产物上，不是编译通过就算）。** 桌面走 WebView2 CDP：
+`BOOT {"href":"http://wails.localhost/","cards":69,"books":69,"dropzone":true}`、
+深链接硬导航 `DEEPLINK {"llm":true}`、深链接刷新 `RELOAD {"llm":true,"books":69}`、
+回书架 `SHELF {"cards":69}`。dev 循环：`viteClient:true` + `tsModules:["/src/main.tsx",…]` +
+`books:69`（证明页面来自 vite、绑定仍然可用），`touch` 一个 `.go` 后日志出现
+`Go changed — rebuilding` 且窗口重连后数据不变。产物：exe 17.3 MB、NSIS 安装包 9.2 MB
+（版本资源 0.4.0）、arm64 APK 26.7 MB。离线回归：`shelf` 20/20、`verify` 19/19、`esc` 24/24、
+`vocab-schedule` 15/15、`drop` 17/17（按新契约重写）、`mobile` 193/193；
+`go build ./... && go vet ./... && go test ./...` 与 `npx tsc --noEmit` 全绿。

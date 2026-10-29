@@ -6,17 +6,19 @@
 
 | 现象 | 原因 | 处理 |
 | --- | --- | --- |
-| `wails dev` 永久卡在 `Compiling frontend:` | `wails.json` 里写了 `frontend:dev` 而非 `frontend:dev:watcher`；dev 模式下该字段被当一次性构建命令 `cmd.Run()` 阻塞执行，而 `npm run dev` 是长驻服务 | 必须用 `"frontend:dev:watcher": "npm run dev"` + `"frontend:dev:serverUrl": "auto"`。键名是 `serverUrl`（小写 s），写错会被静默忽略 |
-| `wails dev` 没弹窗 | 首次要静默编译 Go（含 modernc.org/sqlite）几十秒 | 看到 vite `ready` 后耐心等，别 Ctrl+C |
+| `wails3 build` / `wails3 dev` / `wails3 package` 跑不动 | 它们是 go-task 的薄壳，Taskfile 里的 shell 包装在本机跑不了（`gradlew` 无扩展名、`.bat` 也被拒） | 用 `run.ps1 build` / `run.ps1 dev` / `run.ps1 mobile`（各自调 `app/build-windows.ps1`、`app/dev-windows.ps1`、`app/cmd/mobile/build-android.ps1`）。CLI 只留 `generate syso` 与 `android overlay:gen` |
+| `run.ps1 dev` 里 vite 已 `ready`，窗口迟迟不出现 | 之后还要编一遍 Go（含 modernc.org/sqlite）并链 `.syso`，冷启动几十秒 | 等 `==> Launching EpubMaker`；别 Ctrl+C |
+| `run.ps1` 报 `required tool not found: go` | 在精简过的环境里跑（如只有 `.CPL` 的 `PATHEXT`、没有 Go 在 PATH） | 补 `$env:PATHEXT`、`$env:LOCALAPPDATA`、`$env:GOCACHE`，并把 `D:\Program Files\Go\bin` 加进 PATH |
 | 启动报端口被占用 | 上次残留的 vite 子进程占着 7800（`strictPort: true`，直接报错而不是静默死等） | `taskkill /F /IM node.exe` |
-| `internal error: package "fmt" without types` | wails v2.11 内置的 `golang.org/x/tools` 读不了 Go 1.27 的导出数据，而 `go build ./...` 是通过的 | `run.ps1` 已把 `GOTOOLCHAIN` 钉到 `app/go.mod` 的 go 版本（见 `Set-WailsToolchain`）。wails 更新后可删 |
-| `json: cannot unmarshal string into ... Project.Author` | Wails v2.11 起 `wails.json` 的 `author` 必须是对象 | `"author": { "name": "john" }` |
-| 打包报 `open epubFileIcon.png: file does not exist` | `info.fileAssociations[].iconName` 要求 `app/build/<iconName>.png` 存在，Wails 据此生成 `.ico` | 保证 `app/build/epubFileIcon.png` 在库；换图标直接覆盖（≥256×256） |
-| `wails build -nsis` 创建安装包失败 | 本机没装 NSIS，`makensis` 不在 PATH | `winget install -e --id NSIS.NSIS` |
-| `.epub` 双击打不开 | 没装 NSIS 版 / 没注册文件关联 | `wails build -nsis` 后安装。`main.go` 解析命令行 .epub，在 `Startup` 导入并 emit `epub:imported`（前端监听后刷新书架） |
+| `(Get-Item EpubMaker.exe).VersionInfo` 里 `CompanyName` / `ProductName` 全空，但 `FileVersionRaw` 有 0.4.0.0 | 版本资源写的是**语言中立**的 `StringFileInfo` 表（`000004b0`，v3 模板与 v2 时代相同），本机 PS 5.1 的 .NET 读取器不回退到中立表 | 资源本身是完整的（用 PE 资源查看器能看到 6 个键）；这是读取端的毛病，不是构建坏了，v2 时代一模一样。要断言构建产物，看 `wails3 generate syso` 的输入 `build/windows/info.rendered.json` |
+| 打包报 `open epubFileIcon.png: file does not exist` | 该错误来自 v2 的 `info.fileAssociations[].iconName` 约定；v3 只从 `application.Options.FileAssociations` 取扩展名 | 图标在 `app/build/windows/icon.ico`，`.epub` 关联在 `main.go` 的 `FileAssociations`，不再需要 png |
+| 桌面 CDP 端口一直不开（`127.0.0.1:9222` refuse） | v3 只合并 `application.Options.Windows.AdditionalBrowserArgs`，环境变量 `WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS` 被忽略 | `main.go` 的 `debugArgs()` 读 `EPUBMAKER_DEBUG_PORT` 并自己拼 `--remote-debugging-port`；发布版（`production` tag）没有 devtools，要用 `-Dev` 构建才能连 |
+| `wails3 generate syso` 找不到 / syso 没被链接 | syso 必须落在被 `go build` 的包目录（`app/`），且构建后要删掉，否则下次构建会带着旧图标和旧版本号 | `build-windows.ps1` 生成 `app/wails_windows_amd64.syso`，`go build .` 后 `Remove-Item` |
+| `makensis` 找不到 / NSIS 步骤失败 | 本机没装 NSIS，且 `Resolve-Tool` 的回退路径也没命中 | `winget install -e --id NSIS.NSIS`；脚本默认找 `C:\Program Files (x86)\NSIS\makensis.exe` |
+| `.epub` 双击打不开 | 用的是解压版 exe（没有注册表项） | 装 NSIS 版。关联来自 `application.Options.FileAssociations`，`main.go` 把命令行里的 `.epub` 排进 `QueueOpen` 并在窗口起来后导入 |
 | 运行 exe 报 `frontend not built (web/dist missing)` | 旧实现从磁盘读 `web/dist`，二进制移走就找不到 | 已改 `//go:embed all:frontend/dist`。构建时 `scripts/sync-frontend-dist.js` 把 `web/dist` 镜像到 `app/frontend/dist` |
 | `vite build` 中断 | 沙箱拦 `emptyOutDir` 的批量删除 | 已设 `emptyOutDir:false`；必要时手清 `web/dist` 里旧哈希残留 |
-| 前端空白 / `window.go.app.Backend is not a function` | 单独跑了 `npm run dev:web`，那里面没有 WebView 绑定 | 用 `run.ps1 dev` / `build`。本应用无 HTTP，前端所有数据都走进程内绑定 |
+| 前端空白 / 满屏"后端未就绪" | 单独跑了 `npm run dev:web`：浏览器里没有宿主，`/wails/runtime.js` 是 404 | 用 `run.ps1 dev` / `build`。本应用无 HTTP，前端所有数据都走进程内绑定；只调样式时忽略数据报错 |
 
 ## 沙箱环境（WorkBuddy 预览时）
 

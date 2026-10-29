@@ -1,27 +1,30 @@
 # EpubMaker for Android
 
-The desktop app builds with Wails **v2** from `app/`. The Android app builds
-with Wails **v3** from `app/cmd/mobile/`. They are two hosts over one module:
-`internal/app.Backend` has no Wails dependency, so the same struct is bound by
-both, and the same `web/dist` bundle runs in both WebViews.
-
-This is deliberate. Migrating the desktop build to v3 would mean rewriting
-`run.ps1`, the NSIS installer and the file-association registration — work that
-has nothing to do with running on a phone. Adding a second entry point keeps the
-desktop build untouched.
+One host, two platforms. `app/main.go` is the only entry point: it opens the
+database, binds `Backend` and `App`, and hands both to Wails v3. The desktop
+binary and the Android `libwails.so` are two builds of that same `main.go`,
+differing only in the `//go:build` files next to it:
 
 ```
 app/
-  main.go                  wails v2 host (desktop, unchanged)
+  main.go                  the host: window, services, .epub args, file drop
+  platform_android.go      //go:build android   -> EPUBMAKER_HOME + trace()
+  platform_desktop.go      //go:build !android   -> no-ops
+  build-windows.ps1        desktop: web bundle -> version resource -> go build (+ NSIS)
+  dev-windows.ps1          desktop dev loop: vite + proxy + rebuild on Go change
+  build/config.yml         version / product metadata, shared by both scripts
+  frontend/dist/           the web bundle, staged for go:embed (one copy for both)
   cmd/mobile/
-    main.go                wails v3 host (Android)
-    frontend/dist/         the web bundle, staged for go:embed
-    Taskfile.yml           android tasks
-    build/
-      Taskfile.yml         shared tasks (frontend staging, go mod tidy)
-      config.yml           product metadata
-      android/             Gradle project + Java host (from the wails v3 template)
+    build-android.ps1      android: web bundle -> libwails.so -> APK
+    install-and-check.ps1  install + launch + trace.log + screenshot + crash scan
+    build/android/         Gradle project + Java host (from the wails v3 template)
 ```
+
+`internal/app.Backend` and `internal/webassets` have no host branch in them, and
+the same `web/dist` bundle runs in both WebViews. That is what makes the single
+`main.go` possible: everything platform-specific is either a Wails v3 API
+(`Dialogs`, `FileAssociations`, dropped files) or one of the two `platform_*.go`
+files.
 
 ## Toolchain
 
@@ -52,22 +55,25 @@ export ANDROID_HOME='D:\dev\android-sdk'
 ## Build
 
 ```powershell
-cd app\cmd\mobile
-.\build-android.ps1                 # arm64, full: web bundle -> .so -> APK
-.\build-android.ps1 -Arch x86_64    # x86_64 (emulator — see the caveat below)
-.\build-android.ps1 -SkipFrontend   # reuse the staged frontend/dist
-.\build-android.ps1 -ApkOnly        # Gradle only, after a Java-side tweak
+.\run.ps1 mobile                     # from the repo root (forwards everything below)
+cd app && .\cmd\mobile\build-android.ps1          # arm64, full: web bundle -> .so -> APK
+cd app && .\cmd\mobile\build-android.ps1 -Arch x86_64    # see the caveat below
+cd app && .\cmd\mobile\build-android.ps1 -SkipFrontend   # reuse app/frontend/dist
+cd app && .\cmd\mobile\build-android.ps1 -ApkOnly        # Gradle only, after a Java-side tweak
 ```
 
 APK lands in `app/build/mobile/bin/EpubMaker-<abi>.apk` (the shared output
 area for all generated files; diag screenshots from install-and-check.ps1
 land in `app/build/mobile/diag/`).
 
-`wails3 task apk` does **not** work here: go-task runs Taskfiles through `gosh`,
-which cannot execute the wrapper on Windows (`gradlew` has no extension, and
-`gradlew.bat` is rejected too). The PowerShell script drives the same steps
-directly — `wails3 android overlay:gen`, `go build -buildmode=c-shared`, then
-`gradlew.bat assembleDebug`.
+`wails3 build|dev|package|task` do **not** work here: they drive Taskfiles
+through go-task/`gosh`, which cannot execute the wrappers on Windows
+(`gradlew` has no extension, and `gradlew.bat` is rejected too). The PowerShell
+scripts drive the same steps directly, and the wails3 CLI keeps exactly two
+jobs: `generate syso` (desktop icon/manifest/version resource) and
+`android overlay:gen` (which writes `main_android.gen.go`, the file whose
+`init()` calls `application.RegisterAndroidMain(main)`; it is injected with
+`-overlay`, so `go build` must run with cwd = `app/`).
 
 The first Gradle run downloads the 9.2.1 distribution. If
 `services.gradle.org` times out, drop the zip into
@@ -89,9 +95,10 @@ adb shell monkey -p com.wails.app -c android.intent.category.LAUNCHER 1
 adb shell run-as com.wails.app cat files/trace.log    # startup breadcrumbs
 ```
 
-`main.go` appends a line per startup step (and the DB error, if `db.Open`
-fails) to `files/trace.log`. This exists because **`log` output does not reach
-logcat from a c-shared Go process** — without it, a startup crash is silent.
+`platform_android.go` appends a line per startup step (and the DB error, if
+`db.Open` fails) to `files/trace.log`. This exists because **`log` output does
+not reach logcat from a c-shared Go process** — without it, a startup crash is
+silent. The desktop build compiles the same `trace()` call into a no-op.
 
 Debug builds expose the WebView over CDP, which is how the two bugs below were
 found (neither leaves a trace in logcat):
@@ -101,6 +108,10 @@ adb forward tcp:9222 localabstract:webview_devtools_remote_$(adb shell pidof com
 curl http://127.0.0.1:9222/json/list    # grab the page id, then drive
                                         # Runtime.evaluate over the ws endpoint
 ```
+
+The desktop has the same capability behind `EPUBMAKER_DEBUG_PORT` (it becomes
+`--remote-debugging-port` in `application.WindowsOptions.AdditionalBrowserArgs`,
+and dev builds keep devtools enabled by not setting the `production` tag).
 
 ### Bugs that only a real device reveals
 
@@ -114,14 +125,17 @@ curl http://127.0.0.1:9222/json/list    # grab the page id, then drive
   fails with `unknown bound method name`; the registered name is
   `epubmaker-desktop/internal/app.Backend.ListBooks` —
   `<module path>.<package>.<type>.<method>`, per the FQN rule in
-  `bindings.go`. The frontend keeps the prefix in `api.ts`'s
-  `V3_BACKEND_FQN`; update it if the Go module path ever changes. The
-  long-term fix would be `wails3 generate bindings` to pin names at build time.
+  `bindings.go`. The frontend keeps the prefix in `api.ts`'s `V3_BACKEND_FQN`;
+  update it if the Go module path ever changes. The long-term fix would be
+  `wails3 generate bindings` to pin names at build time.
 - **The page must import the runtime itself.** v3 never injects a script tag;
   the module lives at `/wails/runtime.js` and loading it installs
-  `window._wails`. api.ts imports it lazily on the first v3 call, and
-  `hasV3Runtime()` recognizes the host by origin (`wails.localhost`) because
-  the flag does not exist until that import finishes.
+  `window._wails`. api.ts imports it lazily on the first call.
+- **Deep links used to land on an error page.** A hard navigation to
+  `/books/<id>/read` was answered by the Java asset branch before
+  `internal/webassets` learned to fall back to `index.html`; the main frame's
+  MIME is now forced to `text/html` too. Without both halves the WebView shows
+  `net::ERR_CONNECTION_REFUSED` and the document is dead.
 
 ### x86_64 emulator: known dead end
 
@@ -147,23 +161,24 @@ SQLite.
 
 ## Notes on the port
 
-- **Cross-compiling from Windows works.** `build/android/Taskfile.yml` maps
-  `uname -s` to `MINGW*|MSYS*|CYGWIN*` → `windows-x86_64`, and Go execs the
-  NDK's `aarch64-linux-android21-clang.cmd` directly.
+- **Cross-compiling from Windows works.** `go build -buildmode=c-shared` execs
+  the NDK's `aarch64-linux-android21-clang.cmd` directly; no MSYS shell needed.
 - **No open ports.** v3 serves assets through `WebViewAssetLoader` backed by
   the embedded `frontend/dist`, exactly like the desktop's `go:embed` — the
   "no HTTP, no port" rule holds on Android too.
-- **Data directory.** Android gives a process no usable `HOME`, so `main.go`
-  pins `EPUBMAKER_HOME` to `/data/data/<pkg>/files/.epubmaker`, deriving the
-  package name from `/proc/self/cmdline`. This keeps `internal/config`
-  untouched.
-- **Transport.** `web/src/api.ts` picks v2 (`window.go.app.Backend.*`) or v3
-  (`Call.ByName` on the host's `/wails/runtime.js` module) per call. The
-  desktop bundle never loads the runtime module; there is no npm runtime
-  dependency — the host serves its own, transport and all.
-- **Desktop-only bindings.** `App` (native dialogs, file association) is built
-  on the v2 runtime and is not bound in the v3 host. Mobile callers get a clear
-  error instead of a silent `undefined`.
+- **Data directory.** Android gives a process no usable `HOME`, so
+  `platform_android.go` pins `EPUBMAKER_HOME` to
+  `/data/data/<pkg>/files/.epubmaker`, deriving the package name from
+  `/proc/self/cmdline`. This keeps `internal/config` untouched, and the desktop
+  build compiles the call away.
+- **Transport.** One shape for both platforms: `Call.ByName` on the host's own
+  `/wails/runtime.js` module. There is no npm runtime dependency — the host
+  serves its own, transport and all. `web/src/api.ts` still honours an injected
+  `window.go` when a test harness puts one there; that is a test seam for the
+  offline Playwright suite, not a second transport.
+- **Native dialogs are shared.** `App.SelectEpubFiles` / `SelectCoverFile` /
+  `SelectDictFile` call `application.App.Dialog.OpenFile()`, so they exist on
+  both platforms; only the phone's path goes through the same call.
 
 ## Not done yet
 
