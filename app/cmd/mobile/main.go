@@ -19,6 +19,7 @@ import (
 	"epubmaker-desktop/internal/app"
 	"epubmaker-desktop/internal/config"
 	"epubmaker-desktop/internal/db"
+	"epubmaker-desktop/internal/webassets"
 )
 
 // The frontend bundle is the desktop build, copied into frontend/dist by the
@@ -64,7 +65,10 @@ func main() {
 			application.NewService(&app.Backend{}),
 		},
 		Assets: application.AssetOptions{
-			Handler: application.AssetFileServerFS(assets),
+			// The same handler the desktop uses. It has to be here, not the
+			// stock file server: a deep path (/llm, /books/<id>/read) is not a
+			// file, and a 404 on this host is not a 404 — see webassets.
+			Handler: webassets.Handler(assets),
 		},
 	})
 

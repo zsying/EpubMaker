@@ -292,8 +292,21 @@ public class MainActivity extends AppCompatActivity {
                         return serveFileFromDir(fontsDir, rel, request, mime);
                     }
 
-                    // For regular assets, use the asset loader
-                    return assetLoader.shouldInterceptRequest(request.getUrl());
+                    // For regular assets, use the asset loader. A client-side
+                    // route (/llm) has no file behind it either: Go answers it
+                    // with index.html (see internal/webassets), which is the
+                    // only way this request can be answered without falling
+                    // through to the network. The MIME type is guessed from the
+                    // path's extension, so an extension-less route would arrive
+                    // as application/octet-stream and Chromium would download
+                    // the app shell instead of rendering it — and the main
+                    // frame is only ever the shell.
+                    WebResourceResponse response = assetLoader.shouldInterceptRequest(request.getUrl());
+                    if (response != null && request.isForMainFrame()) {
+                        response.setMimeType("text/html");
+                        response.setEncoding("utf-8");
+                    }
+                    return response;
                 }
 
                 return super.shouldInterceptRequest(view, request);

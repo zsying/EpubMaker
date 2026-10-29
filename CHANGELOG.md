@@ -417,6 +417,22 @@ of described.
 
 ### Fixed
 
+- **A hard navigation to any page no longer dies with `net::ERR_CONNECTION_REFUSED`**
+  — reported from the phone as `/llm` failing to load, where 退回 and tapping again
+  worked. The page it asked for had nothing to serve it: every route is a 404 on
+  that host, and the Android WebView never shows a 404 — `WailsPathHandler` turns
+  "no bytes for this path" into `null`, which to Chromium means "not mine, ask the
+  network", and `https://wails.localhost` is loopback port 443, where nothing
+  listens. A tap that arrived while the WebView was still resuming, a renderer
+  restored after a long idle, a reload — each could only end on an error page. The
+  bundle now answers a document request for a path that is not a file with
+  `index.html` (`internal/webassets`, shared by the desktop shell and the phone),
+  so the router picks the route as it always does for an in-app tap, and a reload
+  on a deep link is no longer a way to lose the document. A missing *asset* still
+  404s rather than being dressed up as HTML. The main frame is also told
+  `text/html`: the type is guessed from the path's extension, so an extension-less
+  route would have arrived as `application/octet-stream` and been downloaded
+  instead of rendered.
 - **生词本's title no longer breaks in two on a 360px phone** — the fixed bar
   put the title, the count and four controls in one 360px row and came to
   ~357px, so flex took the difference out of the `h1` and 生词本 rendered as

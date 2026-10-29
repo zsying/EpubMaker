@@ -3,12 +3,8 @@ package main
 import (
 	"context"
 	"embed"
-	"io"
-	"io/fs"
 	"log"
-	"net/http"
 	"os"
-	"path"
 	"path/filepath"
 	"strings"
 
@@ -18,6 +14,7 @@ import (
 
 	"epubmaker-desktop/internal/app"
 	"epubmaker-desktop/internal/db"
+	"epubmaker-desktop/internal/webassets"
 )
 
 //go:embed all:frontend/dist
@@ -42,11 +39,12 @@ func main() {
 		Width:  1180,
 		Height: 820,
 		// Wails serves static assets from the embedded frontend/dist first,
-		// then falls back to spaHandler for client-side routes (deep links /
-		// refresh on a non-root path).
+		// then falls back to webassets.Handler for client-side routes (deep
+		// links / refresh on a non-root path). The Android host uses the very
+		// same handler.
 		AssetServer: &assetserver.Options{
 			Assets:  assets,
-			Handler: spaHandler(assets),
+			Handler: webassets.Handler(assets),
 		},
 		// File drops are resolved natively: a webview drop only carries File
 		// objects with no path, and books are imported from disk, never uploaded.
@@ -66,80 +64,6 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
-}
-
-// spaHandler serves static files from the embedded assets and falls back to
-// index.html for client-side routes. fs.FS itself prevents escaping the root.
-func spaHandler(assets fs.FS) http.Handler {
-	fileServer := http.FileServer(http.FS(assets))
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodGet && r.Method != http.MethodHead {
-			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-			return
-		}
-
-		clean := path.Clean(r.URL.Path)
-		if clean == "/" || clean == "." {
-			serveIndex(w, assets)
-			return
-		}
-
-		// Downloaded reading fonts live on disk (outside the embed). The name
-		// is validated by the same rule the downloader used, so the join below
-		// cannot be walked out of.
-		if strings.HasPrefix(clean, "/fonts/") {
-			name := path.Base(clean)
-			if !app.IsFontFileName(name) {
-				http.NotFound(w, r)
-				return
-			}
-			fp := filepath.Join(app.FontsDir(), name)
-			w.Header().Set("Cache-Control", "no-store")
-			http.ServeFile(w, r, fp)
-			return
-		}
-
-		// fs.FS paths have no leading slash.
-		fp := strings.TrimPrefix(clean, "/")
-		if hasTraversal(fp) {
-			serveIndex(w, assets)
-			return
-		}
-
-		f, err := assets.Open(fp)
-		if err != nil {
-			serveIndex(w, assets)
-			return
-		}
-		stat, err := f.Stat()
-		_ = f.Close()
-		if err != nil || stat.IsDir() {
-			serveIndex(w, assets)
-			return
-		}
-
-		fileServer.ServeHTTP(w, r)
-	})
-}
-
-func serveIndex(w http.ResponseWriter, assets fs.FS) {
-	f, err := assets.Open("index.html")
-	if err != nil {
-		http.Error(w, "frontend not built (index.html missing)", http.StatusInternalServerError)
-		return
-	}
-	defer f.Close()
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	io.Copy(w, f)
-}
-
-func hasTraversal(p string) bool {
-	for _, part := range strings.Split(p, "/") {
-		if part == ".." {
-			return true
-		}
-	}
-	return false
 }
 
 // epubArgs returns the command-line arguments that look like .epub file paths,
