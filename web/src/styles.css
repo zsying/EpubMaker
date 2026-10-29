@@ -4492,12 +4492,44 @@ html[data-app-theme='midnight'] .turn-veil-band {
      fixed bar that can grow is not fixed at all — the title, the count and the
      icons share the row and the count ellipsises first. `.search-open` is the
      one exception: the input is meant to take a line of its own. */
-  .page.shell > .lib-head:not(.search-open) {
-    flex-wrap: nowrap;
+  .page.shell > .lib-head {
     gap: 8px;
+    /* One value for both states. It used to be 12px only while collapsed, so
+       opening the search moved the list down by 8px more than the header grew
+       — a scroller that shrinks by a different amount than the bar above it
+       grows eventually puts the last row under the tab bar. */
     margin-bottom: 12px;
   }
+  .page.shell > .lib-head:not(.search-open) {
+    flex-wrap: nowrap;
+  }
+  /* A search box is the last item of the header on a phone, wherever it sits in
+     the DOM. The shelf already had it last; the notebook keeps it before the
+     buttons (right for the desktop row, where it reads left of them), so
+     without this the input claimed a whole row and pushed 搜索 / 查词历史 / 复习
+     onto a third — three rows of fixed chrome above the list. */
+  .page.shell > .lib-head > .input {
+    order: 10;
+  }
+  /* The notebook's 复习 button already carries the due count, so the pill on a
+     phone only has to say how many words there are — repeating 到期 next to
+     the button was also what pushed the title over the edge. */
+  .page.shell > .lib-head > .tag.phone-only {
+    max-width: 46vw;
+  }
+  /* The title never shrinks and never wraps. It is the one item in the row
+     whose wrapping doubles the height of a bar that is supposed to be fixed:
+     on a 360px phone 生词本 + the count + three controls came to 357px, so the
+     h1 absorbed the last few pixels and broke into 生词 / 本. Whatever has to
+     give, it is not the title. */
+  .page.shell > .lib-head > h1 {
+    flex: 0 0 auto;
+    white-space: nowrap;
+  }
+  /* So the count is what gives, and it gives by ellipsis rather than by
+     pushing anything out of the row. */
   .page.shell > .lib-head > .tag {
+    flex: 0 1 auto;
     min-width: 0;
     max-width: 40vw;
     overflow: hidden;

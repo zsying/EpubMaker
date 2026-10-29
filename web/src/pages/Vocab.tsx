@@ -235,17 +235,15 @@ export default function Vocab() {
       <div className={`lib-head${searchOpen ? ' search-open' : ''}`}>
         <h1>生词本</h1>
         {/* Two counts for two widths: the full one needs ~160px, which only
-            the desktop header has room for. */}
+            the desktop header has room for. The phone one carries the total
+            only — 到期 is written on the 复习 button right beside it, and that
+            duplicate is what used to squeeze the title into two lines. */}
         {stats && (
           <span className="tag desk-only">
             {stats.total} 词 · 今日到期 {due} · 已掌握 {stats.known}
           </span>
         )}
-        {stats && (
-          <span className="tag phone-only">
-            {stats.total} 词 · 到期 {due}
-          </span>
-        )}
+        {stats && <span className="tag phone-only">{stats.total} 词</span>}
         <span style={{ flex: 1 }} />
 
         <input

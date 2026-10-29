@@ -3744,8 +3744,12 @@ export default function Reader() {
       {/* The footer splits what used to be one centred string: page number at
           the left edge, whole-book progress at the right — both under a thumb,
           neither in the dead centre of the screen. 全书 has to be spelled out:
-          the percentage counts chapters, not this chapter's pages, and an
-          unlabelled "38%" next to "第 3/12 页" reads like the same number twice. */}
+          the two numbers have different denominators (this chapter's pages vs
+          the whole book), and an unlabelled "38%" beside "第 3/12 页" invites
+          reading one as a restatement of the other. The percentage is
+          continuous — chapter index plus the position inside the chapter, with
+          every chapter counted as if it were the same length — so it moves a
+          point or two per page and is an estimate, not a measurement. */}
       <div className="m-foot">
         <span className="m-foot-page">
           {pageCount ? `第 ${pageIndex + 1}/${pageCount} 页` : ''}
