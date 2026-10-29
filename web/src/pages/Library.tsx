@@ -14,7 +14,7 @@ import {
   canShareEpubFile,
   DictStatus,
   downloadDataUrl,
-  hasNativeDialogs,
+  isDesktopHost,
   pickEpubFiles,
   pickImageFile,
   shareEpubFile,
@@ -144,7 +144,7 @@ export default function Library() {
   const nav = useNavigate();
   // A phone has no native file dialog and cannot receive an OS file drop, so
   // the import controls have to point at something that works there.
-  const desktop = hasNativeDialogs();
+  const desktop = isDesktopHost();
   // Phone layout: the search field, sort and the import entry collapse behind
   // header icons, and per-book actions live in a bottom sheet opened by a
   // long-press on the cover.

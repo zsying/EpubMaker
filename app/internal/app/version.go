@@ -1,8 +1,9 @@
 package app
 
-// AppVersion is the version string surfaced by the 关于 page. Keep it in sync
-// with app/wails.json (info.productVersion); either side may override it at
-// build time with -ldflags "-X epubmaker-desktop/internal/app.AppVersion=x.y.z".
+// AppVersion is the version string surfaced by the 关于 page. build-windows.ps1
+// and build-android.ps1 inject it from build/config.yml (info.version), so the
+// About page, the Windows version resource and the installer cannot drift apart;
+// the literal below is only what a bare `go run`/`go build` reports.
 var AppVersion = "0.4.0"
 
 // BuildTimeUnix is the link timestamp injected by the build scripts as plain

@@ -1,59 +1,56 @@
-// Package app holds the Wails application bindings — native OS integrations
-// exposed to the frontend (e.g. the file-open dialog used for local EPUB
-// import) and command-line / file-association handling. It is bound via
-// wails.Run's Bind slice.
+// Package app holds the Wails bindings — the data surface (Backend) and the
+// native OS integrations (App: file dialogs, command-line / file-association
+// imports) exposed to the frontend.
 package app
 
 import (
-	"context"
 	"path/filepath"
 	"strings"
 
-	"github.com/wailsapp/wails/v2/pkg/runtime"
+	"github.com/wailsapp/wails/v3/pkg/application"
 
 	"epubmaker-desktop/internal/library"
 )
 
-// App is the Wails application object. Wails calls Startup with the app context
-// automatically; the context is needed for native dialogs and events.
+// App is the native-integration service. It is bound next to Backend, so the
+// frontend reaches it as <module>/internal/app.App.<Method> — the same
+// fully-qualified name shape Backend uses (see V3_APP_FQN in web/src/api.ts).
 type App struct {
-	ctx context.Context
-	// pending holds .epub paths passed on the command line (e.g. via Windows
-	// file association). They are imported during Startup.
+	// wails is the host this service was created for. It cannot be a package
+	// global: tests construct an App without a running application, and the
+	// dialogs below must degrade to "cancelled" instead of panicking.
+	wails *application.App
+
+	// pending holds .epub paths passed on the command line (double-click on a
+	// file, or the Windows file association). They are imported before the
+	// window is shown, so the shelf lists them on first paint.
 	pending []string
 }
 
 // NewApp constructs the application object.
 func NewApp() *App { return &App{} }
 
-// QueueOpen records .epub paths supplied on the command line so Startup can
-// import them (used by the .epub file association on Windows).
+// Attach hands the service the host it will open dialogs on. Kept out of the
+// constructor so internal/app stays importable by tests and by the mobile
+// build, neither of which has a window.
+func (a *App) Attach(wails *application.App) { a.wails = wails }
+
+// QueueOpen records .epub paths supplied on the command line so ImportPending
+// can import them.
 func (a *App) QueueOpen(paths []string) {
 	a.pending = append(a.pending, paths...)
 }
 
-// Startup captures the application context (called by Wails) and imports any
-// .epub files opened via command line / file association, emitting an
-// "epub:imported" event so the frontend can refresh its library.
-func (a *App) Startup(ctx context.Context) {
-	a.ctx = ctx
-	if len(a.pending) == 0 {
-		return
-	}
-	imported, errors := a.importPending()
+// ImportPending imports every queued .epub and returns how many succeeded and
+// any error messages. Called by the entry point before the window exists, so
+// there is no event to emit: the first ListBooks already returns them.
+func (a *App) ImportPending() (int, []string) {
+	paths := a.pending
 	a.pending = nil
-	runtime.EventsEmit(a.ctx, "epub:imported", map[string]any{
-		"imported": imported,
-		"errors":   errors,
-	})
-}
 
-// importPending imports every queued .epub and returns how many succeeded and
-// any error messages.
-func (a *App) importPending() (int, []string) {
 	ok := 0
 	errs := []string{}
-	for _, p := range a.pending {
+	for _, p := range paths {
 		if !strings.EqualFold(filepath.Ext(p), ".epub") {
 			continue
 		}
@@ -70,25 +67,36 @@ func (a *App) importPending() (int, []string) {
 // SelectEpubFiles opens a native multi-select file dialog and returns the
 // chosen paths (empty if cancelled).
 func (a *App) SelectEpubFiles() []string {
-	paths, _ := runtime.OpenMultipleFilesDialog(a.ctx, runtime.OpenDialogOptions{
-		Title: "选择 EPUB 文件",
-		Filters: []runtime.FileFilter{
-			{DisplayName: "EPUB 电子书", Pattern: "*.epub"},
-		},
-	})
+	if a.wails == nil {
+		return nil
+	}
+	paths, err := a.wails.Dialog.OpenFile().
+		CanChooseFiles(true).
+		SetTitle("选择 EPUB 文件").
+		AddFilter("EPUB 电子书", "*.epub").
+		PromptForMultipleSelection()
+	if err != nil {
+		// Cancelling a dialog is not an error the UI can act on.
+		return nil
+	}
 	return paths
 }
 
 // SelectCoverFile opens a native single-select image dialog and returns the
 // chosen path (empty if cancelled). The path is read on the Go side, so no
-// binary upload over HTTP is required.
+// binary upload is required.
 func (a *App) SelectCoverFile() string {
-	path, _ := runtime.OpenFileDialog(a.ctx, runtime.OpenDialogOptions{
-		Title: "选择封面图片",
-		Filters: []runtime.FileFilter{
-			{DisplayName: "图片文件", Pattern: "*.png;*.jpg;*.jpeg;*.gif;*.webp;*.bmp"},
-		},
-	})
+	if a.wails == nil {
+		return ""
+	}
+	path, err := a.wails.Dialog.OpenFile().
+		CanChooseFiles(true).
+		SetTitle("选择封面图片").
+		AddFilter("图片文件", "*.png;*.jpg;*.jpeg;*.gif;*.webp;*.bmp").
+		PromptForSingleSelection()
+	if err != nil {
+		return ""
+	}
 	return path
 }
 
@@ -96,11 +104,16 @@ func (a *App) SelectCoverFile() string {
 // read and imported on the Go side, so the 60 MB+ dictionary never passes
 // through the WebView.
 func (a *App) SelectDictFile() string {
-	path, _ := runtime.OpenFileDialog(a.ctx, runtime.OpenDialogOptions{
-		Title: "选择词库文件 (ECDICT csv)",
-		Filters: []runtime.FileFilter{
-			{DisplayName: "ECDICT 词库 (*.csv)", Pattern: "*.csv"},
-		},
-	})
+	if a.wails == nil {
+		return ""
+	}
+	path, err := a.wails.Dialog.OpenFile().
+		CanChooseFiles(true).
+		SetTitle("选择词库文件 (ECDICT csv)").
+		AddFilter("ECDICT 词库 (*.csv)", "*.csv").
+		PromptForSingleSelection()
+	if err != nil {
+		return ""
+	}
 	return path
 }

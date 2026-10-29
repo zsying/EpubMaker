@@ -1,13 +1,15 @@
-// Wails v2 in-process bindings — there is no HTTP layer and no port.
+// The single binding layer between the UI and the Go backend. There is no HTTP
+// layer and no port: every call is an in-process Wails binding, resolved by
+// name through the host's runtime module (/wails/runtime.js).
 //
-// Every data call proxies to window.go.app.Backend.<Method>(...args), which
-// returns a Promise. Binary responses (cover images, chapter render, exported
-// EPUB) arrive inline as base64 data URLs / data strings, so the WebView never
-// needs a separate asset server.
+// One bundle runs in both hosts — the desktop WebView2 and the Android
+// WebView — and the transport is identical, so nothing here branches on the
+// host except where a capability really differs (native dialogs vs SAF).
 //
-// Import and cover upload go through native OS file dialogs exposed on
-// window.go.app.App (SelectEpubFiles / SelectCoverFile); the chosen filesystem
-// path is read on the Go side, so no multipart upload is required.
+// Binary payloads (cover images, chapter render, exported EPUB) arrive inline
+// as base64 data URLs / data strings, so the WebView never needs a separate
+// asset server. Imports go through a native file dialog: the chosen
+// filesystem path is read on the Go side, so no upload is required.
 
 /** One dictionary headword as the reader popover renders it. */
 export interface WordDetail {
@@ -486,28 +488,16 @@ export interface WebDavTestResult {
 }
 
 /**
- * True when the page is hosted by the Wails v3 runtime (the Android build).
+ * Imports the host's runtime module.
  *
- * v2 injects generated bindings on window.go, so its presence means "not v3".
- * A v3 host serves its runtime at /wails/runtime.js, which the page must
- * import itself; window._wails only exists after that import, so before it we
- * fall back to recognizing the host by its origin. One bundle serves both
- * hosts, and the transport is chosen per call.
- */
-function hasV3Runtime(): boolean {
-  if (typeof window === 'undefined') return false;
-  if ('_wails' in window) return true;
-  if (typeof (window as any).go !== 'undefined') return false;
-  return window.location.host === 'wails.localhost';
-}
-
-/**
- * Calls a v3 service method by name.
+ * There is no npm runtime dependency: every host serves its own at
+ * /wails/runtime.js, with the prelude that picks the right transport for the
+ * platform. Loading it also installs window._wails. @vite-ignore keeps vite
+ * from trying to resolve the path at build time.
  *
- * The runtime is the host's own module at /wails/runtime.js, not the npm
- * package: it carries the prelude that selects the right transport for this
- * platform, and loading it also installs window._wails. @vite-ignore keeps
- * vite from trying to resolve the path at build time.
+ * A plain browser (vite dev, the acceptance harness) has no such module, so
+ * the rejection is what "no backend" looks like — worth saying so instead of
+ * surfacing a raw module-resolution error.
  */
 let v3Runtime: Promise<any> | null = null;
 function loadV3Runtime(): Promise<any> {
@@ -515,36 +505,93 @@ function loadV3Runtime(): Promise<any> {
     // A non-literal specifier keeps both vite (@vite-ignore) and tsc from
     // trying to resolve the path at build time; the host serves it at runtime.
     const specifier = '/wails/runtime.js';
-    v3Runtime = import(/* @vite-ignore */ specifier).catch((err) => {
+    v3Runtime = import(/* @vite-ignore */ specifier).catch(() => {
       v3Runtime = null;
-      throw err;
+      throw new Error('后端未就绪：当前页面不在 EpubMaker 窗口里（浏览器预览没有 Go 后端）');
     });
   }
   return v3Runtime;
 }
 
 /**
- * The v3 binding name is fully qualified: <go module path>.<package>.<type>.<method>.
- * Derived from the backend living in epubmaker-desktop/internal/app; see
- * app/cmd/mobile/main.go. Keep in sync when the module path changes.
+ * Bound method names are fully qualified:
+ * <go module path>.<package>.<type>.<method>. Both services are registered in
+ * app/main.go and live in the same Go package, so the two names differ only in
+ * the type name. Keep in sync if the module path or the service types change.
  */
 const V3_BACKEND_FQN = 'epubmaker-desktop/internal/app.Backend';
+const V3_APP_FQN = 'epubmaker-desktop/internal/app.App';
 
-async function callV3<T>(method: string, args: unknown[]): Promise<T> {
+async function callFQN<T>(fqn: string, method: string, args: unknown[]): Promise<T> {
   const runtime = await loadV3Runtime();
-  return (await runtime.Call.ByName(`${V3_BACKEND_FQN}.${method}`, ...args)) as T;
+  return (await runtime.Call.ByName(`${fqn}.${method}`, ...args)) as T;
 }
 
-/** Calls a bound backend method: window.go.app.Backend.<method>(...args). */
+/**
+ * Backend object injected by the offline UI harness, if any.
+ *
+ * The acceptance scripts in D://tmp//epub-verify drive the built bundle in a
+ * plain browser, where there is no host to call; they define window.go.app.*
+ * before the page loads and assert on the resulting DOM. No real host ever
+ * defines it — desktop and phone both go through /wails/runtime.js — so this is
+ * a test seam, not a second transport to maintain.
+ */
+function injected(service: 'Backend' | 'App', method: string): ((...a: unknown[]) => unknown) | undefined {
+  const fn = (window as any).go?.app?.[service]?.[method];
+  return typeof fn === 'function' ? fn : undefined;
+}
+
+/** Calls a bound backend method (the data surface). */
 async function call<T>(method: string, ...args: unknown[]): Promise<T> {
-  const fn = (window as any).go?.app?.Backend?.[method];
-  if (typeof fn === 'function') {
-    return (await fn(...args)) as T;
+  const fn = injected('Backend', method);
+  if (fn) return (await fn(...args)) as T;
+  return callFQN<T>(V3_BACKEND_FQN, method, args);
+}
+
+/** Calls a bound native-integration method (App: the file dialogs). */
+async function callApp<T>(method: string, ...args: unknown[]): Promise<T> {
+  const fn = injected('App', method);
+  if (fn) return (await fn(...args)) as T;
+  return callFQN<T>(V3_APP_FQN, method, args);
+}
+
+/**
+ * Whether this is the desktop host rather than the Android one.
+ *
+ * Both run the same bundle, and the answer is needed on first render: the
+ * shelf chooses its desktop or phone layout from it. The runtime's own
+ * platform field only exists after an async import, so the user agent is the
+ * one synchronous signal that separates a Windows WebView2 from an Android
+ * WebView. The acceptance harness runs in Edge, which keeps it on the desktop
+ * path — that is what its desktop cases assert.
+ */
+export function isDesktopHost(): boolean {
+  if (typeof navigator === 'undefined') return true;
+  return !/Android/i.test(navigator.userAgent);
+}
+
+/**
+ * Subscribes to a host event. Returns a no-op unsubscribe when there is no
+ * host, so callers never branch.
+ *
+ * The runtime hands the callback the whole {name, data} envelope rather than
+ * the bare payload; unwrap `data` when present and pass anything else through.
+ */
+export async function onHostEvent(
+  name: string,
+  fn: (payload: any) => void,
+): Promise<() => void> {
+  let runtime: any;
+  try {
+    runtime = await loadV3Runtime();
+  } catch {
+    return () => {};
   }
-  if (hasV3Runtime()) {
-    return await callV3<T>(method, args);
-  }
-  throw new Error('后端尚未就绪，请稍候重试');
+  const off = runtime.Events?.On?.(name, (payload: any) => {
+    const data = payload && typeof payload === 'object' && 'data' in payload ? payload.data : payload;
+    fn(data);
+  });
+  return typeof off === 'function' ? off : () => {};
 }
 
 /**
@@ -552,46 +599,23 @@ async function call<T>(method: string, ...args: unknown[]): Promise<T> {
  * to EpubMaker from another app (WeChat, a browser, a file manager), the Java
  * host copies the content URI into the cache and emits "common:sharedImport"
  * with the copied file's path; this surfaces it to the frontend, which imports
- * it like any other path. v3 hosts only — a no-op unsubscribe elsewhere.
+ * it like any other path. Android only — a no-op unsubscribe on the desktop.
  */
 export async function onSharedImport(fn: (path: string) => void): Promise<() => void> {
-  if (!hasV3Runtime()) return () => {};
-  const runtime = await loadV3Runtime();
-  const off = runtime.Events?.On?.(
-    'common:sharedImport',
-    (payload: { name?: string; data?: { path?: string }; path?: string }) => {
-      // The v3 runtime hands the callback the whole {name, data} envelope, not
-      // the bare payload; accept both shapes anyway.
-      const data = payload?.data ?? payload;
-      const path = typeof data === 'string' ? data : data?.path;
-      if (typeof path === 'string' && path) fn(path);
-    },
-  );
-  return typeof off === 'function' ? off : () => {};
+  if (isDesktopHost()) return () => {};
+  return onHostEvent('common:sharedImport', (data: unknown) => {
+    const path = typeof data === 'string' ? data : (data as { path?: string } | null)?.path;
+    if (typeof path === 'string' && path) fn(path);
+  });
 }
 
 /**
- * Whether this host can open a native file dialog, and therefore whether the
- * UI may offer file-based import at all.
- *
- * The desktop host drives the v2 runtime (window.go bindings plus the native
- * side's dialogs); the phone host drives v3, where only Backend is bound. A
- * plain browser (vite dev, the acceptance harness) has neither, so it keeps the
- * desktop shape and merely gets a clearer error.
+ * Opens the phone's file picker through the runtime's dialog module, which
+ * routes to the SAF document picker and copies the picked documents into the
+ * app cache — the Go side then reads plain paths, exactly like the desktop
+ * flow.
  */
-export function hasNativeDialogs(): boolean {
-  return !hasV3Runtime();
-}
-
-/**
- * Opens the host's file picker and returns real filesystem paths.
- *
- * Desktop: the v2 App dialog (SelectEpubFiles). Phone (v3 host): the runtime's
- * dialog module, which on Android routes to the SAF document picker and copies
- * the picked documents into the app cache — the Go side then reads plain
- * paths, exactly like the desktop flow.
- */
-async function pickV3(multiple: boolean, title: string): Promise<string[]> {
+async function pickAndroid(multiple: boolean, title: string): Promise<string[]> {
   const runtime = await loadV3Runtime();
   const res = await runtime.Dialogs.OpenFile({
     CanChooseFiles: true,
@@ -602,51 +626,36 @@ async function pickV3(multiple: boolean, title: string): Promise<string[]> {
   return Array.isArray(res) ? res : [res];
 }
 
-/** EPUB multi-select that works on both hosts. [] = cancelled. */
+/**
+ * EPUB multi-select that works on both hosts. [] = cancelled.
+ *
+ * The desktop goes through the App binding so the dialog keeps its .epub
+ * filter; the phone has no such filters and needs SAF instead.
+ */
 export async function pickEpubFiles(): Promise<string[]> {
-  if (!hasV3Runtime()) {
+  if (isDesktopHost()) {
     const paths = await callApp<string[]>('SelectEpubFiles');
-    return paths ?? [];
+    return Array.isArray(paths) ? paths : [];
   }
-  return pickV3(true, '选择 EPUB 文件');
+  return pickAndroid(true, '选择 EPUB 文件');
 }
 
-/** Single image pick for the mobile cover editor. null = cancelled. */
+/** Single image pick for the cover editor. null = cancelled. */
 export async function pickImageFile(): Promise<string | null> {
-  if (!hasV3Runtime()) {
-    const p = await callApp<string>('SelectCoverFile');
-    return p || null;
-  }
-  const paths = await pickV3(false, '选择封面图片');
-  return paths[0] ?? null;
+  const path = isDesktopHost()
+    ? await callApp<string>('SelectCoverFile')
+    : (await pickAndroid(false, '选择封面图片'))[0];
+  return path || null;
 }
 
 /** Single dictionary-file pick (ECDICT csv). null = cancelled. */
 export async function pickDictFile(): Promise<string | null> {
-  if (!hasV3Runtime()) {
-    const p = await callApp<string>('SelectDictFile');
-    return p || null;
-  }
-  const paths = await pickV3(false, '选择词库 CSV 文件');
-  return paths[0] ?? null;
+  const path = isDesktopHost()
+    ? await callApp<string>('SelectDictFile')
+    : (await pickAndroid(false, '选择词库 CSV 文件'))[0];
+  return path || null;
 }
 
-/** Calls a bound App (native integration) method: window.go.app.App.<method>. */ async function callApp<
-  T,
->(method: string, ...args: unknown[]): Promise<T> {
-  const fn = (window as any).go?.app?.App?.[method];
-  if (typeof fn === 'function') {
-    return (await fn(...args)) as T;
-  }
-  // Native dialogs are desktop-only: App is built on the v2 runtime, so the
-  // mobile host binds Backend alone. Say so instead of returning undefined.
-  if (hasV3Runtime()) {
-    throw new Error('此功能仅在桌面版提供');
-  }
-  throw new Error('无法打开系统文件选择框，请通过 Wails 启动应用');
-}
-
-/** Triggers a browser download from an inline data: URL. */
 export function downloadDataUrl(filename: string, dataUrl: string): void {
   const a = document.createElement('a');
   a.href = dataUrl;
@@ -687,8 +696,6 @@ export const api = {
   listBooks: (keyword?: string) => call<Book[]>('ListBooks', keyword ?? ''),
 
   /** Opens the native EPUB multi-select dialog; returns [] when cancelled. */
-  selectEpubFiles: () => callApp<string[]>('SelectEpubFiles'),
-
   /** Imports EPUB files from local paths. Both the dialog and an OS file drop end
    * up here — a drop can only be turned into paths by the native side. Books
    * already on the shelf come back as `duplicates`, never as failures. */
