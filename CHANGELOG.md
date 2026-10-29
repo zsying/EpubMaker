@@ -16,6 +16,18 @@ of described.
 
 ### Added
 
+- **AI 对话 can be searched and filtered** — the transcript list is where a
+  reader goes to find something the model said, and it offered no way to look:
+  thirty rows in recency order and a scroll. It now wears the same header as the
+  other two tabs — a search box (always out on the desktop, behind the magnifier
+  on a phone) and a 分类 row: 全部 / 查词 / 拆句 / 导读 / 对话. Both narrow the list
+  on the backend (`AIConversations(origin, keyword, offset, limit)`), because the
+  list arrives a page at a time: a client-side filter would search the thirty
+  rows already downloaded and quietly miss the rest. The keyword matches the
+  title *and* every message body — what a reader remembers is usually something
+  said in the conversation, not the twelve characters the row clips it to — and
+  the chips row is drawn from the unfiltered total, so a filter that matches
+  nothing cannot hide the way back to 全部.
 - **Sort direction on the shelf (顺序 / 倒序)** — the sort sheet gains a
   方向 row below the sort keys. Every key has a natural direction (titles and
   authors read A→Z, 添加时间 shows the newest first — exactly what it did
@@ -169,6 +181,16 @@ of described.
 
 ### Changed
 
+- **The three tabs' second row is now literally one row** — 生词本's 全部 / 待学 /
+  学习中 / 已掌握 were `.btn.sm` rectangles (26px tall, 6px radius, no padding
+  above the row) while the shelf's tag chips were 28px pills inset 2px: the same
+  bar, one tab over, sat 2px higher and read as a different control. They are
+  now the shelf's `.lib-tags` / `.lib-tag-chip`, so 书架 tags, notebook statuses
+  and AI origins are one control on all three pages — same height, same padding,
+  same radius, same row position. The header's search box was also sized twice
+  (`.input`'s padding gave the shelf 33px, the notebook's own `height: 32px` gave
+  it 32), which is why the notebook's entire page sat 1px above the shelf's on
+  the desktop; `.lib-search-input` owns that size now.
 - **The four tabs share one skeleton** — 书架 / 生词本 / AI / 我的 used to be four
   variations of the same idea: the shelf split its header from its scroller so
   the title stayed, 生词本 used the same header class but inside the page, so

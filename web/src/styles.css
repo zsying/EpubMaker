@@ -565,8 +565,7 @@ a {
   overflow: hidden;
 }
 .page.shell > .lib-head,
-.page.shell > .lib-tags,
-.page.shell > .vocab-filters {
+.page.shell > .lib-tags {
   flex: none;
 }
 /* `.library` stays: the drop outline below is keyed to it. */
@@ -600,6 +599,15 @@ a {
   font-size: 20px;
   margin: 0;
   font-weight: 650;
+}
+
+/* One search box for the three tabs, sized once. `.input`'s own padding gives
+   33px of height, and the notebook's separate `height: 32px` was enough to make
+   its header — and therefore its chip row, and therefore its whole list — 1px
+   higher than the shelf's. Same width, same height, same row everywhere. */
+.lib-search-input {
+  width: 220px;
+  height: 32px;
 }
 
 .dropzone {
@@ -750,10 +758,19 @@ a {
 
 /* ---- shelf tag chips ---- */
 
-/* The category row under the shelf header: 全部 + one chip per used tag.
-   A fixed row now (it used to live inside the scroller), and it bleeds into
-   `.page`'s gutter so a long tag list scrolls to the screen edge instead of
-   being clipped at the padding line. */
+/* ---- the fixed chip row, shared by all three tabs ----
+
+   书架's tags, 生词本's statuses and AI 对话's origins are one control: 全部
+   plus one chip per class, single-select, session-only. They live in `.lib-tags`
+   / `.lib-tag-chip` and nowhere else — the notebook used to grow its own
+   `.vocab-filters` out of `.btn.sm` rectangles (26px tall, 6px radius, no
+   padding above), which put its second row 2px higher than the shelf's and
+   made the same gesture look like a different widget on the next tab.
+   (The `lib-` prefix is history: it was the shelf's row first.)
+
+   The row is fixed under the header (see `.page.shell`), and it bleeds into
+   `.page`'s gutter so a long list scrolls to the screen edge instead of being
+   clipped at the padding line. */
 .lib-tags {
   display: flex;
   gap: 6px;
@@ -3060,16 +3077,13 @@ html[data-app-theme='midnight'] .turn-veil-band {
 
 /* ------------------------------ vocabulary notebook ------------------------------ */
 
-.vocab-search {
-  width: 220px;
-  height: 32px;
-}
+/* The notebook's search box is `.lib-search-input`, sized once for all three
+   tabs (see `.lib-head` above). `.vocab-search` survives only as a hook for the
+   device scripts — it carries no styles of its own, and giving it its own
+   height is what used to make this page's header 1px shorter than the others. */
 
-.vocab-filters {
-  display: flex;
-  gap: 6px;
-  margin-bottom: 14px;
-}
+/* The status chips are `.lib-tags` / `.lib-tag-chip` (shared with 书架 and AI
+   对话) — there is deliberately no notebook-specific filter row to style. */
 
 /* The offer to fetch the missing glosses. Deliberately a quiet strip rather
    than a card: it is a chore the reader may ignore, not content. */
@@ -4536,17 +4550,6 @@ html[data-app-theme='midnight'] .turn-veil-band {
     text-overflow: ellipsis;
     white-space: nowrap;
   }
-  /* The notebook's search rides in the header like the shelf's: hidden behind
-     the magnifier, full width once opened. */
-  .lib-head .vocab-search {
-    display: none;
-  }
-  .lib-head.search-open .vocab-search {
-    display: block;
-    width: 100% !important;
-    flex: 1 1 100%;
-  }
-
   /* Pairs with `.desk-only`: a control or count that only one of the two
      layouts has room for. */
   .phone-only {
@@ -4593,25 +4596,8 @@ html[data-app-theme='midnight'] .turn-veil-band {
     display: none;
   }
 
-  /* Filter buttons become a swipeable chip row. It is a fixed row now, so it
-     bleeds into the page gutter like the shelf's tag row: a chip clipped at
-     the padding line looks like the list ends there. */
-  .vocab-filters {
-    flex-wrap: nowrap;
-    overflow-x: auto;
-    gap: 8px;
-    margin: 0 -20px;
-    padding: 0 20px 10px;
-    scrollbar-width: none;
-  }
-  .vocab-filters::-webkit-scrollbar {
-    display: none;
-  }
-
-  .vocab-filters .btn {
-    flex: 0 0 auto;
-    white-space: nowrap;
-  }
+  /* The chip row already bleeds into the page gutter at every width (see
+     `.lib-tags`), so there is nothing notebook-specific left to adjust here. */
 
   /* Review pass: the dock leaves the page flow and pins itself to the bottom
      edge. The page reserves the space it covers so the card is never hidden

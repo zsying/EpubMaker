@@ -320,11 +320,15 @@ export default function Vocab() {
         </button>
       </div>
 
-      <div className="vocab-filters">
+      {/* Status chips: the shelf's chip row, chip for chip — `.lib-tags` +
+          `.lib-tag-chip`. They used to be `.btn.sm` rectangles with a 6px
+          radius and a 26px height, so the second row of the page sat 2px
+          higher than the same row on 书架 and read as a different control. */}
+      <div className="lib-tags" role="group" aria-label="按学习状态筛选">
         {FILTERS.map((f) => (
           <button
-            key={f.key}
-            className={`btn sm${filter === f.key ? ' primary' : ''}`}
+            key={f.key || 'all'}
+            className={`lib-tag-chip${filter === f.key ? ' on' : ''}`}
             onClick={() => setFilter(f.key)}
           >
             {f.label}

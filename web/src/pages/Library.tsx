@@ -718,7 +718,6 @@ export default function Library() {
         </button>
         <input
           className="input lib-search-input"
-          style={{ width: 220 }}
           placeholder="搜索书名或作者…"
           value={keyword}
           onChange={(e) => setKeyword(e.target.value)}
