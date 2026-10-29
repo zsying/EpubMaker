@@ -96,6 +96,11 @@
 `app/README-mobile.md`）。wails3 CLI 只用在两处：`generate syso`（图标/manifest/版本资源）与
 `android overlay:gen`。
 
+**CLI 与模块版本必须钉在同一版**（`go.mod` 的 `github.com/wailsapp/wails/v3 v3.0.0` ↔
+`go install github.com/wailsapp/wails/v3/cmd/wails3@v3.0.0`）：那两件事生成的东西是给这个版本的库
+用的，只升一半会得到"编译过、链接炸"的错位。当前是 v3.0.0（2026-10-26 转正式版；桌面三平台在稳定
+承诺内，Android/iOS 仍是 experimental）。
+
 11. **只能用 arm64 真机验证，x86_64 模拟器必崩**。`modernc.org/sqlite` 经 `modernc.org/libc`
     访问文件，libc 在 amd64 上照 musl 的做法，`fstatat` 先试已废弃的 `stat`/`lstat`（系统调用
     4/6），拿不到 `ENOSYS` 才降级 `newfstatat`。Android x86_64 的 seccomp 对这两条回

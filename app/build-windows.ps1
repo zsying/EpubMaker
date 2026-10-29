@@ -72,7 +72,7 @@ function Get-ProductVersion {
 }
 
 $GoExe = Resolve-Tool 'go' 'D:\Program Files\Go\bin\go.exe' 'Install Go 1.21+ from https://go.dev/dl'
-$Wails3 = Resolve-Tool 'wails3' 'E:\go\bin\wails3.exe' 'go install github.com/wailsapp/wails/v3/cmd/wails3@v3.0.0-beta.34'
+$Wails3 = Resolve-Tool 'wails3' 'E:\go\bin\wails3.exe' 'go install github.com/wailsapp/wails/v3/cmd/wails3@v3.0.0'
 $Version = Get-ProductVersion
 
 Write-Host "EpubMaker desktop build ($Tag)" -ForegroundColor White

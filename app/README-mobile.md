@@ -30,12 +30,12 @@ files.
 
 | Requirement | Version used | Why |
 | --- | --- | --- |
-| Go | 1.25+ (1.27 here) | v3 minimum; `GOOS=android` + cgo |
+| Go | 1.26+ (1.27 here) | v3 minimum; `GOOS=android` + cgo |
 | JDK | 17 (Temurin) | Gradle 9.2.1 needs 17+ |
 | Android SDK platform | `platforms;android-35` | `compileSdk` / `targetSdk` in `build.gradle` |
 | Android build-tools | `build-tools;35.0.0` | |
 | Android NDK | `26.3.11579264` | v3 pins this; the Windows host toolchain lives at `toolchains/llvm/prebuilt/windows-x86_64` |
-| wails3 CLI | v3.0.0-beta.34 | `go install github.com/wailsapp/wails/v3/cmd/wails3@v3.0.0-beta.34` |
+| wails3 CLI | v3.0.0 | `go install github.com/wailsapp/wails/v3/cmd/wails3@v3.0.0` |
 
 Install the SDK pieces (no proxy flag — `dl.google.com` is reachable directly,
 and `--proxy` made `sdkmanager` hang):

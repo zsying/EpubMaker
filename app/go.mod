@@ -3,7 +3,7 @@ module epubmaker-desktop
 go 1.26.4
 
 require (
-	github.com/wailsapp/wails/v3 v3.0.0-beta.34
+	github.com/wailsapp/wails/v3 v3.0.0
 	modernc.org/sqlite v1.56.0
 )
 

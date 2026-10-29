@@ -195,7 +195,10 @@ type Host interface {
   （`-DINFO_PRODUCTVERSION`），文件关联从 `wails.json` 搬到 `application.Options.FileAssociations`。
   **v2 一共只在两个 Go 文件、六处调用里被用到**，`Backend` 与 `webassets.Handler` 本来就是宿主无关的。
 - 「v3 还是 beta，把桌面押上去风险翻倍」—— 风险的真实来源是**两套传输要各写一遍、各测一遍**。
-  迁移后绑定只有一个形状，前端那份"运行时判定兼容"的代码整段删掉了。
+  迁移后绑定只有一个形状，前端那份"运行时判定兼容"的代码整段删掉了。何况 v3.0.0 已在
+  2026-10-26 转正式版，这条连字面都不成立了（beta.34 → 3.0.0 只有 5 个修复、没有公共 API 变化，
+  升级就是把 `go.mod` 改一行）。**但要说清楚**：稳定承诺只覆盖 Windows / macOS / Linux 桌面，
+  Android 与 iOS 在 3.0.0 里仍是 experimental，我们的手机端不在那个承诺里。
 - 「抽 capability 层就能解决大部分」—— §5 仍然值得做，但它解决的是"加平台"，不是"少一套传输"。
 
 **代价**：`wails3 build|dev|package` 用不了（go-task 在本机跑不动脚本），所以构建链是自写的；
@@ -281,7 +284,7 @@ P1 排在 P3 前面的理由：iOS 上每个"能不能"的问题（长按能不�
 | 前端按 host 选传输层 | `web/src/api.ts` 的 `isDesktopHost()` / `callApp()` |
 | 导出只有 Android 走系统分享 | `web/src/api.ts:665` `canShareEpubFile()` |
 | 内置"Ollama（本地）"预设是 `http://` | `app/internal/aiconfig/aiconfig.go:47` |
-| Wails v3 的 iOS 能力矩阵与限制 | `wails/v3@v3.0.0-beta.34/IOS.md` |
+| Wails v3 的 iOS 能力矩阵与限制 | `wails/v3@v3.0.0/IOS.md` |
 | iOS 页面 URL 是 `wails://localhost` | 同上 `pkg/application/webview_window_ios.m:506` |
 | Android 页面 URL 是 `https://wails.localhost` | 同上 `pkg/application/application_android.go:958` |
 | Android 宿主 = Wails 模板 + 定制 | `app/README-mobile.md` |

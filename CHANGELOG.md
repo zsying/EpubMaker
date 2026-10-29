@@ -625,6 +625,15 @@ of described.
 
 ### Tooling
 
+- **Wails v3.0.0 replaces the beta** — the stable release landed on 2026-10-26,
+  so `go.mod` moves from `v3.0.0-beta.34` to `v3.0.0` and the `wails3` CLI is
+  reinstalled at the same version (module and CLI are pinned together on
+  purpose: it generates the version resource and the Android overlay). No
+  application code changed — the beta.34 → v3.0.0 delta is five fixes (a Windows
+  menu-bar paint crash, a dark-mode crash, updater staging/rollback, `update cli`
+  not finding v3 releases, template runtime pinning) and no public API — so the
+  entire diff is one line of `go.mod` and four of `go.sum`. v3.0.0 asks for Go
+  1.26+; we were already on 1.26.4 / 1.27.
 - **The desktop build moved to Wails v3, so there is one host instead of two** —
   `app/main.go` now serves both the Windows window and the Android package; the
   only platform-specific code left is two `//go:build` files (`platform_android.go`

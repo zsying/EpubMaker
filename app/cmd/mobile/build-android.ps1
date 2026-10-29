@@ -117,7 +117,7 @@ if (-not $NdkRoot) { throw "Android NDK not found under '$SdkHome\ndk'. Install 
 $Wails3 = (Get-Command wails3 -ErrorAction SilentlyContinue)
 $Wails3Path = if ($Wails3) { $Wails3.Source } else { Join-Path 'E:\go\bin' 'wails3.exe' }
 if (-not (Test-Path $Wails3Path)) {
-  throw 'wails3 CLI not found. Run: go install github.com/wailsapp/wails/v3/cmd/wails3@v3.0.0-beta.34'
+  throw 'wails3 CLI not found. Run: go install github.com/wailsapp/wails/v3/cmd/wails3@v3.0.0'
 }
 
 # The About page and the Windows build both take their version from here, so
