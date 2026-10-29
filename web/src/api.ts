@@ -536,7 +536,10 @@ async function callFQN<T>(fqn: string, method: string, args: unknown[]): Promise
  * defines it — desktop and phone both go through /wails/runtime.js — so this is
  * a test seam, not a second transport to maintain.
  */
-function injected(service: 'Backend' | 'App', method: string): ((...a: unknown[]) => unknown) | undefined {
+function injected(
+  service: 'Backend' | 'App',
+  method: string,
+): ((...a: unknown[]) => unknown) | undefined {
   const fn = (window as any).go?.app?.[service]?.[method];
   return typeof fn === 'function' ? fn : undefined;
 }
@@ -577,10 +580,7 @@ export function isDesktopHost(): boolean {
  * The runtime hands the callback the whole {name, data} envelope rather than
  * the bare payload; unwrap `data` when present and pass anything else through.
  */
-export async function onHostEvent(
-  name: string,
-  fn: (payload: any) => void,
-): Promise<() => void> {
+export async function onHostEvent(name: string, fn: (payload: any) => void): Promise<() => void> {
   let runtime: any;
   try {
     runtime = await loadV3Runtime();
@@ -588,7 +588,8 @@ export async function onHostEvent(
     return () => {};
   }
   const off = runtime.Events?.On?.(name, (payload: any) => {
-    const data = payload && typeof payload === 'object' && 'data' in payload ? payload.data : payload;
+    const data =
+      payload && typeof payload === 'object' && 'data' in payload ? payload.data : payload;
     fn(data);
   });
   return typeof off === 'function' ? off : () => {};

@@ -87,9 +87,7 @@ function PromptLibraryCard() {
         const rest = prev.filter((x) => x.id !== p.id);
         return [p, ...rest];
       });
-      setDraft((d) =>
-        d && d.id === id ? { ...d, name: p.name, content: p.content } : d,
-      );
+      setDraft((d) => (d && d.id === id ? { ...d, name: p.name, content: p.content } : d));
       toast('已恢复默认', 'success');
     } catch (e) {
       toastError(e);
