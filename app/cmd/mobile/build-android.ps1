@@ -3,11 +3,12 @@
   Builds the EpubMaker Android APK (Wails v3 host).
 
 .DESCRIPTION
-  The desktop app builds with Wails v2 from app/ (run.ps1). This script builds
-  the separate v3 host in app/cmd/mobile, which shares every internal package
-  with it. Nothing here touches the desktop build.
+  Same host as the desktop build (app/main.go, see build-windows.ps1): this
+  cross-compiles that package into libwails.so and wraps it in the APK. What
+  lives here is the Android-only half — the Gradle project, the Java host and
+  the generated main() registration.
 
-  Steps: web bundle -> stage into frontend/dist -> Android main overlay ->
+  Steps: web bundle -> app/frontend/dist -> Android main overlay ->
   Go to libwails.so (NDK, c-shared) -> Gradle assembleDebug ->
   app/build/mobile/bin/EpubMaker.apk
 
@@ -15,7 +16,7 @@
   Target ABI. arm64 for phones (default), x86_64 for the emulator.
 
 .PARAMETER SkipFrontend
-  Reuse the existing frontend/dist instead of rebuilding web/ (~30s saved).
+  Reuse the existing app/frontend/dist instead of rebuilding web/ (~30s saved).
 
 .PARAMETER ApkOnly
   Skip the Go step and only re-run Gradle (useful after a Java-side tweak).
@@ -119,6 +120,14 @@ if (-not (Test-Path $Wails3Path)) {
   throw 'wails3 CLI not found. Run: go install github.com/wailsapp/wails/v3/cmd/wails3@v3.0.0-beta.34'
 }
 
+# The About page and the Windows build both take their version from here, so
+# there is one number to bump.
+$configYml = Join-Path $AppDir 'build\config.yml'
+$versionMatch = Get-Content $configYml | Select-String -Pattern '^[ ]+version: *"([^"]+)"' |
+  Select-Object -First 1
+if (-not $versionMatch) { throw "no quoted info.version in $configYml" }
+$Version = $versionMatch.Matches.Groups[1].Value
+
 $MinSdk = 21
 $AbiDir = if ($Arch -eq 'arm64') { 'arm64-v8a' } else { 'x86_64' }
 $GoArch = if ($Arch -eq 'arm64') { 'arm64' } else { 'amd64' }
@@ -132,38 +141,40 @@ Write-Ok "JDK       $JdkHome"
 Write-Ok "SDK       $SdkHome"
 Write-Ok "NDK       $NdkRoot"
 Write-Ok "ABI       $AbiDir"
+Write-Ok "version   $Version"
 
 $env:JAVA_HOME = $JdkHome
 $env:ANDROID_HOME = $SdkHome
 
 # --------------------------------------------------------------- frontend ---
-$StageDir = Join-Path $MobileDir 'frontend\dist'
+# The desktop build embeds exactly this directory (go:embed in app/main.go), so
+# staging once here serves both — there is no per-platform copy of the bundle.
+$StageDir = Join-Path $AppDir 'frontend\dist'
 if (-not $SkipFrontend) {
   Write-Step 'Building the web bundle'
   Push-Location $WebDir
   try {
     & npm run build
     if ($LASTEXITCODE -ne 0) { throw 'npm run build failed' }
+    # Mirrors dist/ into app/frontend/dist and prunes stale hashed chunks
+    # (robocopy /MIR under the hood, so it never depends on trash support).
+    & node ../scripts/sync-frontend-dist.js
+    if ($LASTEXITCODE -ne 0) { throw 'sync-frontend-dist failed' }
   } finally { Pop-Location }
-
-  # go:embed cannot reach outside the package directory.
-  #
-  # robocopy /MIR rather than Remove-Item + Copy-Item: a mirror also removes
-  # stale hashed chunks, and it does not depend on trash/delete support.
-  & robocopy (Join-Path $WebDir 'dist') $StageDir /MIR /NFL /NDL /NJH /NJS /NP | Out-Null
-  # robocopy exit codes 0-7 mean success (bit flags for copied/skipped/extra).
-  if ($LASTEXITCODE -ge 8) { throw "robocopy failed with code $LASTEXITCODE" }
   Write-Ok "staged -> $StageDir"
 } elseif (-not (Test-Path (Join-Path $StageDir 'index.html'))) {
-  throw 'frontend/dist is missing; run without -SkipFrontend first.'
+  throw 'app/frontend/dist is missing; run without -SkipFrontend first.'
 }
 
 if (-not $ApkOnly) {
   # ------------------------------------------------------------------ Go ----
+  # The overlay injects a generated main_android.gen.go (its init() registers
+  # main() for -buildmode=c-shared) into the app package without touching the
+  # source tree. It maps <cwd>/main_android.gen.go, so cwd must be the package.
   Write-Step 'Generating the Android main overlay'
-  Push-Location $MobileDir
+  Push-Location $AppDir
   try {
-    & $Wails3Path android overlay:gen -out 'build/android/overlay.json' -config 'build/config.yml'
+    & $Wails3Path android overlay:gen -out 'cmd/mobile/build/android/overlay.json' -config 'build/config.yml'
     if ($LASTEXITCODE -ne 0) { throw 'overlay:gen failed' }
   } finally { Pop-Location }
 
@@ -177,14 +188,14 @@ if (-not $ApkOnly) {
   $env:GOARCH = $GoArch
   $env:CC = $CC
 
-  Push-Location $MobileDir
+  Push-Location $AppDir
   try {
     # The about page shows when this binary was linked; unix seconds keep the
     # -X flag free of spaces and quoting hazards.
     $buildUnix = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
-    & go build -buildmode=c-shared -overlay build/android/overlay.json `
+    & go build -buildmode=c-shared -overlay cmd/mobile/build/android/overlay.json `
       -tags android,debug -buildvcs=false '-gcflags=all=-l' `
-      -ldflags "-X epubmaker-desktop/internal/app.BuildTimeUnix=$buildUnix" -o $SoOut .
+      -ldflags "-X epubmaker-desktop/internal/app.AppVersion=$Version -X epubmaker-desktop/internal/app.BuildTimeUnix=$buildUnix" -o $SoOut .
     if ($LASTEXITCODE -ne 0) { throw 'go build failed' }
 
     # Restore whatever host build settings later tooling expects.

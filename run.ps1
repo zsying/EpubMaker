@@ -9,9 +9,9 @@
   Modes:
     help           Show this help (default when no mode is given).
     clean          Remove build artifacts (web/dist, frontend dist, exe, APK).
-    build          Production build of the desktop exe (runs the frontend build first).
+    build          Production build of the desktop exe (frontend build + go build).
     nsis           Production build + Windows NSIS installer.
-    dev            Desktop dev loop: vite watcher + Go rebuild + window hot reload.
+    dev            Desktop dev loop: vite on :7800, app proxied to it, rebuild on Go change.
     web            Frontend only (vite on :7800). No Go backend, no window.go binding.
     mobile         Build the Android APK via app/cmd/mobile/build-android.ps1.
     mobile-install Install the APK on a phone and pull diagnostics (screenshots/trace).
@@ -99,9 +99,6 @@ function Assert-Prereqs {
       'go' {
         if (-not (Test-Tool 'go' 'Install Go 1.21+ from https://go.dev/dl')) { return $false }
       }
-      'wails' {
-        if (-not (Test-Tool 'wails' 'go install github.com/wailsapp/wails/v2/cmd/wails@latest')) { return $false }
-      }
     }
   }
   return $true
@@ -155,7 +152,7 @@ function Show-Help {
   Write-Host '  clean     Remove build artifacts' -ForegroundColor Gray
   Write-Host '  build     Production build (exe)' -ForegroundColor Gray
   Write-Host '  nsis      Production build + NSIS installer' -ForegroundColor Gray
-  Write-Host '  dev       Desktop dev loop (vite + Go + hot reload)' -ForegroundColor Gray
+  Write-Host '  dev       Desktop dev loop (vite + app, restarts on Go change)' -ForegroundColor Gray
   Write-Host '  web       Frontend only, vite on http://localhost:7800' -ForegroundColor Gray
   Write-Host '  mobile    Build the Android APK (arm64 default)' -ForegroundColor Gray
   Write-Host '  mobile-install  Install the APK on a phone + pull diagnostics' -ForegroundColor Gray
@@ -189,7 +186,9 @@ function Invoke-Clean {
     # Android: build-android.ps1 regenerates all of these. cmd/mobile/build/
     # itself stays — the gradle project and Java host in there are source.
     @{ Path = 'app/build/mobile'; Keep = @() },
-    @{ Path = 'app/cmd/mobile/frontend/dist'; Keep = @() },
+    @{ Path = 'app/build/windows/info.rendered.json'; Keep = @() },
+    @{ Path = 'app/build/vite.log'; Keep = @() },
+    @{ Path = 'app/build/vite.err.log'; Keep = @() },
     @{ Path = 'app/cmd/mobile/build/android/build'; Keep = @() },
     @{ Path = 'app/cmd/mobile/build/android/.gradle'; Keep = @() },
     @{ Path = 'app/cmd/mobile/build/android/app/build'; Keep = @() },
@@ -232,45 +231,26 @@ function Invoke-Install {
   return 0
 }
 
-# wails v2.11 loads package types with its own vendored golang.org/x/tools, which
-# cannot read the export data emitted by Go 1.27 — `wails build` dies with
-# 'internal error: package "fmt" without types was imported from ...' even though
-# `go build ./...` succeeds. Pinning the toolchain to the version in app/go.mod
-# sidesteps it. Harmless once wails catches up, so the pin stays until then.
-function Set-WailsToolchain {
-  if ($env:GOTOOLCHAIN) { return }
-  $goMod = Join-Path $RepoRoot 'app/go.mod'
-  if (-not (Test-Path $goMod)) { return }
-  $version = (Get-Content $goMod |
-    Select-String -Pattern '^\s*go\s+([0-9]+\.[0-9]+(\.[0-9]+)?)' |
-    Select-Object -First 1).Matches.Groups[1].Value
-  if (-not $version) { return }
-  $env:GOTOOLCHAIN = "go$version"
-  Write-Note "pinned GOTOOLCHAIN=go$version for wails compatibility"
-}
-
 function Invoke-Build {
   param([switch]$Installer)
 
-  if (-not (Assert-Prereqs @('node', 'npm', 'go', 'wails'))) { return 1 }
+  if (-not (Assert-Prereqs @('node', 'npm', 'go'))) { return 1 }
   if (-not (Test-Workspace)) { return 1 }
-  Set-WailsToolchain
 
-  Push-Location (Join-Path $RepoRoot 'app')
-  try {
-    # wails build runs frontend:build (npm run build + sync-frontend-dist.js)
-    # itself, so the frontend bundle is produced and embedded automatically.
-    # Plain unix seconds again: no spaces for the wails -> go flag chain.
-    $buildUnix = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
-    $ldflags = "-X epubmaker-desktop/internal/app.BuildTimeUnix=$buildUnix"
-    if ($Installer) {
-      Invoke-Native 'wails' @('build', '-nsis', '-ldflags', $ldflags)
-    } else {
-      Invoke-Native 'wails' @('build', '-ldflags', $ldflags)
-    }
-  } finally {
-    Pop-Location
+  # The real work lives in app/build-windows.ps1: bundle, version resource,
+  # go build, and optionally the NSIS installer. Wails' own `build` command is
+  # not used — it drives a Taskfile through go-task, which cannot run this
+  # repo's scripts on Windows.
+  $script = Join-Path $RepoRoot 'app/build-windows.ps1'
+  if (-not (Test-Path $script)) {
+    Write-Fail "missing: $script"
+    return 1
   }
+
+  $forward = @{}
+  if ($Installer) { $forward.Installer = $true }
+  & $script @forward
+  if ($LASTEXITCODE -ne 0) { return 1 }
 
   $exe = Join-Path $RepoRoot 'app/build/bin/EpubMaker.exe'
   if (Test-Path $exe) {
@@ -280,20 +260,19 @@ function Invoke-Build {
 }
 
 function Invoke-Dev {
-  if (-not (Assert-Prereqs @('node', 'npm', 'go', 'wails'))) { return 1 }
+  if (-not (Assert-Prereqs @('node', 'npm', 'go'))) { return 1 }
   if (-not (Test-Workspace)) { return 1 }
-  Set-WailsToolchain
 
   Write-Note 'first run compiles Go (incl. modernc.org/sqlite) and can take a minute'
   Write-Note 'wait for the window even after vite reports ready'
-  if (Test-PortBusy) { Write-Note 'continuing anyway — vite may fail to bind' }
 
-  Push-Location (Join-Path $RepoRoot 'app')
-  try {
-    Invoke-Native 'wails' @('dev')
-  } finally {
-    Pop-Location
+  $script = Join-Path $RepoRoot 'app/dev-windows.ps1'
+  if (-not (Test-Path $script)) {
+    Write-Fail "missing: $script"
+    return 1
   }
+  & $script
+  if ($LASTEXITCODE -ne 0) { return 1 }
   return 0
 }
 
@@ -446,7 +425,7 @@ switch -Regex ($requested) {
   '^(install|-i|--install)$'      { exit (Invoke-Install) }
   '^(build|-b|--build)$'          { exit (Invoke-Build) }
   '^(nsis|--nsis)$' {
-    if (-not (Assert-Prereqs @('node', 'npm', 'go', 'wails'))) { exit 1 }
+    if (-not (Assert-Prereqs @('node', 'npm', 'go'))) { exit 1 }
     exit (Invoke-Build -Installer)
   }
   '^(dev|-d|--dev)$'              { exit (Invoke-Dev) }
