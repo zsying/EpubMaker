@@ -3036,6 +3036,297 @@ html[data-app-theme='midnight'] .turn-veil-band {
   cursor: pointer;
 }
 
+/* ---------------------- OPDS catalog browser ---------------------- */
+
+.opds-search {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.opds-search .input {
+  flex: 1;
+  min-width: 0;
+}
+
+/* Source picker rows (built-in + saved catalogs). */
+.opds-src {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 14px 16px;
+  border-bottom: 1px solid var(--border);
+  cursor: pointer;
+}
+
+.opds-src:last-child {
+  border-bottom: 0;
+}
+
+.opds-src:hover {
+  background: var(--fill-2);
+}
+
+.opds-src-main {
+  flex: 1;
+  min-width: 0;
+}
+
+.opds-src-name {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.opds-src-desc {
+  font-size: 12px;
+  color: var(--text-3);
+  margin-top: 3px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* The address a reader might want to copy into another app; monospace because
+   it is read character by character. Two lines, not one: the interesting part
+   of a catalog URL is usually at the end (`?query=l.zh`), and a single-line
+   ellipsis hides exactly that. */
+.opds-src-url {
+  font-family: var(--mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  font-size: 11px;
+  color: var(--text-3);
+  opacity: 0.8;
+  margin-top: 4px;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  overflow: hidden;
+  overflow-wrap: anywhere;
+}
+
+.opds-hints {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.opds-hints-lead {
+  font-size: 12px;
+  color: var(--text-3);
+}
+
+.opds-hint {
+  padding: 3px 9px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--text-2);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+/* 上一级 exists for the desktop only: on a phone the bar already carries the
+   arrow, and two ways back in one header reads as a layout mistake. Same
+   specificity, later rule wins inside the query. */
+.opds-up.btn {
+  display: none;
+}
+
+@media (min-width: 641px) {
+  .opds-up.btn {
+    display: inline-flex;
+  }
+}
+
+.opds-hint:hover {
+  background: var(--fill-2);
+  color: var(--text);
+}
+
+.opds-chev {
+  flex: none;
+  color: var(--text-3);
+  font-size: 18px;
+  line-height: 1;
+}
+
+/* Entry list: cover + two lines of text + actions. */
+.opds-list {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  overflow: hidden;
+}
+
+.opds-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 12px 14px;
+  border-bottom: 1px solid var(--border);
+}
+
+/* The row is the control (a book imports, a folder opens), so it has to feel
+   like one: a pointer, and a press state that arrives with the tap rather than
+   with the download. */
+.opds-row.is-link {
+  cursor: pointer;
+}
+
+.opds-row.is-link:active {
+  background: var(--fill-2);
+}
+
+/* A row whose target has to be looked at before the tap can be honoured (is it
+   a book or a folder?) is one round trip away from doing something. */
+/* A row that is working says so through its own mark (⋯ / 下载中…), so the row
+   itself only recedes a little — dimming the whole row with opacity would grey
+   out the very text that reports progress. */
+.opds-row.is-busy .opds-title {
+  color: var(--text-2);
+}
+
+.opds-row.is-busy .opds-cover {
+  opacity: 0.55;
+}
+
+@media (hover: hover) {
+  .opds-row.is-link:hover {
+    background: var(--fill-2);
+  }
+}
+
+.opds-row:last-child {
+  border-bottom: 0;
+}
+
+.opds-cover {
+  flex: none;
+  width: 56px;
+  height: 76px;
+  border-radius: 6px;
+  overflow: hidden;
+  background: var(--fill);
+}
+
+.opds-cover img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.opds-info {
+  flex: 1;
+  min-width: 0;
+}
+
+.opds-title {
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 1.4;
+  color: var(--text);
+  /* Two lines is the most a catalog title needs, and this keeps a long
+     subtitle from pushing the blurb and the buttons out of the row. */
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.opds-sub {
+  font-size: 12px;
+  color: var(--text-3);
+  margin-top: 3px;
+}
+
+.opds-summary {
+  font-size: 12.5px;
+  color: var(--text-2);
+  line-height: 1.6;
+  margin-top: 4px;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.opds-act {
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  align-items: stretch;
+}
+
+/* A folder's only trailing mark is the chevron: it says "there is more this
+   way" without pretending to be a second way in. */
+.opds-act .opds-chev {
+  align-self: center;
+  margin-top: 8px;
+}
+
+@media (max-width: 640px) {
+  .opds-summary {
+    -webkit-line-clamp: 2;
+  }
+}
+
+/* Download confirmation. It has to sit above the list but stay readable on a
+   phone, so it is a card at the bottom, not a centred dialog: thumbs are at the
+   bottom, and the answer is usually "yes". */
+.opds-ask-mask {
+  position: fixed;
+  inset: 0;
+  z-index: 70;
+  background: rgb(0 0 0 / 38%);
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  padding: 16px;
+}
+
+.opds-ask {
+  width: 100%;
+  max-width: 420px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  padding: 18px 18px 14px;
+  box-shadow: 0 18px 48px rgb(0 0 0 / 22%);
+}
+
+.opds-ask-name {
+  font-size: 15px;
+  font-weight: 600;
+  line-height: 1.4;
+  color: var(--text);
+  /* Two lines, then ellipsis: a 60-character Sanskrit title must not push the
+     buttons off the card. */
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.opds-ask-sub {
+  margin-top: 6px;
+  font-size: 13px;
+  color: var(--text-2);
+}
+
+.opds-ask-acts {
+  margin-top: 16px;
+  display: flex;
+  gap: 10px;
+}
+
+.opds-ask-acts .btn {
+  flex: 1;
+}
+
 @media (max-width: 640px) {
   .wd-meta {
     display: none;
@@ -5817,6 +6108,16 @@ html[data-app-theme='midnight'] .turn-veil-band {
   gap: 10px;
   margin-bottom: 14px;
 }
+/* A catalog page title can be a whole book title ("Pride and Prejudice by Jane
+   Austen"). Letting it wrap turns the sticky header into five lines on a 360px
+   phone and squeezes the tag and the buttons out of the bar; the entry row
+   below carries the full title anyway, so one ellipsised line is enough. */
+.sub-head h1 {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 .sub-back {
   display: none;
   align-items: center;
@@ -5860,6 +6161,11 @@ html[data-app-theme='midnight'] .turn-veil-band {
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+  }
+  /* The title already squeezed it to a stub; a three-character ellipsis in a
+     pill reads as a broken layout, not as a hint. */
+  .sub-tag-narrow-hide {
+    display: none;
   }
 }
 

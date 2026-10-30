@@ -6,6 +6,7 @@ import Editor from './pages/Editor';
 import Split from './pages/Split';
 import Trash from './pages/Trash';
 import WebDav from './pages/WebDav';
+import Opds from './pages/Opds';
 import Bookmarks from './pages/Bookmarks';
 import Annotations from './pages/Annotations';
 import Vocab from './pages/Vocab';
@@ -130,6 +131,9 @@ export default function App() {
           <Link to="/webdav" className="btn ghost">
             WebDAV
           </Link>
+          <Link to="/opds" className="btn ghost">
+            书库
+          </Link>
         </header>
       )}
 
@@ -158,6 +162,7 @@ export default function App() {
             <Route path="/ai/:id" element={<AIChats />} />
             <Route path="/trash" element={<Trash />} />
             <Route path="/webdav" element={<WebDav />} />
+            <Route path="/opds" element={<Opds />} />
             <Route path="/me" element={<Me />} />
             <Route path="/about" element={<About />} />
             <Route path="/wifi" element={<WifiShare />} />

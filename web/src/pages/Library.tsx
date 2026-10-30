@@ -886,6 +886,9 @@ export default function Library() {
             <Link className="sheet-item" to="/webdav" onClick={() => setImportOpen(false)}>
               从 WebDAV 导入
             </Link>
+            <Link className="sheet-item" to="/opds" onClick={() => setImportOpen(false)}>
+              从在线书库导入
+            </Link>
             <button className="sheet-item cancel" onClick={() => setImportOpen(false)}>
               取消
             </button>

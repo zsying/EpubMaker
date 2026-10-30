@@ -18,7 +18,7 @@
 | `app/internal/vocab` | 生词本 + 查词信号 |
 | `app/internal/storage` | zip 内路径 ↔ 磁盘映射、回收站（软删除） |
 | `app/internal/db` | modernc.org/sqlite（纯 Go，无 cgo） |
-| `app/internal/{html,config,mime,webdav}` | 字符串改写 / 配置 / MIME / WebDAV 客户端 |
+| `app/internal/{html,config,mime,webdav,opds}` | 字符串改写 / 配置 / MIME / WebDAV 客户端 / OPDS 目录解析 |
 | `web/src` | React 18 + Vite。`pages/` 每页一个文件，`api.ts` 是绑定的唯一封装层，`overlay.ts` 是浮层定位算法 |
 | `app/cmd/dictimport` | 命令行词库安装器，与界面按钮走同一条代码路径 |
 
@@ -29,11 +29,19 @@
 2. **没有 HTTP、没有端口**。前端只用进程内绑定（`web/src/api.ts` 的 `Call.ByName`，运行时由宿主自己的
    `/wails/runtime.js` 提供）；二进制（封面/图片/渲染章节/导出）一律内联 base64。禁止引入 `/api` 路由、
    TCP 监听、multipart 上传。
-   **出站请求是另一回事**：`internal/webdav` 和 `internal/dict/online.go` 确实会主动 GET 外部服务。
-   新加出站请求必须同时满足三条——(a) 由用户的显式动作触发，不在打开页面时偷偷发；(b) 有超时，
-   且失败不阻塞 UI；(c) 结果落到本地（`dictcache` 那张表），同一个词不重复问。生词本的
+   **出站请求是另一回事**：`internal/webdav`、`internal/opds` 和 `internal/dict/online.go` 确实会主动
+   GET 外部服务。新加出站请求必须同时满足三条——(a) 由用户的显式动作触发，不在打开页面时偷偷发；
+   (b) 有超时，且失败不阻塞 UI；(c) 结果落到本地（`dictcache` 那张表），同一个词不重复问。生词本的
    「联网补全」是现成模板，`FillVocabGlosses` 的墓碑逻辑（查过了没有 → 记一笔空结果）也别漏掉，
-   否则按钮会永远提示还有 N 个词没解决。
+   否则按钮会永远提示还有 N 个词没解决。**OPDS 的边界是「目录 + epub 文件」**：只读 catalog XML 和
+   `application/epub+zip`，不做网页正文抓取、不解析盗版站、不内置书源规则引擎。`opds.PickEpub` 是
+   选版本的唯一实现，别在 TypeScript 里再写一份。**在线书库的一行只有一个动作**：书行点了就下载，
+   目录行点了就进去，行里不要再塞第二个按钮；条目不自带 epub 时由前端看一次 `navHref`（只有那一页
+   恰好一条可下载条目才当场下载，其余情况当目录进，并把这一页交给页面复用）。后端仍然只收
+   acquisition 链接——没有「把一个目录解析成一本书」的入口。**下载前一定先弹确认框**：`›` 分不出
+   书和目录，这一句才是读者知道「刚才那一下是什么」的地方，别用符号去猜、也别为了猜而对整页列表
+   逐个发请求。**下载按行记状态**（`busyRows`），允许并发：一本书在传时列表必须还能点，后台靠
+   `webdav.TempPath` 的唯一临时文件名 + 单连接 SQLite 保证安全，不要加「一次只能一个」的锁。
 3. **SQLite 层只用位置参数 `?`**，事务手写 `BEGIN`/`COMMIT`，`SetMaxOpenConns(1)`。别用命名参数或驱动特有的封装。
 4. **正文渲染后必须 DOMPurify 净化**，且只经 `library.RenderChapter` 改写资源链接。
 5. **分页阅读器翻页不做动画**：章内翻页是一次 `setPageIndex` + `translate3d`，禁止 3D 翻页/卷曲/投影；

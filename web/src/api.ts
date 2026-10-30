@@ -487,6 +487,55 @@ export interface WebDavTestResult {
   error?: string;
 }
 
+/** One configured OPDS catalog. `searchUrl` must keep the `{search}` slot. */
+export interface OpdsSource {
+  id?: string;
+  name?: string;
+  desc?: string;
+  url: string;
+  searchUrl?: string;
+  username?: string;
+  password?: string;
+  /** 忽略 TLS 证书错误（自签证书用） */
+  insecure?: boolean;
+}
+
+/** One <link> of a catalog entry, href already absolute. */
+export interface OpdsLink {
+  rel: string;
+  href: string;
+  type: string;
+  title: string;
+  length: number;
+}
+
+/**
+ * One catalog row. Either a navigation node (`navHref` set — step into it) or a
+ * publication (`downloads` non-empty — it can be imported).
+ */
+export interface OpdsEntry {
+  id: string;
+  title: string;
+  author: string;
+  summary: string;
+  language: string;
+  updated: string;
+  thumbnail: string;
+  navHref: string;
+  downloads: OpdsLink[];
+}
+
+export interface OpdsFeed {
+  title: string;
+  /** URL this page was served from; the UI uses it as the "back" target. */
+  requested: string;
+  self: string;
+  /** Absolute URL of the next page, empty on the last one. */
+  next: string;
+  prev: string;
+  entries: OpdsEntry[];
+}
+
 /**
  * Imports the host's runtime module.
  *
@@ -832,6 +881,28 @@ export const api = {
 
   webdavImport: (conn: WebDavConn, items: { path: string; name: string }[]) =>
     call<{ books: Book[]; errors: string[] }>('WebdavImport', conn, items),
+
+  /* ---------------- OPDS catalogs ---------------- */
+
+  /** Catalogs shipped with the app (currently Project Gutenberg). */
+  opdsSources: () => call<OpdsSource[]>('OpdsSources'),
+
+  /**
+   * Fetches one catalog page. `target` wins when set (following next/prev or a
+   * navigation entry); otherwise `query` goes through the source's search
+   * template, and an empty query means "the entry point".
+   */
+  opdsBrowse: (source: OpdsSource, query = '', target = '') =>
+    call<OpdsFeed>('OpdsBrowse', source, query, target),
+
+  /**
+   * Downloads and imports the given entries. Each item carries the acquisition
+   * links the feed published, and nothing else — the backend decides which file
+   * to fetch (PickEpub), so the edition-picking rules live in exactly one place.
+   * `duplicates` is not a failure: the book was already on the shelf.
+   */
+  opdsImport: (source: OpdsSource, items: { downloads?: OpdsLink[]; name: string }[]) =>
+    call<{ books: Book[]; errors: string[]; duplicates?: string[] }>('OpdsImport', source, items),
 
   /* ---------------- reading: dictionary / vocabulary ---------------- */
 

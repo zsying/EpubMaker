@@ -36,6 +36,7 @@ export default function SubHeader({
   children,
   backTo = '/',
   back = true,
+  hideTagOnPhone = false,
 }: {
   title: ReactNode;
   tag?: ReactNode;
@@ -49,6 +50,12 @@ export default function SubHeader({
    * the app rather than going "up".
    */
   back?: boolean;
+  /**
+   * Drop the tag on a phone. Only worth it when the tag repeats something the
+   * bar already says and the title is long enough to squeeze it to a stub — a
+   * three-character ellipsis reads as a rendering bug, not as information.
+   */
+  hideTagOnPhone?: boolean;
 }) {
   const nav = useNavigate();
   return (
@@ -81,7 +88,9 @@ export default function SubHeader({
         </button>
       )}
       <h1>{title}</h1>
-      {tag ? <span className="tag sub-tag">{tag}</span> : null}
+      {tag ? (
+        <span className={`tag sub-tag${hideTagOnPhone ? ' sub-tag-narrow-hide' : ''}`}>{tag}</span>
+      ) : null}
       <span className="spacer" />
       {children}
     </div>

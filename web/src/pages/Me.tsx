@@ -108,6 +108,17 @@ const ICON = {
       />
     </svg>
   ),
+  globe: (
+    <svg width="17" height="17" viewBox="0 0 18 18" aria-hidden="true">
+      <circle cx="9" cy="9" r="6" fill="none" stroke="currentColor" strokeWidth="1.4" />
+      <path
+        d="M3.2 9h11.6M9 2.6c1.6 1.8 2.4 3.9 2.4 6.4S10.6 13.6 9 15.4C7.4 13.6 6.6 11.5 6.6 9S7.4 4.4 9 2.6z"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.2"
+      />
+    </svg>
+  ),
   wifi: (
     <svg width="17" height="17" viewBox="0 0 18 18" aria-hidden="true">
       <path
@@ -424,6 +435,14 @@ export default function Me() {
                 <span className="me-rt">WebDAV</span>
               </span>
               <span className="me-val">{webdav || '未连接'}</span>
+              {CHEV}
+            </Link>
+            <Link className="me-row" to="/opds">
+              <span className="me-tile">{ICON.globe}</span>
+              <span className="me-row-text">
+                <span className="me-rt">在线书库</span>
+              </span>
+              <span className="me-val">OPDS</span>
               {CHEV}
             </Link>
             <Link className="me-row" to="/wifi">

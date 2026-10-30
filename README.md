@@ -7,7 +7,8 @@ EPUB 电子书维护与生成工具。本地运行的**桌面应用**（Wails v3
 ## 功能
 
 - **导入** —— 拖入 epub，自动解析元数据、目录、章节与全部资源
-- **阅读** —— 侧栏目录 + 干净的排版，记住上次读到哪一章；滚动 / 分页两种模式
+- **在线书库** —— OPDS 目录浏览：内置 Project Gutenberg，也可添加 Calibre-Web / 私有书库，挑书后下载导入
+- **阅读** —— 侧栏目录 + 干净的排版，记住上次读到哪一章；滚动 / 分页两种模式，横向拖动多长才翻页可调（灵敏 / 标准 / 稳重）
 - **查词** —— 划选单词即时查本地词库：音标、中文释义、原型、发音（离线）
 - **生词本** —— 查过的词自动沉淀（跨书），带原句与出处，可跳回原文
 - **整理** —— 改书名/作者/简介/封面，改章节标题与正文 HTML，拖拽排序，新增、删除、合并章节
@@ -129,10 +130,10 @@ EpubMaker/
 │       ├── dict/            # ECDICT 词库
 │       ├── vocab/           # 生词本
 │       ├── storage/         # 内容文件映射 + 回收站
-│       ├── db/ config/ html/ mime/ webdav/
+│       ├── db/ config/ html/ mime/ webdav/ opds/
 │       └── go.mod
 ├── web/src/
-│   ├── pages/               # Library Reader Editor Split Bookmarks Annotations Trash WebDav
+│   ├── pages/               # Library Reader Editor Split Bookmarks Annotations Trash WebDav Opds
 │   ├── api.ts               # 绑定的唯一封装层（含测试用的注入缝）
 │   ├── overlay.ts           # 浮层定位（保证不越出视窗）
 │   └── styles.css
