@@ -153,6 +153,80 @@ function docKey(href: string): string {
   return i >= 0 ? href.slice(0, i) : href;
 }
 
+// A hierarchical TOC frequently misses a few spine documents — the collection's
+// cover page, continuation pages a converter split out of a chapter (the TOC
+// still points at the pre-split document), stray section breaks. Dropping the
+// whole outline because of them (the old all-or-nothing gate) flattens books
+// whose tree is otherwise perfect — a 23-book 合集 would show one flat list.
+// Instead the uncovered chapters are woven back in: at each level of the tree
+// the entries keep their places, and missing chapters are inserted at their
+// spine position — before the first entry that starts after them, or nested
+// under the entry whose document span contains them. The outline stays
+// hierarchical and still reaches every chapter, which is the invariant the
+// all-or-nothing gate existed to protect.
+function mergeTocChapters(
+  entries: TocEntry[],
+  chapters: Chapter[],
+  covered: Set<string>,
+): TocEntry[] {
+  const missing = chapters.filter((c) => !covered.has(c.id));
+  if (entries.length === 0 || missing.length === 0) return entries;
+  const spineIdx = new Map<string, number>();
+  chapters.forEach((c, i) => spineIdx.set(c.href, i));
+  const leaf = (c: Chapter): TocEntry => ({ href: c.href, title: c.title });
+  // First spine position the entry's subtree resolves to (undefined = the
+  // subtree names no chapter document at all).
+  const firstSpine = (e: TocEntry): number | undefined => {
+    let best: number | undefined;
+    const walk = (x: TocEntry) => {
+      if (x.href) {
+        const i = spineIdx.get(docKey(x.href));
+        if (i !== undefined && (best === undefined || i < best)) best = i;
+      }
+      for (const k of x.children ?? []) walk(k);
+    };
+    walk(e);
+    return best;
+  };
+  // `pend` is spine-ordered. Each entry owns the span from its first document
+  // up to (excluding) the next sibling's first document; chapters inside the
+  // span recurse into its children (a childless entry adopts them as leaf
+  // children), chapters before the span flush in front of the entry.
+  const merge = (es: TocEntry[], pend: Chapter[]): TocEntry[] => {
+    if (pend.length === 0) return es;
+    if (es.length === 0) return pend.map(leaf);
+    const out: TocEntry[] = [];
+    let i = 0;
+    es.forEach((e, k) => {
+      const start = firstSpine(e);
+      const nextStart = k + 1 < es.length ? firstSpine(es[k + 1]) : undefined;
+      const at = (c: Chapter) => spineIdx.get(c.href) ?? -1;
+      while (start !== undefined && i < pend.length && at(pend[i]) < start) {
+        out.push(leaf(pend[i]));
+        i++;
+      }
+      const bucket: Chapter[] = [];
+      while (
+        i < pend.length &&
+        (start === undefined || at(pend[i]) >= start) &&
+        (nextStart === undefined || at(pend[i]) < nextStart)
+      ) {
+        bucket.push(pend[i]);
+        i++;
+      }
+      const kids = e.children?.length ? merge(e.children, bucket) : bucket.map(leaf);
+      out.push(kids.length ? { ...e, children: kids } : e);
+    });
+    // Whatever is left (spine docs after the last anchored entry) trails.
+    while (i < pend.length) {
+      out.push(leaf(pend[i]));
+      i++;
+    }
+    return out;
+  };
+  return merge(entries, missing);
+}
+
 // Return the node-path keys (matching TocNode's key encoding) from the root down
 // to the entry whose document href matches `doc`. Used by "locate current chapter"
 // to expand every ancestor group.
@@ -2269,8 +2343,10 @@ export default function Reader() {
   //  * it is flat, one row per chapter and no nesting, in which case the
   //    chapter list says the same thing and keeps the chapter numbers.
   //
-  // The chapter list is complete by construction, so it wins both times; the
-  // outline is drawn only when it is hierarchical *and* reaches every chapter.
+  // The chapter list still wins for flat outlines. A nested outline is kept
+  // even when it misses documents: the missing ones are woven back in below,
+  // so the "must reach every chapter" invariant holds without flattening
+  // collection epubs whose tree is otherwise perfect.
   const tocShape = useMemo(() => {
     const ids = new Set<string>();
     let nested = false;
@@ -2287,22 +2363,26 @@ export default function Reader() {
       }
     };
     walk(toc);
-    return { reached: ids.size, nested };
+    return { covered: ids, nested };
   }, [toc, byHref]);
-  const useTocTree = toc.length > 0 && tocShape.nested && tocShape.reached >= chapters.length;
+  const mergedToc = useMemo(
+    () => mergeTocChapters(toc, chapters, tocShape.covered),
+    [toc, chapters, tocShape],
+  );
+  const useTocTree = mergedToc.length > 0 && tocShape.nested;
   const currentChapter = current ? (chapters.find((c) => c.id === current) ?? null) : null;
   const activeDoc = currentChapter?.href ?? null;
   // Active highlight for the hierarchical TOC (no-op for flat-legacy books).
   const activeSet = useMemo(
-    () => (activeDoc ? computeActiveHrefs(toc, activeDoc) : new Set<string>()),
-    [toc, activeDoc],
+    () => (activeDoc ? computeActiveHrefs(mergedToc, activeDoc) : new Set<string>()),
+    [mergedToc, activeDoc],
   );
 
   // Expand every ancestor group of the current chapter and (after render) scroll
   // the active node into view. If no TOC surface is showing, open the drawer.
   function locateCurrent() {
     if (!activeDoc) return;
-    const path = findTocPath(toc, docKey(activeDoc));
+    const path = findTocPath(mergedToc, docKey(activeDoc));
     if (path.length) {
       setTocCollapsed((prev) => {
         const n = new Set(prev);
@@ -5047,7 +5127,7 @@ export default function Reader() {
           </div>
           {useTocTree ? (
             <TocTree
-              entries={toc}
+              entries={mergedToc}
               itemClass="toc-item"
               activeSet={activeSet}
               resolve={resolveTocHref}
@@ -5210,7 +5290,7 @@ export default function Reader() {
           <div className="toc-dock-body">
             {useTocTree ? (
               <TocTree
-                entries={toc}
+                entries={mergedToc}
                 itemClass="toc-item"
                 activeSet={activeSet}
                 resolve={resolveTocHref}
@@ -5526,7 +5606,7 @@ export default function Reader() {
             <div className="drawer-body">
               {useTocTree ? (
                 <TocTree
-                  entries={toc}
+                  entries={mergedToc}
                   itemClass="drawer-item"
                   activeSet={activeSet}
                   resolve={resolveTocHref}
