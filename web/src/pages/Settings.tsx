@@ -10,10 +10,15 @@ import {
   FONT_OVERRIDE_KEY,
   FONT_SIZE_KEY,
   MODE_KEY,
+  TURN_SENSITIVITY_KEY,
+  TURN_SENSITIVITY_LEVELS,
   appTheme,
   applyAppTheme,
+  turnLevelPct,
+  turnSensitivity,
   type AppTheme,
   type ReadMode,
+  type TurnSensitivity,
 } from '../readingPrefs';
 
 /**
@@ -49,6 +54,7 @@ export default function Settings() {
     () => (localStorage.getItem(MODE_KEY) as ReadMode) || 'paged',
   );
   const [theme, setTheme] = useState<AppTheme>(() => appTheme());
+  const [turnSens, setTurnSens] = useState<TurnSensitivity>(turnSensitivity);
   // Default ON: without it an EPUB's own font-family beats the picked face.
   const [override, setOverride] = useState(() => localStorage.getItem(FONT_OVERRIDE_KEY) !== '0');
   // The diagnostic log's switch lives here; its entries are on their own page.
@@ -185,6 +191,35 @@ export default function Settings() {
               >
                 滚动
               </button>
+            </div>
+          </div>
+
+          {/* Same key and same levels as the reader's Aa sheet. The hint is a
+              share of the page, not a pixel count: this page has no spread to
+              measure, and the fraction is what carries across screen sizes. */}
+          <div className="st-row">
+            <span className="st-lb">
+              翻页灵敏度
+              <small>横向拖过 {turnLevelPct(turnSens)}% 页宽才翻页</small>
+            </span>
+            <div className="rd-seg tight">
+              {TURN_SENSITIVITY_LEVELS.map((l) => (
+                <button
+                  key={l.id}
+                  type="button"
+                  className={turnSens === l.id ? 'on' : ''}
+                  aria-pressed={turnSens === l.id}
+                  onClick={() => {
+                    // Written here rather than in an effect: the reader reads
+                    // the key on mount, and the reader is not mounted while
+                    // this page is.
+                    localStorage.setItem(TURN_SENSITIVITY_KEY, l.id);
+                    setTurnSens(l.id);
+                  }}
+                >
+                  {l.label}
+                </button>
+              ))}
             </div>
           </div>
         </div>

@@ -41,12 +41,18 @@ import {
   MODE_KEY,
   FONT_FAMILY_KEY,
   FONT_OVERRIDE_KEY,
+  TURN_SENSITIVITY_KEY,
+  TURN_SENSITIVITY_LEVELS,
   APP_THEMES,
   appTheme,
   applyAppTheme,
   fontOverrideEnabled,
+  turnSensitivity,
+  turnThresholds,
+  turnLevelFactor,
   type AppTheme,
   type ReadMode,
+  type TurnSensitivity,
 } from '../readingPrefs';
 import { isTouchPrimary } from '../device';
 import { closeForNavigation, navigationDepth, useBackClose } from '../backNav';
@@ -609,6 +615,15 @@ export default function Reader() {
   const [fontOverride, setFontOverride] = useState<boolean>(fontOverrideEnabled);
   const [fontEpoch, setFontEpoch] = useState(0);
 
+  // How long a horizontal drag has to be before it turns the page. State so
+  // the Aa sheet can change it live, plus a ref because the gesture listeners
+  // are registered once per page and would otherwise keep the value they were
+  // born with — re-registering them to pick up a slider move would abort a
+  // drag that is already in flight.
+  const [turnSens, setTurnSens] = useState<TurnSensitivity>(turnSensitivity);
+  const turnSensRef = useRef(turnSens);
+  turnSensRef.current = turnSens;
+
   // paged reading state
   const [pageIndex, setPageIndex] = useState(0);
   const [pageCount, setPageCount] = useState(1);
@@ -1047,6 +1062,7 @@ export default function Reader() {
     () => localStorage.setItem(FONT_OVERRIDE_KEY, fontOverride ? '1' : '0'),
     [fontOverride],
   );
+  useEffect(() => localStorage.setItem(TURN_SENSITIVITY_KEY, turnSens), [turnSens]);
 
   // Registers the selected reading font once per change and re-measures the
   // paged layout after the face is really loaded: a font swap changes every
@@ -2079,7 +2095,9 @@ export default function Reader() {
   }
 
   // Let go. A flick counts even when it barely moved the page — the gesture
-  // said "next" — and a slow drag has to be carried a third of the way.
+  // said "next" — and a slow drag has to be carried the distance the reader's
+  // 翻页灵敏度 setting asks for (标准 = a third of the spread, the value this
+  // reader has always used).
   // `interrupted` is the system taking the gesture back: nobody let go, so
   // nothing was decided, and the page returns whatever it had travelled.
   function releaseDragTurn(flick: number, interrupted = false) {
@@ -2089,8 +2107,8 @@ export default function Reader() {
     // and a chapter turn is waiting for its chapter, not for another verdict.
     if (d.settling) return;
     const dist = Math.abs(d.px);
-    const far = Math.min(Math.max(turnGeomRef.current.stride * 0.3, 48), 160);
-    d.commit = !interrupted && (dist >= far || (flick * d.dir < -0.5 && dist > 16));
+    const { far, flickFloor } = turnThresholds(turnSensRef.current, turnGeomRef.current.stride);
+    d.commit = !interrupted && (dist >= far || (flick * d.dir < -0.5 && dist > flickFloor));
     // The card points at a word on the page being left behind. It goes when the
     // page is known to be going — not at touchstart, where unmounting the
     // element under the finger makes the browser cancel the gesture — and not
@@ -2423,6 +2441,12 @@ export default function Reader() {
     // in this reader, and the card sits exactly where the thumb already is.
     const host = readerRef.current;
     if (!host) return;
+    // The swipe floor for the paths that never hand the page to the finger —
+    // preview mode, and reduced motion (a page sliding under the thumb is
+    // exactly what that setting asks not to see). Everything else decides on
+    // the drag itself, in releaseDragTurn. 40 px is the 标准 level; the others
+    // scale it so the setting is not silently ignored just because the reader
+    // prefers reduced motion.
     const MIN_TRAVEL = 40; // px before a drag counts as a page turn
     const MIN_RATIO = 1.2; // horizontal travel must beat vertical by this much
     const LP_MS = 450; // hold-to-select threshold, tuned like 微信读书
@@ -2612,7 +2636,7 @@ export default function Reader() {
         releaseDragTurn(flickVelocity());
         return;
       }
-      if (Math.abs(dx) < MIN_TRAVEL) return;
+      if (Math.abs(dx) < MIN_TRAVEL * turnLevelFactor(turnSensRef.current)) return;
       if (Math.abs(dx) < Math.abs(dy) * MIN_RATIO) return;
       // The gesture was ours end to end; no stray click can follow.
       turnedAtRef.current = Date.now();
@@ -4097,6 +4121,31 @@ export default function Reader() {
                 <button className={mode === 'scroll' ? 'on' : ''} onClick={() => setMode('scroll')}>
                   滚动
                 </button>
+              </div>
+            </div>
+            {/* How far a horizontal drag has to go. The number shown is the
+                one the gesture actually uses, measured against this spread, so
+                a reader can pick a level and see what it means in pixels
+                instead of guessing what "灵敏" is worth. */}
+            <div className="rd-set-row">
+              <span className="rd-set-label">
+                翻页灵敏度
+                <small className="rd-set-desc">
+                  拖过约 {Math.round(turnThresholds(turnSens, turnGeomRef.current.stride).far)} px
+                  翻页
+                </small>
+              </span>
+              <div className="rd-seg tight">
+                {TURN_SENSITIVITY_LEVELS.map((l) => (
+                  <button
+                    key={l.id}
+                    className={turnSens === l.id ? 'on' : ''}
+                    aria-pressed={turnSens === l.id}
+                    onClick={() => setTurnSens(l.id)}
+                  >
+                    {l.label}
+                  </button>
+                ))}
               </div>
             </div>
             {/* Reading font: 默认 plus the open-source catalogue (download on

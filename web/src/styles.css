@@ -4907,6 +4907,12 @@ html[data-app-theme='midnight'] .turn-veil-band {
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.14);
   font-weight: 600;
 }
+/* Three labels ("灵敏 标准 稳重") next to a label at 360 px: the default 20 px
+   of horizontal padding per button adds up to a segment wider than the space
+   left of it, and the row would either wrap or squeeze the label to nothing. */
+.rd-seg.tight button {
+  padding: 7px 12px;
+}
 .rd-themes {
   display: flex;
   gap: 18px;
