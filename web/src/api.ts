@@ -645,18 +645,55 @@ export async function onHostEvent(name: string, fn: (payload: any) => void): Pro
 }
 
 /**
- * Subscribes to the Android system-share import events. When a book is shared
- * to EpubMaker from another app (WeChat, a browser, a file manager), the Java
- * host copies the content URI into the cache and emits "common:sharedImport"
- * with the copied file's path; this surfaces it to the frontend, which imports
- * it like any other path. Android only — a no-op unsubscribe on the desktop.
+ * Takes the cache paths of EPUBs other apps shared into this one, once each.
+ *
+ * The host keeps them queued until asked, because a share that cold-starts the
+ * app is copied into the cache several hundred milliseconds before the page
+ * exists — a pushed path used to land where no listener could hear it, and
+ * "分享到 EpubMaker" silently did nothing (opening the same file with
+ * "用其他应用打开" worked only because that app was usually still warm).
  */
-export async function onSharedImport(fn: (path: string) => void): Promise<() => void> {
+export function takeSharedImports(): string[] {
+  const bridge = (window as any).EpubMakerNative;
+  if (typeof bridge?.takePendingShared !== 'function') return [];
+  try {
+    const raw = bridge.takePendingShared();
+    const list = typeof raw === 'string' ? JSON.parse(raw) : raw;
+    return Array.isArray(list) ? list.filter((p) => typeof p === 'string' && p) : [];
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Subscribes to system-share imports. `fn` receives every path that arrived
+ * since the last drain, in one batch (a file manager can share several books).
+ *
+ * Subscribing drains what is already queued, so a cold-start share — one that
+ * arrived before this listener existed — is picked up on the first call.
+ * Android only; a no-op unsubscribe on the desktop.
+ */
+export async function onSharedImport(fn: (paths: string[]) => void): Promise<() => void> {
   if (isDesktopHost()) return () => {};
-  return onHostEvent('common:sharedImport', (data: unknown) => {
-    const path = typeof data === 'string' ? data : (data as { path?: string } | null)?.path;
-    if (typeof path === 'string' && path) fn(path);
-  });
+  let alive = true;
+  const drain = () => {
+    if (!alive) return;
+    const paths = takeSharedImports();
+    if (paths.length > 0) fn(paths);
+  };
+  // Subscribe first, then drain: a share landing between the two would
+  // otherwise sit in the queue with its nudge already gone.
+  let off: () => void = () => {};
+  try {
+    off = await onHostEvent('common:sharedImport', () => drain());
+  } catch {
+    // No runtime, no nudge — the drain below is the only route left.
+  }
+  drain();
+  return () => {
+    alive = false;
+    off();
+  };
 }
 
 /**

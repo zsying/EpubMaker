@@ -1270,3 +1270,49 @@ sherpa-onnx 打包模型）：中文模型动辄 60~100 MB，塞进 27 MB 的 AP
 离线脚本 `listen.cjs` 29/29（起点跟随当前页、整章入队 265 句、自动翻页 2→4、暂停续读同一句
 81→81、下一句 90→96、语速 1.0×→1.25×、关闭清引擎与高亮、跨章续读）；`seg.cjs` 8/8（360px 下
 两处分段控件都不折行、不溢出）。
+
+## ADR-30 分享进来的书是"排队等页面来取"，不是"事件推给页面"
+
+**问题。** 从别的应用「分享到 EpubMaker」没有任何反应；同一本书用「用其他应用打开」却能导入。
+
+**现场。** logcat 里三行时间戳就够了：
+
+```
+16:08:56.116 WailsActivity: sharedImport emitted: {"path":"…/cache/wails-picker/3649…/document"}
+16:08:56.526 WailsActivity: Page loaded: https://wails.localhost/
+16:08:56.676 WailsActivity: [WebView] LOG: … Wails Runtime Loaded
+```
+
+冷启动分享时，`onCreate` 就开始拷贝 URI，路径在 **页面加载前 410 ms、runtime.js 前 560 ms** 就绪；
+旧代码 `queueSharedImport` 把它塞进一个字符串字段、立刻 `emitEvent` 并**当场把字段清空**。事件落进
+一个还没有 React 监听器（连 wails runtime 都还没加载）的 WebView，等于扔进水里。热启动（应用还活着）
+时 `onNewIntent` 走同一条路，页面早就在监听，所以「打开」/「分享」看起来一半能用一半不能用——
+取决于那一瞬间应用是死是活，与用户操作无关。
+
+**决定。**
+
+- **队列由页面来取（pull），事件只当一个"有货"的提示。** 宿主把拷贝好的路径存进
+  `pendingSharedImports`，`EpubMakerNative.takePendingShared()` 返回 JSON 数组并清空；页面挂载时
+  主动去取，收到 `common:sharedImport` 也去取。事件本身不再携带路径，所以**丢了也只是少一次提醒，
+  不会少一本书**。`onPageFinished` 才会发提示（`pageReady`，`onPageStarted` 置 false）。
+- **队列不去重、不超 12 条。** 同一次「分享 2 项」是两条路径；一次给 20 本只会堆出 12 条——宁可
+  少收，也不要让分享变成一次批量灌库。
+- **`ACTION_SEND_MULTIPLE` 是单独的 intent-filter。** 带 `ACTION_SEND` 的过滤器**不匹配**多选分享，
+  「分享 2 项」以前根本看不到这个应用。`EXTRA_STREAM` 一律用带类型的 `getParcelableExtra(name,
+  Uri.class)`（API 33+），并对"单个 Uri 塞进列表字段"的发送方做回退——这类畸形 extra 以前会直接崩。
+- **缓存副本必须带文件名。** `file://` URI 没有 `OpenableColumns`，旧代码把副本命名成 `document`，
+  而 Go 侧 `ImportPaths` 按 `.epub` 后缀校验（`backend.go:97`），于是回一句「不是 EPUB 文件」——
+  这正是「用其他应用打开」在某些应用里也悄悄失败的原因。现在回退到 `uri.getLastPathSegment()`。
+- **应用名改成 EpubMaker。** 一直是 wails 模板的 `Wails App`，桌面图标和**每一个分享面板**都叫错名字。
+
+**否决。** ① **延迟几百毫秒再发事件 / 轮询重发**：赌时序，慢机器、冷启动、后台回收都会破；② **页面向
+宿主发"我准备好了"的 RPC**：要多一个 Go 方法，且仍然假定"发的那一刻页面一定在听"，而 pull 把这个
+假定整个删掉；③ **把过滤器放宽到 `*/*`**：任何一个应用分享照片都会列出 EpubMaker，用户点进来只得到
+一句「不是 EPUB 文件」；④ **只保留 push、把队列改成不清空**：事件重复投递会让同一本书导入两次。
+
+**证据。** 真机（JEF-AN00 / Android 12）：文件管理「分享」`Family Camping….epub` 冷启动导入成功
+（content:// 带文件名，`ImportPaths` 拿到的就是原名）；同一入口多选两个 epub，「2 个文件」面板里
+显示 EpubMaker，点进去是**一次** `ImportPaths` 带两条路径；新书 `file://` 分享后书架计数 +1（修复
+命名回退之后）。`cmd package query-activities … SEND_MULTIPLE -t application/epub+zip` 由 0 变 2。
+离线 `share.cjs` 8/8（挂载即取两条路径、一次调用、提示「已导入 2 本书」、空队列不导入、桥抛异常
+不炸页面）。

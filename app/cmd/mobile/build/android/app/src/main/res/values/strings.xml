@@ -1,4 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="app_name">Wails App</string>
+    <!-- The launcher label, and the name other apps' share sheets show. This
+         was the wails template default ("Wails App") until 2026-10-30, so the
+         home screen and every 分享面板 called the app something else entirely. -->
+    <string name="app_name">EpubMaker</string>
 </resources>

@@ -69,19 +69,22 @@ export default function App() {
     void api.logClient('info', 'nav', loc.pathname + loc.search, '').catch(() => {});
   }, [loc.pathname, loc.search]);
 
-  // A book shared to EpubMaker from another app (WeChat, browser, file
-  // manager) arrives as a copied cache path. Import it wherever the user
-  // happens to be, then tell the shelf to refresh if it is watching.
+  // Books shared to EpubMaker from another app (WeChat, browser, file manager)
+  // arrive as copied cache paths. Import them wherever the user happens to be,
+  // then tell the shelf to refresh if it is watching. Subscribing also drains
+  // whatever was shared before this page existed — that is the cold-start case
+  // this effect used to miss entirely.
   useEffect(() => {
     let alive = true;
     let off: (() => void) | null = null;
-    onSharedImport((path) => {
+    onSharedImport((paths) => {
       api
-        .importPaths([path])
+        .importPaths(paths)
         .then((res) => {
           const n = res.books.length;
           const dups = res.duplicates?.length ?? 0;
-          if (n > 0) toast(`已导入《${res.books[0].title}》`, 'success');
+          if (n === 1) toast(`已导入《${res.books[0].title}》`, 'success');
+          else if (n > 1) toast(`已导入 ${n} 本书`, 'success');
           else if (dups > 0) toast(res.duplicates![0], 'info');
           else toastError(res.errors?.[0] ?? '导入失败');
           window.dispatchEvent(new CustomEvent('epubmaker:imported'));
