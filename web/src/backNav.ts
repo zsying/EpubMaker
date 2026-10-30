@@ -3,11 +3,14 @@ import { useEffect, useRef } from 'react';
 /**
  * Hardware-back discipline for Android.
  *
- * The WebView's back button pops browser history: Wails' MainActivity calls
- * webView.goBack() whenever it can, and shows the 退出 prompt once nothing is
- * left. That is exactly the right primitive for "回退应该依据操作层级来退" —
- * a hardware back walks the navigation stack one level at a time. Two things
- * are built on top of it:
+ * The host does not decide anything itself: `MainActivity.onBackPressed` calls
+ * `window.__wailsBack()` (installed below) and leaves the app only when that
+ * returns false. It cannot use `webView.canGoBack()` — on Huawei's WebView that
+ * answers false for every same-document entry, so the native side believed the
+ * stack was empty while the page was four levels deep, and one swipe left the
+ * app from anywhere (ADR-25).
+ *
+ * So the page answers, and everything is built on history entries:
  *
  * 1. Overlays (drawers, sheets, the word card, a selection) are React state,
  *    not history entries — a raw history pop would throw the whole page away
@@ -20,6 +23,11 @@ import { useEffect, useRef } from 'react';
  * 2. Some jumps must not be fully reversible: deliberate exits and mode
  *    switches use navigate(..., { replace: true }) so "back" never resurrects
  *    a page the reader left on purpose.
+ *
+ * A page that keeps its own levels in React state instead of the URL gets a
+ * gesture that skips all of them: the only entry to pop is the page itself.
+ * That is what 在线书库 did (ADR-25) — its source → folder → book depth lived
+ * in a `useState` array, so back went straight to the shelf from any depth.
  *
  * Why exactly one sentinel, not one per overlay
  * ---------------------------------------------
@@ -181,6 +189,29 @@ export function navigationDepth(): number {
 
 /** Installs the capture-phase popstate guard. Call once, before React mounts. */
 export function installBackGuard() {
+  // The Android host asks this before deciding to leave the app. It cannot ask
+  // the WebView itself: on some Android WebView builds (Huawei's, for one)
+  // `canGoBack()` answers false for every same-document entry, so the native
+  // side believes nothing is behind it while the page is four levels deep. The
+  // hardware back then left the app from anywhere — the "回退直接回首页" report.
+  // The page is the only party that knows how deep it is, so it answers, and
+  // the host leaves only when this returns false.
+  //
+  // It deliberately does NOT close an overlay itself: `history.back()` pops the
+  // sentinel, and the guard below turns that pop into "close the newest
+  // overlay" while hiding it from the router. Two paths would drift.
+  (window as unknown as { __wailsBack?: () => boolean }).__wailsBack = () => {
+    const st = history.state as { idx?: number } | null;
+    const idx = typeof st?.idx === 'number' ? st.idx : -1;
+    // React-router's idx is the number of entries it pushed above the root, so
+    // idx > 0 is exactly "there is a page behind me". A document the router did
+    // not push (a cold start on a deep link) has no idx; history.length is the
+    // coarse but honest fallback there.
+    const canGoBack = idx >= 0 ? idx > 0 : history.length > 1;
+    if (!canGoBack) return false;
+    history.back();
+    return true;
+  };
   // A page must never be stacked on top of the sentinel: it would bury it, and
   // the first back press would then pop the buried copy and re-render the page
   // the reader just left (生词本 → 书籍正文 → 生词本 → 书架).

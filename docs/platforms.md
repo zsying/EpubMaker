@@ -148,7 +148,7 @@ Android 的 `minSdk 21` 属于纸面数字，建议把明面下限提到"WebView
 | H5 | 系统事件（电量/网络/主题/锁屏） | BroadcastReceiver | `events.IOS.*` | 免费 |
 | H6 | 本地网络传书 | 8787 端口 + 前台服务保活 | `NSLocalNetworkUsageDescription`；锁屏/后台即断 | 0.5 天 + 体验妥协 |
 | H7 | 从相册选封面 | 其实也是 SAF（Files） | 同上；真"相册"要自己写 PHPicker | 1–2 天，可选 |
-| H8 | 返回键 | `onBackPressed` | 无返回键，全走页面内路径 | 0 |
+| H8 | 返回键 | `onBackPressed` → 页面回答（`window.__wailsBack`） | 无返回键，全走页面内路径 | 0 |
 
 ## 5. 架构建议：把"平台"挤到最边缘
 

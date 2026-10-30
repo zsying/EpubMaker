@@ -1078,3 +1078,43 @@ v2 迁移到 v3 中，这样就不用维护 2 个版本了」。
 112 px、稳重 187 px；同一段 142px 慢拖在稳重不翻、切到灵敏即翻（6/218 → 7/218），档位落盘。
 真机注意：屏幕休眠时 CDP 触摸会挂住，脚本里 4s 超时就是为这个加的。
 
+## ADR-25 返回键改成「由页面回答」，因为 canGoBack 对 pushState 不可信
+
+**问题。** 用户报「在线书库里，回退手势无论在哪一层都直接回首页」。查下来不是 OPDS 一个页面的问题：
+真机 `MainActivity.onBackPressed` 里 `webView.canGoBack()` **恒为 false**，尽管
+`Page.getNavigationHistory` 显示 4 条历史、当前 index=3。JEF-AN00 / HarmonyOS 4.2 的 WebView 不把
+`pushState` 产生的同文档条目算进 canGoBack。后果是原生侧永远以为「后面没东西」→ 第一次按压弹
+「再按一次退出」、第二次直接退出；在阅读器里按返回也一样退不出去。ADR 里一直写着「hardware back
+walks the navigation stack」，那是**假设**，不是事实。
+
+**决定。**
+
+- **原生不再自己判断**：`onBackPressed` 调
+  `webView.evaluateJavascript("window.__wailsBack()")`，页面返回 `true` 表示它已经退了一层，
+  `false` 才交给「再按一次退出」。`canGoBack()` 完全不用。
+- **页面侧的 `__wailsBack`**（`backNav.ts` 里随 `installBackGuard` 注册）：`history.state.idx > 0`
+  就 `history.back()` 并返回 true（react-router 的 idx = 它压在根之上的条目数，正是「后面还有页」）；
+  取不到 idx 时退回 `history.length > 1`。**它不自己关浮层**：`history.back()` 会弹掉 sentinel，
+  现有的 popstate guard 把那次 pop 变成「关最上层浮层」并对 router 隐身——两条路径会漂移。
+- **层级本身挪进 URL**：`/opds` 的浏览位置写成 `?src=<源URL>&at=<目录URL>&q=<搜索词>`，每进一层就是
+  一条真实历史条目。原来用 React state 的 `stack` 数组，系统返回根本不认（它只会 pop 路由），
+  这才是「一次手势直接回首页」的直接原因。翻页用 `replace`（同级），搜索 push（可返回原处），
+  「换源」`nav(-depth)` 一次回到源列表。
+
+**顺带修掉的一个更糟的问题。** 原来每个目录行都有「导入」，后端 `resolveByNav` 会跟进目录挑
+**第一条带 EPUB 的**。对着「最受欢迎」点导入，等于让程序替你随机挑一本书。现在：
+
+- 前端只在条目**自带 `application/epub+zip` 获取链接**时显示「导入」，目录行只有「进入」；
+- 后端 `OpdsImportItem` **删掉了 `nav` 字段**，没有任何入口能把目录解析成书——「批量在线导入」
+  在 API 层就不可能，不只是 UI 不给按钮。
+
+**否决。** ① 继续用 `canGoBack`、在 Java 里维护一份层级镜像：两份真相必然漂移。② 让 `__wailsBack`
+直接关浮层（不 pop history）：sentinel 会残留，下一次返回落到它上面，URL 和屏幕就会分家（就是
+2026-10-26 那个黑屏 bug）。③ 目录行保留导入但加确认框：确认框解决不了「你要的是哪一本」。
+
+**证据。** 离线 `epub-verify/opds-back.cjs` 15 项（历史 `.opds-up`/目录页、真实 `history.back()`
+三层回退、导入载荷不含 nav、换源不多压历史、桌面 `上一级`）。真机 `device-opds-back.mjs` 10 项，
+返回全走 `adb shell input keyevent 4`（`onBackPressed` 的真路径）：书库根 → 分类 → 源列表 → 书架，
+逐层；目录行 `primary` 按钮数为 0。既有 `device-back.mjs` 11/11（词卡 / AI 面板 / 退到书架）
+在新链路下照旧。
+

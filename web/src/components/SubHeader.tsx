@@ -3,6 +3,27 @@ import { useNavigate } from 'react-router-dom';
 import { closeForNavigation, navigationDepth } from '../backNav';
 
 /**
+ * How many entries stand behind this page.
+ *
+ * The router's own counter is the honest one — `history.length` never shrinks,
+ * so it keeps claiming there is something behind a page whose stack is already
+ * empty. But it is NOT always there: an entry the router did not push carries
+ * no `idx` at all, and one real case is exactly the reported "退出直接回首页" —
+ * Android reclaims the app in the background, the WebView restores its
+ * session, and the restored entry has the URL but no state. Reading that as
+ * depth 0 turned 返回 into `replace`-to-root from any depth. So a missing (or
+ * non-numeric, which is what `idx + 1` on an undefined state silently produces)
+ * counter falls back to the entry count, which is coarse but never zero when
+ * there really is something to go back to.
+ */
+function depthBehind(): number {
+  const st = window.history.state as { idx?: number } | null;
+  const idx = st?.idx;
+  if (typeof idx === 'number' && Number.isFinite(idx)) return idx;
+  return Math.max(0, window.history.length - 1);
+}
+
+/**
  * Header for second-level pages (书签/划线/回收站/WebDAV/整理/拆分/设置). The
  * desktop keeps the flat `.lib-head` look; on a phone the page turns into a
  * sticky bar with a back chevron on the left and the title in it — the same
@@ -40,14 +61,10 @@ export default function SubHeader({
             // The number the router keeps, not history.length: the latter never
             // shrinks, so it says "there is something behind me" long after the
             // stack is empty. A sheet left open is stepped over, not swallowed.
-            const st = window.history.state as { idx?: number } | null;
-            const idx = st && typeof st.idx === 'number' ? st.idx : 0;
-            // Never step past what exists: idx counts the entries above the root,
-            // so this page plus its past is idx+1. go(-3) with two entries behind
-            // is a no-op, and the button simply stops working.
-            const depth = Math.min(navigationDepth(), idx + 1);
+            const behind = depthBehind();
+            const depth = Math.min(navigationDepth(), Math.max(1, behind));
             closeForNavigation();
-            if (idx > 0) nav(-depth);
+            if (behind > 0) nav(-depth);
             else nav(backTo, { replace: true });
           }}
         >

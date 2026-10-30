@@ -1077,18 +1077,36 @@ public class MainActivity extends AppCompatActivity {
     // tells the reader what happened, the second (within 2s) really leaves.
     private long lastBackAt = 0;
 
-    @Override
-    public void onBackPressed() {
-        if (webView != null && webView.canGoBack()) {
-            webView.goBack();
-            return;
-        }
+    /** Nothing left to go back to: ask twice before leaving, as Android does. */
+    private void leaveOrWarn() {
         long now = System.currentTimeMillis();
         if (now - lastBackAt < 2000) {
-            super.onBackPressed();
+            MainActivity.super.onBackPressed();
         } else {
             lastBackAt = now;
             Toast.makeText(this, "再按一次退出 EpubMaker", Toast.LENGTH_SHORT).show();
         }
+    }
+
+    @Override
+    public void onBackPressed() {
+        if (webView == null) {
+            leaveOrWarn();
+            return;
+        }
+        // canGoBack() is not usable here. On Huawei's WebView (JEF-AN00,
+        // HarmonyOS 4.2) it reports false for every same-document history
+        // entry, so the native side believes nothing is behind it while the
+        // page has four levels of pushState history -- and the back gesture
+        // left the app from anywhere. The page knows how deep it is, so ask
+        // it: true means it stepped back one level itself.
+        webView.evaluateJavascript(
+                "(function(){try{return !!(window.__wailsBack&&window.__wailsBack())}catch(e){return false}})()",
+                value -> {
+                    if ("true".equals(value)) {
+                        return;
+                    }
+                    leaveOrWarn();
+                });
     }
 }
