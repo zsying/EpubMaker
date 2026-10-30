@@ -46,6 +46,10 @@
   --rd-muted: #5a6272;
   --rd-border: #e3e6ec;
   --rd-sel: rgba(47, 107, 255, 0.22);
+  /* 听书: the band behind the sentence being spoken. Translucent so the
+     glyphs read through it, warm so it is never mistaken for a selection
+     (--rd-sel is the blue selection tint). */
+  --rd-listen: rgba(255, 186, 60, 0.32);
 
   /* Reader chrome bars follow the theme too (this was the complaint: a paper
      page under jet-black bars). Opaque-ish so Android WebView never has to
@@ -91,6 +95,7 @@ html[data-app-theme='sepia'] {
   --rd-muted: #8a7c62;
   --rd-border: rgba(0, 0, 0, 0.09);
   --rd-sel: rgba(163, 102, 43, 0.26);
+  --rd-listen: rgba(198, 140, 60, 0.34);
   --chrome-bg: rgba(249, 244, 232, 0.97);
   --chrome-fg: #3a3226;
   --chrome-muted: #988a6f;
@@ -126,6 +131,7 @@ html[data-app-theme='green'] {
   --rd-muted: #52705c;
   --rd-border: rgba(0, 0, 0, 0.09);
   --rd-sel: rgba(46, 125, 79, 0.3);
+  --rd-listen: rgba(70, 150, 95, 0.3);
   --chrome-bg: rgba(220, 239, 220, 0.97);
   --chrome-fg: #22362a;
   --chrome-muted: #6d8574;
@@ -167,6 +173,7 @@ html[data-app-theme='dark'] {
   --rd-muted: #6b7480;
   --rd-border: rgba(255, 255, 255, 0.08);
   --rd-sel: rgba(91, 139, 255, 0.35);
+  --rd-listen: rgba(112, 158, 255, 0.26);
   --chrome-bg: rgba(28, 31, 37, 0.97);
   --chrome-fg: #e8eaed;
   --chrome-muted: #aab1bd;
@@ -208,6 +215,7 @@ html[data-app-theme='midnight'] {
   --rd-muted: #64748f;
   --rd-border: rgba(140, 170, 220, 0.12);
   --rd-sel: rgba(111, 155, 255, 0.35);
+  --rd-listen: rgba(120, 165, 255, 0.28);
   --chrome-bg: rgba(24, 32, 49, 0.97);
   --chrome-fg: #dde5f0;
   --chrome-muted: #8b99b0;
@@ -5202,19 +5210,26 @@ html[data-app-theme='midnight'] .turn-veil-band {
   line-height: 1;
   color: var(--text);
 }
+/* Never let a segment shrink. Left to the flex algorithm it loses width to the
+   label beside it, and CJK breaks between any two characters, so "系统"/"在线"
+   quietly turned into two stacked glyphs ("系" over "统") at 360 px. The label
+   is the side that can wrap, so it takes the squeeze instead. */
 .rd-seg {
   display: flex;
+  flex: 0 0 auto;
   background: var(--panel-2);
   border-radius: 9px;
   padding: 3px;
 }
 .rd-seg button {
+  flex: 0 0 auto;
   border: none;
   background: transparent;
   padding: 7px 20px;
   border-radius: 7px;
   font-size: 13px;
   font-family: var(--font);
+  white-space: nowrap;
   color: var(--text-2);
   cursor: pointer;
 }
@@ -6961,4 +6976,179 @@ html[data-app-theme='midnight'] .turn-veil-band {
 .ai-more-end {
   font-size: 12px;
   color: var(--text-3);
+}
+
+/* -------------------------------- 听书 ----------------------------------
+   The band that follows the voice, and the bar that drives it. The band is a
+   fixed layer of plain boxes rather than an inline <span> wrapped around the
+   text: the chapter DOM is React's, and inserting into it is how a reader ends
+   up unmounting its own content later (see AGENTS.md). */
+
+.listen-marks {
+  position: fixed;
+  inset: 0;
+  z-index: 20;
+  pointer-events: none;
+}
+.listen-marks span {
+  position: absolute;
+  background: var(--rd-listen);
+  border-radius: 3px;
+  /* No transition: the band must land on the new line in the same frame the
+     page does, or it visibly trails the voice by one turn. */
+}
+
+.listen-bar {
+  position: fixed;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 45;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  width: min(560px, calc(100vw - 20px));
+  box-sizing: border-box;
+  padding: 7px 8px;
+  border-radius: 18px;
+  background: var(--chrome-bg);
+  border: 1px solid var(--chrome-border);
+  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.22);
+  color: var(--chrome-fg);
+  font-family: var(--font);
+}
+
+.lb-play {
+  flex: 0 0 auto;
+  width: 40px;
+  height: 40px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  border-radius: 50%;
+  background: var(--accent);
+  color: #fff;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+.lb-play:active {
+  transform: scale(0.94);
+}
+
+.lb-meta {
+  flex: 1 1 auto;
+  min-width: 0;
+  padding: 0 6px 0 8px;
+  line-height: 1.25;
+}
+.lb-title {
+  font-size: 12.5px;
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.lb-sub {
+  margin-top: 1px;
+  font-size: 10.5px;
+  color: var(--chrome-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.lb-btn {
+  flex: 0 0 auto;
+  width: 34px;
+  height: 34px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--chrome-fg);
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+.lb-btn:active {
+  background: var(--chrome-btn-bg);
+}
+
+.lb-rate {
+  flex: 0 0 auto;
+  min-width: 44px;
+  height: 28px;
+  padding: 0 6px;
+  border: 1px solid var(--chrome-btn-border);
+  border-radius: 14px;
+  background: var(--chrome-btn-bg);
+  color: var(--chrome-btn-fg);
+  font-family: var(--font);
+  font-size: 11.5px;
+  font-variant-numeric: tabular-nums;
+  cursor: pointer;
+}
+
+.lb-close {
+  flex: 0 0 auto;
+  width: 28px;
+  height: 28px;
+  margin-left: 2px;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--chrome-muted);
+  font-size: 18px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+/* The tab that starts listening says so while a session is live. */
+.m-tab.listening {
+  color: var(--accent);
+}
+
+/* 朗读 in the selection toolbar: the same outlined pill as 批注, because both
+   are "do something with this sentence" rather than "look something up". */
+.sel-listen {
+  height: 22px;
+  padding: 0 9px;
+  border: 1px solid var(--accent);
+  border-radius: 4px;
+  background: transparent;
+  color: var(--accent);
+  font-family: var(--font);
+  font-size: 12px;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+/* Voice picker inside the Aa-style sheet. Two columns because the labels are
+   long ("晓北 · 女声，东北话") and a single column would scroll for them. */
+.rd-voice-row {
+  display: block;
+}
+.rd-voices {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px;
+  margin-top: 8px;
+}
+.rd-voice {
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  background: var(--panel-2);
+  color: var(--text-2);
+  font-family: var(--font);
+  font-size: 12.5px;
+  text-align: left;
+  cursor: pointer;
+}
+.rd-voice.on {
+  border-color: var(--accent);
+  background: var(--panel);
+  color: var(--text);
+  font-weight: 600;
 }

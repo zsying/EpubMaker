@@ -1069,6 +1069,22 @@ export const api = {
   aiExplainCached: (word: string, sentence: string) =>
     call<ExplainResult | null>('AIExplainCached', word, sentence),
 
+  /* ---------------- 听书: the online neural voice ---------------- */
+
+  /**
+   * Synthesizes ONE sentence with Microsoft's neural voice and answers with the
+   * mp3 as base64. Optional engine: the phone's own TTS (the EpubMakerTts
+   * bridge) is the default, and this is what the reader picks when they want a
+   * voice that does not sound like a machine.
+   *
+   * `rate` is a multiplier, the same unit the system engine takes.
+   */
+  ttsEdge: (text: string, voice: string, rate: number) =>
+    call<string>('TtsEdge', text, voice, rate),
+
+  /** The online voices the settings sheet offers (name + Chinese label). */
+  edgeVoices: () => call<Array<{ name: string; label: string }>>('EdgeVoices'),
+
   /* ---------------- diagnostics: the local log ---------------- */
 
   /** Whether logging is on, where the file is, and how many entries are buffered. */

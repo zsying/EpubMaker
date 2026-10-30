@@ -62,6 +62,8 @@ public class MainActivity extends AppCompatActivity {
 
     private WebView webView;
     private WailsBridge bridge;
+    /** 听书: kept so onDestroy can stop the engine and drop the notification. */
+    private TtsBridge ttsBridge;
     // Battery: system-event receivers are registered only while the activity is
     // in the foreground (onStart) and torn down in onStop, so background battery/
     // network/screen broadcasts don't wake the app.
@@ -331,6 +333,11 @@ public class MainActivity extends AppCompatActivity {
         // The v3 runtime overwrites window.wails once it loads, shadowing every
         // @JavascriptInterface on the bridge above — so 导出 gets its own name.
         webView.addJavascriptInterface(new ExportShareBridge(this), "EpubMakerNative");
+
+        // 听书 speaks through the phone's own TTS engine, which no web API here
+        // can reach (the WebView ships SpeechSynthesis without any voices).
+        ttsBridge = new TtsBridge(this, webView);
+        webView.addJavascriptInterface(ttsBridge, "EpubMakerTts");
 
         // A WebChromeClient is required for HTML <input type="file"> elements to
         // work; without onShowFileChooser the WebView silently ignores clicks on
@@ -1065,6 +1072,10 @@ public class MainActivity extends AppCompatActivity {
     protected void onDestroy() {
         super.onDestroy();
         unregisterSystemEventReceivers();
+        if (ttsBridge != null) {
+            ttsBridge.shutdown();
+            ttsBridge = null;
+        }
         if (bridge != null) {
             bridge.shutdown();
         }

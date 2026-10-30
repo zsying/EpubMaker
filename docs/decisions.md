@@ -1225,3 +1225,48 @@ dark 59.9 / midnight 44.2 / sepia 33.1 / **green 26.8**。顺带查出同一套 
 设置页三个主题、生词本筛选条复查，选中项与文字对比均正常。真机（green 主题）书架与「我的」
 底部 tab 均为胶囊 + 加粗，`tabbar` 高 60px（原 54），书架流式布局自适应无遮挡。
 
+## ADR-29 听书：系统 TTS 兜底、Edge 音色是"可选赠品"，高亮画在浮层上
+
+**问题。** 手机端要能"把书读出来"。可选的音源只有三条路：手机自带的 TTS、浏览器
+`speechSynthesis`、以及云端（Edge 大声朗读 / 讯飞 / 百度）。要求是免费、能连读整本、熄屏不停。
+
+**决定。**
+
+- **默认走系统 TTS**（`android.speech.tts.TextToSpeech`）。它免费、离线、不限量，代价是音色机械。
+  本机（JEF-AN00 / Android 12）装了 `com.iflytek.speechsuite` 与 `com.huawei.hiai`，够用。
+  **WebView 的 `speechSynthesis` 在这台机器上 `getVoices()` 返回 0 个**，所以必须写原生桥
+  `EpubMakerTts`（`@JavascriptInterface`：`status/prepare/speak/clear/voices/setVoice/shutdown`），
+  事件从 `UtteranceProgressListener` 回到 `window.__epubTts`。
+- **Edge 音色只当可选赠品**（设置里的「在线」）。它是 Edge 浏览器的私有 WebSocket 接口，
+  不是公开 API，随时可能变；因此**默认关闭**，失败时提示回退到系统引擎，不让它成为唯一路径。
+- **引擎一次把本章剩余句子全部入队**（系统引擎），在线引擎才只保 4 句预取窗口。
+  理由：熄屏后 WebView 的 JS 会被冻结，`start` 回调驱动的"下一句"就停了；整章入队的是原生队列，
+  不受影响。实测熄屏 22 秒后仍在读，并且已经进入下一章。**在线音色因此熄屏后最多读完当前那一句**
+  （取音、解码、播放都在 WebView 里），这是"可选赠品"的已知代价，不为它写原生播放器。
+- **进度只由 `start` 推进，`done` 绝不翻页**。否则暂停/清空队列后，残留在途的 `done` 会让页面
+  背着读者自己往前翻。
+- **高亮是固定浮层（`.listen-marks`），不往正文里插 span。** 正文 DOM 归 React，注入节点会在
+  卸载时把整棵阅读器带崩（见 ADR-14 的同类事故）。矩形来自 `range.getClientRects()`，与
+  `offsetForPage` 用同一套坐标，所以换页、换字号、换主题都只是重测一遍。
+- **音频焦点丢了就暂停**（`AUDIOFOCUS_LOSS` / `LOSS_TRANSIENT` → `focus_lost`），来电时不许
+  跟电话抢；同时把 `WailsForegroundService` 以 `mediaPlayback` 类型前台化，熄屏不掉。
+- **在线连续两次取音失败就停**，只报一次。逐句失败会让队列走一步弹一个 toast，实测能把整屏
+  刷满红条，而且下一秒还会因为补词再刷一轮。
+- **分段控件不许被压缩**（`.rd-seg { flex: 0 0 auto }` + `white-space: nowrap`）。中日韩断行
+  可以在任意两字之间发生，压缩后的宽度刚好落在"两字差 0.02px"的临界上，「系统」「在线」就竖排了。
+
+**否决。** ① **纯 Web 方案（`speechSynthesis`）**：本机 0 个 voice，等于没功能；② **只上云端**
+（讯飞/百度）：要申请 key、有配额、断网即哑，与"免费听整本"冲突；③ **离线神经 TTS**（Piper/
+sherpa-onnx 打包模型）：中文模型动辄 60~100 MB，塞进 27 MB 的 APK 不现实；④ **边读边给正文插
+`<span>` 高亮**：会把 React 管的 DOM 改掉，且频繁 offset 重排会打断分页测量；⑤ **用 `setInterval`
+按字数估时推进**：与真实语速必然漂移，中文标点停顿、英文单词长度都会让预估失去意义。
+
+**证据。** 手机实测：听书条显示「第 7/269 句」，高亮带压在「康熙在位愈久…」那一行；熄屏 22 秒后
+进度从第 19/19 句跳到第 5/269 句（已换章）；`dumpsys audio` 可见
+`com.wails.app.TtsBridge … usage=USAGE_MEDIA content=CONTENT_TYPE_SPEECH state:started`；
+来电/其它播放器抢占后状态变为暂停。在线音色用 Go 侧 `TtsEdge` 直连，握手要求
+`Sec-MS-GEC` v2（带 CS64 折叠的加盐 SHA-256），已按 `edge-tts` 7.3.1 的 `drm.py` 逐行移植，
+并用上游生成的三组向量钉在 `tts_test.go`；实测返回 23760 / 11520 字节 mp3。
+离线脚本 `listen.cjs` 29/29（起点跟随当前页、整章入队 265 句、自动翻页 2→4、暂停续读同一句
+81→81、下一句 90→96、语速 1.0×→1.25×、关闭清引擎与高亮、跨章续读）；`seg.cjs` 8/8（360px 下
+两处分段控件都不折行、不溢出）。

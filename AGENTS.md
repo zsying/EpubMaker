@@ -130,6 +130,19 @@
     Java 侧还要把**主框架**的 MIME 强制成 `text/html`：类型是按扩展名猜的，无扩展名的路由
     会被当成 `application/octet-stream` 下载而不是渲染。
 
+13. **朗读只能走原生 `EpubMakerTts`，别指望 `speechSynthesis`**。本机 WebView 的
+    `getVoices()` 返回空数组，Web 端再怎么写都是静音。桥在
+    `app/cmd/mobile/build/android/app/src/main/java/com/wails/app/TtsBridge.java`
+    （`@JavascriptInterface`，`MainActivity` 里 `addJavascriptInterface(..., "EpubMakerTts")`），
+    事件从 `UtteranceProgressListener` 回到 `window.__epubTts`。改这里要连着 `styles.css` 的
+    `.listen-marks` / `Reader.tsx` 的 `pumpListen` 一起想：**熄屏后 JS 会冻结**，所以系统引擎
+    一次把整章入队，靠 `start` 回调推进，`done` 不翻页。
+
+14. **Edge 音色的握手是 `Sec-MS-GEC` v2，别自己改算法**。`app/internal/app/edge_token.go` 是
+    `edge-tts` 7.3.1 `drm.py` 的逐行移植（加盐 SHA-256 + CS64 折叠，5 分钟取整），
+    `tts_test.go` 里钉了三组上游生成的向量。它哪天 403 了，正确做法是拿新版 `edge-tts` 重新对照
+    移植并重钉向量，不是"清理"成普通 SHA-256——旧算法早就被拒了。这是私有接口，不在稳定承诺内。
+
 ## 开发约定
 
 - **首选入口 `.\run.ps1`**（无参数打印帮助）：`dev` / `build` / `nsis` / `mobile` / `mobile-install`

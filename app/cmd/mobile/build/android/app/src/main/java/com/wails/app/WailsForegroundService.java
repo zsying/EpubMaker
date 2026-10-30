@@ -29,9 +29,11 @@ public class WailsForegroundService extends android.app.Service {
     public int onStartCommand(Intent intent, int flags, int startId) {
         String title = "Wails";
         String text = "Running in the background";
+        String fgType = null;
         if (intent != null) {
             if (intent.getStringExtra("title") != null) title = intent.getStringExtra("title");
             if (intent.getStringExtra("text") != null) text = intent.getStringExtra("text");
+            fgType = intent.getStringExtra("fgType");
         }
 
         NotificationManager nm = (NotificationManager) getSystemService(NOTIFICATION_SERVICE);
@@ -58,7 +60,13 @@ public class WailsForegroundService extends android.app.Service {
                 .build();
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            startForeground(NOTIFICATION_ID, n, ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC);
+            // 听书 asks for mediaPlayback, which is the type Android uses to
+            // decide an app may keep an audio stream alive; everything else
+            // keeps the dataSync it shipped with.
+            int type = "media".equals(fgType)
+                    ? ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK
+                    : ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC;
+            startForeground(NOTIFICATION_ID, n, type);
         } else {
             startForeground(NOTIFICATION_ID, n);
         }
