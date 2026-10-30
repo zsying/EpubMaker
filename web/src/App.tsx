@@ -22,7 +22,7 @@ import Logs from './pages/Logs';
 import { initFileDrop } from './filedrop';
 import { clearBackClosers } from './backNav';
 import { isTouchPrimary } from './device';
-import { api, onSharedImport } from './api';
+import { api, onSharedImport, syncLogTimezone } from './api';
 import { toast, toastError, Toaster } from './toast';
 import MobileTabs from './components/MobileTabs';
 
@@ -68,6 +68,12 @@ export default function App() {
     clearBackClosers();
     void api.logClient('info', 'nav', loc.pathname + loc.search, '').catch(() => {});
   }, [loc.pathname, loc.search]);
+
+  // Android's Go process has no zoneinfo and logs in UTC until told otherwise;
+  // the WebView knows the device zone, so hand it over once at startup.
+  useEffect(() => {
+    void syncLogTimezone();
+  }, []);
 
   // Books shared to EpubMaker from another app (WeChat, browser, file manager)
   // arrive as copied cache paths. Import them wherever the user happens to be,

@@ -71,6 +71,12 @@ const (
 // Entry is one line: what happened, where, and whatever detail the caller had.
 // Data is a flat string map so the UI can render it without knowing the shape
 // of any particular event.
+// timeLayout stamps every entry with its UTC offset ("+08:00"). A bare
+// timestamp is ambiguous: on Android the process logs UTC until the frontend
+// hands over the device zone, on the desktop it logs local time from the
+// start, and the same file can hold both kinds.
+const timeLayout = "2006-01-02 15:04:05.000-07:00"
+
 type Entry struct {
 	Time  string            `json:"time"`
 	Level string            `json:"level"`
@@ -219,7 +225,7 @@ func Event(level, cat, msg string, kv ...string) {
 		return
 	}
 	e := Entry{
-		Time:  time.Now().Format("2006-01-02 15:04:05.000"),
+		Time:  time.Now().Format(timeLayout),
 		Level: level,
 		Cat:   cat,
 		Msg:   clip(msg, valueLimit),
@@ -271,7 +277,7 @@ func writeLocked(e Entry) {
 			// Say so in the file itself: a log that silently begins mid-session
 			// reads like data loss when someone inspects it later.
 			marker := Entry{
-				Time:  time.Now().Format("2006-01-02 15:04:05.000"),
+				Time:  time.Now().Format(timeLayout),
 				Level: LevelInfo,
 				Cat:   "app",
 				Msg:   "日志超过上限，已删除最早的部分",

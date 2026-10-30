@@ -623,6 +623,25 @@ export function isDesktopHost(): boolean {
 }
 
 /**
+ * Tells Go what wall clock to log in. Android sandboxes the app away from any
+ * zoneinfo database, so the Go process falls back to UTC there and every log
+ * line reads eight hours off the phone's clock; a FixedZone needs no database
+ * files. Desktop already starts on local time, but calling this everywhere
+ * costs nothing and keeps one startup path. Fire-and-forget: a failed call
+ * just leaves whatever default the process had.
+ */
+export async function syncLogTimezone(): Promise<void> {
+  try {
+    // getTimezoneOffset is minutes *west* of UTC; Go wants seconds east.
+    const offsetMinutes = new Date().getTimezoneOffset();
+    const name = Intl.DateTimeFormat().resolvedOptions().timeZone || 'Local';
+    await call('SetTimezone', name, -offsetMinutes * 60);
+  } catch {
+    // No backend (browser preview) or older build — the default stands.
+  }
+}
+
+/**
  * Subscribes to a host event. Returns a no-op unsubscribe when there is no
  * host, so callers never branch.
  *

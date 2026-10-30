@@ -1,6 +1,6 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import SubHeader from '../components/SubHeader';
-import { api, type LogEntry, type LogState } from '../api';
+import { api, isDesktopHost, type LogEntry, type LogState } from '../api';
 import { toast, toastError } from '../toast';
 
 /**
@@ -49,6 +49,11 @@ export default function Logs() {
     void load();
   }, [load]);
 
+  // Newest first: what just happened is what a reader is looking for when the
+  // page opens. 复制全部 follows the same order so a handover matches the
+  // screen; the file itself keeps chronological order.
+  const shown = useMemo(() => [...entries].reverse(), [entries]);
+
   async function toggle() {
     if (!state) return;
     setBusy(true);
@@ -79,9 +84,9 @@ export default function Logs() {
   /** Plain-text dump for a bug report. Long fields are kept as-is: the whole
    * point of copying is to hand over the prompt that produced a bad answer. */
   function asText(): string {
-    return entries
+    return shown
       .map((e) => {
-        const head = `[${e.time}] ${e.level.toUpperCase()} ${e.cat} ${e.msg}`;
+        const head = `[${localTime(e.time)}] ${e.level.toUpperCase()} ${e.cat} ${e.msg}`;
         const data = e.data
           ? Object.entries(e.data)
               .map(([k, v]) => `    ${k}: ${v}`)
@@ -209,10 +214,10 @@ export default function Logs() {
       )}
 
       <div className="logs-list">
-        {entries.map((e, i) => (
+        {shown.map((e, i) => (
           <div className={`log-item lv-${e.level}`} key={`${e.time}-${i}`}>
             <div className="log-head">
-              <span className="log-time">{e.time.slice(11)}</span>
+              <span className="log-time">{localTime(e.time)}</span>
               <span className={`log-cat cat-${e.cat}`}>{catLabel(e.cat)}</span>
               {e.data?.kind && <span className="log-kind">{e.data.kind}</span>}
               <span className="log-msg">{e.msg}</span>
@@ -246,4 +251,20 @@ function catLabel(cat: string): string {
       return '应用';
   }
   return cat;
+}
+
+/**
+ * Renders a stored timestamp in the device's own clock: "10-30 16:57:24".
+ *
+ * New entries carry an explicit UTC offset (logx stamps "+08:00"), so they
+ * convert exactly. Older Android entries are bare UTC — the Go process had no
+ * zoneinfo until SetTimezone landed — and bare desktop entries are local wall
+ * clock from the start, hence the host split for the suffix-less case.
+ */
+function localTime(t: string): string {
+  const bare = !/(?:Z|[+-]\d{2}:?\d{2})$/.test(t);
+  const d = new Date(t.replace(' ', 'T') + (bare && !isDesktopHost() ? 'Z' : ''));
+  if (isNaN(d.getTime())) return t;
+  const p = (n: number) => String(n).padStart(2, '0');
+  return `${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;
 }

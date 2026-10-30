@@ -2,6 +2,7 @@ package app
 
 import (
 	"strings"
+	"time"
 
 	"epubmaker-desktop/internal/logx"
 )
@@ -54,6 +55,21 @@ func (b *Backend) LogClient(level, cat, message, detail string) error {
 		return nil
 	}
 	logx.Event(level, cat, message)
+	return nil
+}
+
+// SetTimezone tells the process what wall clock to log in. Android sandboxes
+// the app away from any zoneinfo database, so Go's time.Local falls back to
+// UTC there and every log line reads eight hours off the phone's clock. The
+// frontend hands over what the WebView already knows — the IANA zone id plus
+// its offset in seconds east of UTC — and time.FixedZone needs no database
+// files, so this works where time.LoadLocation would fail.
+func (b *Backend) SetTimezone(name string, offsetSeconds int) error {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return nil
+	}
+	time.Local = time.FixedZone(name, offsetSeconds)
 	return nil
 }
 
