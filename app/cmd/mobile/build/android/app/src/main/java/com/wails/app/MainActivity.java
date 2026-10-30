@@ -128,6 +128,11 @@ public class MainActivity extends AppCompatActivity {
     private void handleSendIntent(@Nullable Intent intent) {
         if (intent == null) return;
         String action = intent.getAction();
+        if (DEBUG) {
+            Log.d(TAG, "handleSendIntent: action=" + action + " type=" + intent.getType()
+                    + " data=" + intent.getData()
+                    + " hasStream=" + intent.hasExtra(Intent.EXTRA_STREAM));
+        }
         List<Uri> uris = new ArrayList<>();
         try {
             if (Intent.ACTION_SEND.equals(action)) {
