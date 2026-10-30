@@ -161,7 +161,11 @@ export default function MobileTabs() {
             }}
             className={({ isActive }) => `tabbar-item${isActive ? ' active' : ''}`}
           >
-            {t.icon}
+            {/* The pill is what makes "which tab am I on" readable: on the low-
+                saturation themes (green / sepia / midnight) the accent and the
+                idle grey are only ~27 ΔE apart, so colour alone is nearly
+                invisible. Shape answers the question even when the hues do not. */}
+            <span className="tabbar-ico">{t.icon}</span>
             <span>{t.label}</span>
           </NavLink>
         );

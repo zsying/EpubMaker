@@ -8,7 +8,7 @@
   --text-2: #5a6272;
   --text-3: #8b93a3;
   --accent: #2f6bff;
-  --accent-soft: #eaf0ff;
+  --accent-soft: #dce7ff;
   --danger: #d93b3b;
   --danger-soft: #fdeaea;
   --ok: #1a9c62;
@@ -77,7 +77,7 @@ html[data-app-theme='sepia'] {
   --text-2: #6b5f4b;
   --text-3: #988a6f;
   --accent: #a3662b;
-  --accent-soft: #f3e5cd;
+  --accent-soft: #e9d5b0;
   --fill: #ece2cc;
   --fill-2: #efe6d3;
   --mark-line: #a8742a;
@@ -112,7 +112,7 @@ html[data-app-theme='green'] {
   --text-2: #48604f;
   --text-3: #6d8574;
   --accent: #2e7d4f;
-  --accent-soft: #c8e6cd;
+  --accent-soft: #aed7b8;
   --fill: #c2dcc5;
   --fill-2: #c8e2ca;
   --mark-line: #2f7d4b;
@@ -147,7 +147,7 @@ html[data-app-theme='dark'] {
   --text-2: #9aa3ad;
   --text-3: #6f7883;
   --accent: #5b8bff;
-  --accent-soft: #232c3f;
+  --accent-soft: #27334b;
   --warn: #d3a353;
   --warn-soft: #33291a;
   --ok: #4fbf8b;
@@ -188,7 +188,7 @@ html[data-app-theme='midnight'] {
   --text-2: #8b99b0;
   --text-3: #61708a;
   --accent: #6f9bff;
-  --accent-soft: #1f2a42;
+  --accent-soft: #25365a;
   --warn: #d9ae5e;
   --warn-soft: #2f2718;
   --ok: #57c393;
@@ -4076,7 +4076,11 @@ html[data-app-theme='midnight'] .turn-veil-band {
   color: var(--text-2);
 }
 /* Only the two weekly rows get colour; the rest stay neutral so the colour
-   itself means "this is the common path". */
+   itself means "this is the common path". Both use `accent`, and nothing here
+   may borrow `--warn`: that palette means "not set up yet" (未安装 / 未配置, see
+   the badge below), so a warn-tinted tile sits next to a green 已安装 badge and
+   says two opposite things at once — and on the green theme its cream
+   background is the one warm patch on the screen. */
 .me-row.tall .me-tile {
   width: 36px;
   height: 36px;
@@ -4085,10 +4089,6 @@ html[data-app-theme='midnight'] .turn-veil-band {
 .me-tile.accent {
   background: var(--accent-soft);
   color: var(--accent);
-}
-.me-tile.amber {
-  background: var(--warn-soft);
-  color: var(--warn);
 }
 
 .me-val {
@@ -4783,8 +4783,34 @@ html[data-app-theme='midnight'] .turn-veil-band {
     -webkit-tap-highlight-color: transparent;
   }
 
+  /* The selected tab is marked by a pill behind the glyph, not by colour alone.
+     On the low-saturation themes the accent and the idle grey sit ~27 ΔE apart
+     (green is the worst), which is not enough to read at a glance — the shape
+     carries the answer even when the hue does not. Weight and stroke width do
+     the same job for the label and the icon. */
+  .tabbar-ico {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 44px;
+    height: 26px;
+    border-radius: 13px;
+    transition: background-color 0.15s ease;
+  }
+
   .tabbar-item.active {
     color: var(--accent);
+    font-weight: 600;
+  }
+
+  .tabbar-item.active .tabbar-ico {
+    background: var(--accent-soft);
+  }
+
+  /* `stroke-width` is a presentation attribute on the paths; a CSS rule beats
+     it, so one declaration thickens every glyph without touching the markup. */
+  .tabbar-item.active svg :is(path, circle, line, rect) {
+    stroke-width: 1.9;
   }
 
   /* Shelf header: the low-frequency links move to「我的」, the import button

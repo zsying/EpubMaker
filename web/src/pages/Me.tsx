@@ -390,7 +390,7 @@ export default function Me() {
               disabled={!!busy}
               onClick={() => setSheetOpen(true)}
             >
-              <span className="me-tile amber">{ICON.dict}</span>
+              <span className="me-tile accent">{ICON.dict}</span>
               <span className="me-row-text">
                 <span className="me-rt">查词词库</span>
                 <span className="me-rs">{dictState}</span>
