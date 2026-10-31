@@ -16,6 +16,21 @@ of described.
 
 ### Added
 
+- **The table of contents has two views: the book's own outline, and the files**
+  — 邓小平时代 showed 35 sections for a 33-entry nav, one of them the English book
+  title stranded after 注　释, and 第6章 / 第7章 lit up together because both live
+  inside one document. Both were the price of stitching the nav and the spine
+  into a single list: the extra row was a document the nav never named (its only
+  title is the book's English one), and the double highlight was "match by
+  document" over two sections that share one. The panel now draws each source as
+  it is, and the header switches between them: 目录 is the EPUB nav/NCX exactly as
+  written, 文件 is the spine, one numbered row per document — the fallback for
+  books that do not describe themselves properly. The choice is remembered; a
+  book with no nav shows no switch, and a nav that names fewer sections than
+  there are documents (calibre writing three labels for 28 files) opens on 文件
+  without losing its nav. Exactly one row is ever current, picked by the last
+  anchor that has passed the bottom of the screen, so a jump to 第7章 says 第7章
+  even when its heading is halfway down the page. See ADR-36.
 - **The WebDAV list can be sorted and filtered** — a shared folder with forty
   epubs left the reader scrolling in the order the server happened to return,
   which was directories first and then bytes. The list now carries one row of

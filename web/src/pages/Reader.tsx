@@ -131,6 +131,23 @@ type ListenState = {
 
 type MarkBox = { left: number; top: number; width: number; height: number };
 
+/** Which list the TOC panel is showing: the book's own outline, or the spine. */
+type TocView = 'nav' | 'file';
+const TOC_VIEW_KEY = 'epubmaker.tocView';
+
+/** Below this the scroll-mode aside is hidden (it becomes the drawer), so no
+ *  outline is on screen to highlight. Matches the CSS breakpoint. */
+const NARROW_QUERY = '(max-width: 980px)';
+
+function readTocView(): TocView | null {
+  try {
+    const v = localStorage.getItem(TOC_VIEW_KEY);
+    return v === 'nav' || v === 'file' ? v : null;
+  } catch {
+    return null;
+  }
+}
+
 /** True while a field is focused — the case where a soft keyboard is (or is
  * about to be) covering part of the screen. */
 function isEditableFocused(): boolean {
@@ -164,78 +181,73 @@ function docKey(href: string): string {
   return i >= 0 ? href.slice(0, i) : href;
 }
 
-// A hierarchical TOC frequently misses a few spine documents — the collection's
-// cover page, continuation pages a converter split out of a chapter (the TOC
-// still points at the pre-split document), stray section breaks. Dropping the
-// whole outline because of them (the old all-or-nothing gate) flattens books
-// whose tree is otherwise perfect — a 23-book 合集 would show one flat list.
-// Instead the uncovered chapters are woven back in: at each level of the tree
-// the entries keep their places, and missing chapters are inserted at their
-// spine position — before the first entry that starts after them, or nested
-// under the entry whose document span contains them. The outline stays
-// hierarchical and still reaches every chapter, which is the invariant the
-// all-or-nothing gate existed to protect.
-function mergeTocChapters(
-  entries: TocEntry[],
-  chapters: Chapter[],
-  covered: Set<string>,
-): TocEntry[] {
-  const missing = chapters.filter((c) => !covered.has(c.id));
-  if (entries.length === 0 || missing.length === 0) return entries;
-  const spineIdx = new Map<string, number>();
-  chapters.forEach((c, i) => spineIdx.set(c.href, i));
-  const leaf = (c: Chapter): TocEntry => ({ href: c.href, title: c.title });
-  // First spine position the entry's subtree resolves to (undefined = the
-  // subtree names no chapter document at all).
-  const firstSpine = (e: TocEntry): number | undefined => {
-    let best: number | undefined;
-    const walk = (x: TocEntry) => {
-      if (x.href) {
-        const i = spineIdx.get(docKey(x.href));
-        if (i !== undefined && (best === undefined || i < best)) best = i;
-      }
-      for (const k of x.children ?? []) walk(k);
-    };
-    walk(e);
-    return best;
-  };
-  // `pend` is spine-ordered. Each entry owns the span from its first document
-  // up to (excluding) the next sibling's first document; chapters inside the
-  // span recurse into its children (a childless entry adopts them as leaf
-  // children), chapters before the span flush in front of the entry.
-  const merge = (es: TocEntry[], pend: Chapter[]): TocEntry[] => {
-    if (pend.length === 0) return es;
-    if (es.length === 0) return pend.map(leaf);
-    const out: TocEntry[] = [];
-    let i = 0;
-    es.forEach((e, k) => {
-      const start = firstSpine(e);
-      const nextStart = k + 1 < es.length ? firstSpine(es[k + 1]) : undefined;
-      const at = (c: Chapter) => spineIdx.get(c.href) ?? -1;
-      while (start !== undefined && i < pend.length && at(pend[i]) < start) {
-        out.push(leaf(pend[i]));
-        i++;
-      }
-      const bucket: Chapter[] = [];
-      while (
-        i < pend.length &&
-        (start === undefined || at(pend[i]) >= start) &&
-        (nextStart === undefined || at(pend[i]) < nextStart)
-      ) {
-        bucket.push(pend[i]);
-        i++;
-      }
-      const kids = e.children?.length ? merge(e.children, bucket) : bucket.map(leaf);
-      out.push(kids.length ? { ...e, children: kids } : e);
-    });
-    // Whatever is left (spine docs after the last anchored entry) trails.
-    while (i < pend.length) {
-      out.push(leaf(pend[i]));
-      i++;
+// ---- the two views of one book, never mixed -------------------------------
+//
+//  * 目录 (nav) — the book's own outline, EPUB3 nav or NCX, exactly as written.
+//    It is the only thing that knows what the sections are *called*. It may
+//    name several sections inside one document, and it may leave documents out
+//    (a cover, a continuation page a converter split off) because its author
+//    never thought of them as chapters.
+//  * 文件 (files) — the spine, one row per document. It knows every document
+//    and nothing about what they are called.
+//
+// The reader used to weave the two together (ADR-31) so one list reached every
+// document, and against 邓小平时代 that produced rows the book never had: its
+// last document, whose only title is the English book title, appeared after
+// 注 释 as a second title page, and the two sections that share one document
+// lit up together — a chapter that looked duplicated. A faithful list of 33
+// sections that is a little short of 18 documents is easier to understand than
+// 35 rows where two were invented, and the switch is right there.
+
+/** Every nav href that points into `doc`, in outline order. */
+function hrefsInDoc(entries: TocEntry[], doc: string): string[] {
+  const out: string[] = [];
+  const walk = (es: TocEntry[]) => {
+    for (const e of es) {
+      if (e.href && docKey(e.href) === doc) out.push(e.href);
+      if (e.children?.length) walk(e.children);
     }
-    return out;
   };
-  return merge(entries, missing);
+  walk(entries);
+  return out;
+}
+
+/** Rows a nav actually draws (group nodes without an href are not rows). */
+function countTocEntries(entries: TocEntry[]): number {
+  let n = 0;
+  const walk = (es: TocEntry[]) => {
+    for (const e of es) {
+      if (e.href) n += 1;
+      if (e.children?.length) walk(e.children);
+    }
+  };
+  walk(entries);
+  return n;
+}
+
+/** The `#fragment` a nav entry points at, percent-decoded ('' if it has none). */
+function anchorIdOf(href: string): string {
+  const i = href.indexOf('#');
+  if (i < 0) return '';
+  const raw = href.slice(i + 1);
+  try {
+    return decodeURIComponent(raw);
+  } catch {
+    // A malformed escape is still a usable id in most books.
+    return raw;
+  }
+}
+
+/** The rendered element an anchor was rewritten onto (id → data-anc, because
+ *  DOMPurify may not keep `id`), or null when the book has no such anchor — a
+ *  section that points at its document's top, or one the sanitizer dropped. */
+function anchorElement(root: Element, id: string): Element | null {
+  if (!id) return null;
+  try {
+    return root.querySelector(`[data-anc="${CSS.escape(id)}"]`);
+  } catch {
+    return null;
+  }
 }
 
 // Return the node-path keys (matching TocNode's key encoding) from the root down
@@ -252,30 +264,6 @@ function findTocPath(es: TocEntry[], doc: string, base = ''): string[] {
     }
   }
   return [];
-}
-
-// Which TOC nodes count as "current" for the active highlight. We match a node
-// by its document (fragment-stripped) href against the open chapter. Fragment-less
-// chapter entries are preferred; if the book's TOC has no fragment-less entry for
-// this document, we fall back to the first fragment-bearing match.
-function computeActiveHrefs(entries: TocEntry[], activeDoc: string): Set<string> {
-  const fragLess: string[] = [];
-  const any: string[] = [];
-  const walk = (es: TocEntry[]) => {
-    for (const e of es) {
-      if (!e.href) {
-        if (e.children) walk(e.children);
-        continue;
-      }
-      if (docKey(e.href) === activeDoc) {
-        if (e.href.includes('#')) any.push(e.href);
-        else fragLess.push(e.href);
-      }
-      if (e.children) walk(e.children);
-    }
-  };
-  walk(entries);
-  return new Set(fragLess.length ? fragLess : any);
 }
 
 // Recursive hierarchical TOC renderer. Collapse state is controlled by the parent
@@ -405,6 +393,120 @@ function TocNode({
   );
 }
 const posKey = (id: string) => `epubmaker.pos.${id}`;
+
+/** The 目录 / 文件 switch. It only exists when the book has a nav to switch to:
+ *  a book without one has exactly one possible view, and a control that cannot
+ *  change anything is a question with no answer. */
+function TocSeg({ view, onChange }: { view: TocView; onChange: (v: TocView) => void }) {
+  return (
+    <span className="toc-seg" role="tablist">
+      <button
+        type="button"
+        role="tab"
+        aria-selected={view === 'nav'}
+        className={view === 'nav' ? 'on' : ''}
+        onClick={() => onChange('nav')}
+        title="按书的目录（EPUB nav / NCX），原样显示"
+      >
+        目录
+      </button>
+      <button
+        type="button"
+        role="tab"
+        aria-selected={view === 'file'}
+        className={view === 'file' ? 'on' : ''}
+        onClick={() => onChange('file')}
+        title="按文件（spine 文档），每份文档一行"
+      >
+        文件
+      </button>
+    </span>
+  );
+}
+
+/** "Locate current chapter" — the same icon in all three TOC surfaces. */
+function TocLocate({ onClick }: { onClick: () => void }) {
+  return (
+    <button
+      className="toc-locate"
+      title="定位到当前章节"
+      onClick={onClick}
+      aria-label="定位到当前章节"
+    >
+      <svg
+        viewBox="0 0 24 24"
+        width="15"
+        height="15"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="2"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      >
+        <circle cx="12" cy="12" r="3" />
+        <path d="M12 2v3M12 19v3M2 12h3M19 12h3" />
+      </svg>
+    </button>
+  );
+}
+
+/** One list, two sources. The nav is drawn as the tree it is; the file view is
+ *  one row per spine document, numbered, which is the only way to reach a
+ *  document the nav never names. */
+function TocList({
+  view,
+  toc,
+  chapters,
+  itemClass,
+  activeSet,
+  resolve,
+  onPick,
+  current,
+  openChapter,
+  collapsed,
+  onToggle,
+}: {
+  view: TocView;
+  toc: TocEntry[];
+  chapters: Chapter[];
+  itemClass: string;
+  activeSet: Set<string>;
+  resolve: (href: string) => string | undefined;
+  onPick: (cid: string, href?: string) => void;
+  current: string | null;
+  openChapter: (cid: string) => void;
+  collapsed: Set<string>;
+  onToggle: (key: string) => void;
+}) {
+  if (view === 'nav') {
+    return (
+      <TocTree
+        entries={toc}
+        itemClass={itemClass}
+        activeSet={activeSet}
+        resolve={resolve}
+        onPick={onPick}
+        collapsed={collapsed}
+        onToggle={onToggle}
+      />
+    );
+  }
+  return (
+    <>
+      {chapters.map((c, i) => (
+        <button
+          key={c.id}
+          className={`${itemClass}${c.id === current ? ' active' : ''}`}
+          onClick={() => openChapter(c.id)}
+          title={c.title}
+        >
+          <span className="num">{String(i + 1).padStart(2, '0')}</span>
+          {c.title}
+        </button>
+      ))}
+    </>
+  );
+}
 
 // restore carries a layout-independent source character offset (not a page
 // number), so the target page is re-derived from the current layout.
@@ -1577,6 +1679,14 @@ export default function Reader() {
     return null;
   }
 
+  // The offset just past the last page on screen. The outline uses it to decide
+  // which section the reader is *in*: a page that shows where a section starts
+  // counts as being in that section, so jumping to 第7章 does not keep saying
+  // 第6章 while the 第7章 heading sits halfway down the same page.
+  function offsetAfterLastPage(): number {
+    return pageStartOffset(pageIndex + pagesPerView) ?? Number.MAX_SAFE_INTEGER;
+  }
+
   /* ---- 听书: the session ------------------------------------------------ */
 
   function listenVoiceLabel(): string {
@@ -2242,12 +2352,19 @@ export default function Reader() {
   // the paged reader stores — without it every scroll-mode position collapses
   // to "start of the chapter".
   function offsetAtViewportTop(): number {
+    return offsetAtViewportY(false);
+  }
+
+  /** Same measurement at either edge of the reading pane: `fromBottom` answers
+   *  "which text is at the end of what I can see", which is how a scroll-mode
+   *  page decides the section it is in (the paged rule, in one dimension). */
+  function offsetAtViewportY(fromBottom: boolean): number {
     const root = contentRef.current;
     const scroller = mainRef.current;
     if (!root || !scroller) return 0;
     const box = scroller.getBoundingClientRect();
     const x = box.left + Math.min(120, scroller.clientWidth / 2);
-    const y = box.top + 6;
+    const y = fromBottom ? box.bottom - 6 : box.top + 6;
     const doc = document as Document & {
       caretRangeFromPoint?: (x: number, y: number) => Range | null;
     };
@@ -2260,7 +2377,7 @@ export default function Reader() {
       return charOffset(root, caret.startContainer, caret.startOffset);
     }
     // Fallback for engines without caretRangeFromPoint: the first text node
-    // that reaches past the top edge. Coarse (whole node), still better than 0.
+    // that reaches past the edge. Coarse (whole node), still better than 0.
     const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
     let seen = 0;
     let n: Node | null;
@@ -2480,84 +2597,118 @@ export default function Reader() {
     const ch = byHref.get(docKey(href));
     return ch?.id;
   };
-  // The drawer's header counts chapters, so the list has to offer all of them.
-  // A nav can fail that promise in two ways:
+  // Which of the two lists the panel is showing. The choice is a preference
+  // (it survives a restart), not a property of the book, so it is stored once
+  // and shared by every book — the same drawer, the same two answers.
   //
-  //  * it names fewer documents than the spine holds. Converted EPUBs are the
-  //    usual offenders — calibre split this book into 28 files but wrote only
-  //    three labels ("Taboo", "Introduction", "Midpoint"), so the tree drew
-  //    three rows under a header reading "29 章" and the other 26 chapters
-  //    could not be reached from it at all;
-  //  * it is flat, one row per chapter and no nesting, in which case the
-  //    chapter list says the same thing and keeps the chapter numbers.
-  //
-  // The chapter list still wins for flat outlines *of the same grain*. A flat
-  // outline that names more sections than there are documents is finer than
-  // the chapter list, not equal to it: 邓小平时代's nav lists 33 sections across
-  // 15 files (扉页, 地图, 序, 前言, 导言 and 第1章 all live in one file), so the
-  // chapter list would hide six of them — and each row would be titled after
-  // its file, which for this book is the English cover title. Those are kept.
-  // A nested outline is kept even when it misses documents: the missing ones
-  // are woven back in below, so the "must reach every chapter" invariant holds
-  // without flattening collection epubs whose tree is otherwise perfect.
-  const tocShape = useMemo(() => {
-    const ids = new Set<string>();
-    let nested = false;
-    let entries = 0;
-    const walk = (es: TocEntry[]) => {
-      for (const e of es) {
-        if (e.href) {
-          entries += 1;
-          const cid = byHref.get(docKey(e.href))?.id;
-          if (cid) ids.add(cid);
-        }
-        if (e.children?.length) {
-          nested = true;
-          walk(e.children);
-        }
-      }
-    };
-    walk(toc);
-    return { covered: ids, nested, entries };
-  }, [toc, byHref]);
-  const mergedToc = useMemo(
-    () => mergeTocChapters(toc, chapters, tocShape.covered),
-    [toc, chapters, tocShape],
-  );
-  const useTocTree =
-    mergedToc.length > 0 && (tocShape.nested || tocShape.entries > chapters.length);
-  // The header counts what the list actually shows. A nav is a list of
-  // *sections*, and there can be more of them than there are documents (this
-  // book: 33 sections in 15 files), so "18 章" over 33 rows would be a lie in
-  // the other direction.
-  const tocRows = useMemo(() => {
-    let n = 0;
-    const walk = (es: TocEntry[]) => {
-      for (const e of es) {
-        if (e.href) n += 1;
-        if (e.children?.length) walk(e.children);
-      }
-    };
-    walk(mergedToc);
-    return n;
-  }, [mergedToc]);
-  const tocCount = useTocTree ? tocRows : chapters.length;
-  // "节" only for a flat nav that is finer than the spine: a nested outline is
-  // a chapter tree whatever its leaf count, and reads better as "章".
-  const tocUnit = useTocTree && !tocShape.nested ? '节' : '章';
+  // When nothing has been chosen yet the nav wins, because it is the book's own
+  // outline. The exception is a nav that names fewer sections than the spine
+  // has documents: converted EPUBs are the usual offenders (calibre split a
+  // book into 28 files and wrote three labels), and three rows over 28 chapters
+  // is not an outline anyone can use. That is a *default*, not a merge — the
+  // nav is still one tap away and stays exactly as written.
+  const [tocPref, setTocPref] = useState<TocView | null>(readTocView);
+  const setTocView = (v: TocView) => {
+    setTocPref(v);
+    try {
+      localStorage.setItem(TOC_VIEW_KEY, v);
+    } catch {
+      // Private mode: the choice still applies to this session.
+    }
+  };
+  const navCount = useMemo(() => countTocEntries(toc), [toc]);
+  const hasNav = toc.length > 0;
+  const navView = hasNav && (tocPref ?? (navCount < chapters.length ? 'file' : 'nav')) === 'nav';
+  const tocView: TocView = navView ? 'nav' : 'file';
+  const tocCount = navView ? navCount : chapters.length;
+  const tocUnit = navView ? '节' : '章';
+
   const currentChapter = current ? (chapters.find((c) => c.id === current) ?? null) : null;
   const activeDoc = currentChapter?.href ?? null;
-  // Active highlight for the hierarchical TOC (no-op for flat-legacy books).
-  const activeSet = useMemo(
-    () => (activeDoc ? computeActiveHrefs(mergedToc, activeDoc) : new Set<string>()),
-    [mergedToc, activeDoc],
-  );
+
+  // Which section the reader is inside. A nav can name several sections inside
+  // one document — 邓小平时代's 第6章 and 第7章 both live in split_004 — so
+  // matching rows by document lit both of them, which is what made a chapter
+  // look duplicated. The section is the last entry of this document whose
+  // anchor has already passed the bottom edge of what is on screen, measured as
+  // a character offset so it means the same thing in both reading modes. Until
+  // it has been measured the first entry of the document stands in, so exactly
+  // one row is ever highlighted.
+  const [activeSection, setActiveSection] = useState<string | null>(null);
+  // A list has to be on screen for its highlight to matter: the paged reader's
+  // drawer and dock, or the scroll reader's aside — which CSS replaces with the
+  // drawer below 980px.
+  const [wideLayout, setWideLayout] = useState(() => !window.matchMedia(NARROW_QUERY).matches);
+  useEffect(() => {
+    const mq = window.matchMedia(NARROW_QUERY);
+    const onChange = () => setWideLayout(!mq.matches);
+    mq.addEventListener('change', onChange);
+    return () => mq.removeEventListener('change', onChange);
+  }, []);
+  const tocVisible = tocOpen || tocDocked || (mode === 'scroll' && wideLayout);
+  useEffect(() => {
+    if (!navView || !tocVisible || !activeDoc) {
+      setActiveSection(null);
+      return;
+    }
+    const hrefs = hrefsInDoc(toc, activeDoc);
+    if (hrefs.length <= 1) {
+      setActiveSection(hrefs[0] ?? null);
+      return;
+    }
+    const root = contentRef.current;
+    if (!root) {
+      setActiveSection(hrefs[0]);
+      return;
+    }
+    const pick = () => {
+      const pos = mode === 'paged' ? offsetAfterLastPage() : offsetAtViewportY(true);
+      let best = hrefs[0];
+      for (const href of hrefs) {
+        const el = anchorElement(root, anchorIdOf(href));
+        if (el && anchorOffset(root, el) <= pos) best = href;
+      }
+      setActiveSection(best);
+    };
+    if (mode !== 'scroll') {
+      pick();
+      return;
+    }
+    // Scroll mode has no page event to hang this on: the section changes when
+    // the reader scrolls past an anchor, and only then.
+    const scroller = mainRef.current;
+    if (!scroller) {
+      pick();
+      return;
+    }
+    let raf = 0;
+    const onScroll = () => {
+      cancelAnimationFrame(raf);
+      raf = requestAnimationFrame(pick);
+    };
+    scroller.addEventListener('scroll', onScroll, { passive: true });
+    pick();
+    return () => {
+      scroller.removeEventListener('scroll', onScroll);
+      cancelAnimationFrame(raf);
+    };
+    // `html` and `pageCount` stand in for "the chapter was laid out": the first
+    // render after a chapter change has no offset map yet, and measuring twice
+    // is cheaper than a highlight that never catches up.
+  }, [navView, tocVisible, activeDoc, toc, mode, pageIndex, pageCount, html]);
+
+  const activeSet = useMemo(() => {
+    if (!navView || !activeDoc) return new Set<string>();
+    const hrefs = hrefsInDoc(toc, activeDoc);
+    const one = activeSection && hrefs.includes(activeSection) ? activeSection : hrefs[0];
+    return new Set(one ? [one] : []);
+  }, [navView, toc, activeDoc, activeSection]);
 
   // Expand every ancestor group of the current chapter and (after render) scroll
   // the active node into view. If no TOC surface is showing, open the drawer.
   function locateCurrent() {
     if (!activeDoc) return;
-    const path = findTocPath(mergedToc, docKey(activeDoc));
+    const path = findTocPath(toc, docKey(activeDoc));
     if (path.length) {
       setTocCollapsed((prev) => {
         const n = new Set(prev);
@@ -2588,12 +2739,7 @@ export default function Reader() {
     anchorJumpRef.current = null;
     const root = contentRef.current;
     if (!root) return null;
-    let el: Element | null = null;
-    try {
-      el = root.querySelector(`[data-anc="${CSS.escape(jump.anchor)}"]`);
-    } catch {
-      el = null;
-    }
+    const el = anchorElement(root, jump.anchor);
     return el ? anchorOffset(root, el) : null;
   }
 
@@ -2629,13 +2775,7 @@ export default function Reader() {
   function pickToc(cid: string, href?: string) {
     if (previewRef.current) return;
     anchorJumpRef.current = null;
-    const hash = href && href.indexOf('#') >= 0 ? href.slice(href.indexOf('#') + 1) : '';
-    let anchor = hash;
-    try {
-      anchor = hash ? decodeURIComponent(hash) : '';
-    } catch {
-      // A malformed escape is still a usable id in most books.
-    }
+    const anchor = href ? anchorIdOf(href) : '';
     openChapter(cid, { type: 'first' });
     if (anchor) anchorJumpRef.current = { cid, anchor };
   }
@@ -5327,51 +5467,25 @@ export default function Reader() {
       <div className="reader">
         <aside className="toc">
           <div className="toc-head">
-            目录 · {tocCount} {tocUnit}
-            <button
-              className="toc-locate"
-              title="定位到当前章节"
-              onClick={locateCurrent}
-              aria-label="定位到当前章节"
-            >
-              <svg
-                viewBox="0 0 24 24"
-                width="15"
-                height="15"
-                fill="none"
-                stroke="currentColor"
-                strokeWidth="2"
-                strokeLinecap="round"
-                strokeLinejoin="round"
-              >
-                <circle cx="12" cy="12" r="3" />
-                <path d="M12 2v3M12 19v3M2 12h3M19 12h3" />
-              </svg>
-            </button>
+            {hasNav ? <TocSeg view={tocView} onChange={setTocView} /> : <span>目录</span>}
+            <span className="toc-n">
+              {tocCount} {tocUnit}
+            </span>
+            <TocLocate onClick={locateCurrent} />
           </div>
-          {useTocTree ? (
-            <TocTree
-              entries={mergedToc}
-              itemClass="toc-item"
-              activeSet={activeSet}
-              resolve={resolveTocHref}
-              onPick={pickToc}
-              collapsed={tocCollapsed}
-              onToggle={toggleToc}
-            />
-          ) : (
-            chapters.map((c, i) => (
-              <button
-                key={c.id}
-                className={`toc-item${c.id === current ? ' active' : ''}`}
-                onClick={() => openChapter(c.id)}
-                title={c.title}
-              >
-                <span className="num">{String(i + 1).padStart(2, '0')}</span>
-                {c.title}
-              </button>
-            ))
-          )}
+          <TocList
+            view={tocView}
+            toc={toc}
+            chapters={chapters}
+            itemClass="toc-item"
+            activeSet={activeSet}
+            resolve={resolveTocHref}
+            onPick={pickToc}
+            current={current}
+            openChapter={openChapter}
+            collapsed={tocCollapsed}
+            onToggle={toggleToc}
+          />
         </aside>
 
         <div className="reader-main" ref={mainRef}>
@@ -5486,55 +5600,29 @@ export default function Reader() {
       {tocDocked && (
         <aside className="toc-dock">
           <div className="toc-head">
-            目录 · {tocCount} {tocUnit}
-            <button
-              className="toc-locate"
-              title="定位到当前章节"
-              onClick={locateCurrent}
-              aria-label="定位到当前章节"
-            >
-              <svg
-                viewBox="0 0 24 24"
-                width="15"
-                height="15"
-                fill="none"
-                stroke="currentColor"
-                strokeWidth="2"
-                strokeLinecap="round"
-                strokeLinejoin="round"
-              >
-                <circle cx="12" cy="12" r="3" />
-                <path d="M12 2v3M12 19v3M2 12h3M19 12h3" />
-              </svg>
-            </button>
+            {hasNav ? <TocSeg view={tocView} onChange={setTocView} /> : <span>目录</span>}
+            <span className="toc-n">
+              {tocCount} {tocUnit}
+            </span>
+            <TocLocate onClick={locateCurrent} />
             <button className="btn sm" onClick={() => setTocDocked(false)} title="取消固定目录">
               ✕
             </button>
           </div>
           <div className="toc-dock-body">
-            {useTocTree ? (
-              <TocTree
-                entries={mergedToc}
-                itemClass="toc-item"
-                activeSet={activeSet}
-                resolve={resolveTocHref}
-                onPick={pickToc}
-                collapsed={tocCollapsed}
-                onToggle={toggleToc}
-              />
-            ) : (
-              chapters.map((c, i) => (
-                <button
-                  key={c.id}
-                  className={`toc-item${c.id === current ? ' active' : ''}`}
-                  onClick={() => openChapter(c.id)}
-                  title={c.title}
-                >
-                  <span className="num">{String(i + 1).padStart(2, '0')}</span>
-                  {c.title}
-                </button>
-              ))
-            )}
+            <TocList
+              view={tocView}
+              toc={toc}
+              chapters={chapters}
+              itemClass="toc-item"
+              activeSet={activeSet}
+              resolve={resolveTocHref}
+              onPick={pickToc}
+              current={current}
+              openChapter={openChapter}
+              collapsed={tocCollapsed}
+              onToggle={toggleToc}
+            />
           </div>
         </aside>
       )}
@@ -5802,54 +5890,29 @@ export default function Reader() {
         <div className="drawer-mask" onClick={() => setTocOpen(false)}>
           <aside className="drawer" onClick={(e) => e.stopPropagation()}>
             <div className="drawer-head">
-              目录 · {tocCount} {tocUnit}
-              <button
-                className="toc-locate"
-                title="定位到当前章节"
-                onClick={locateCurrent}
-                aria-label="定位到当前章节"
-              >
-                <svg
-                  viewBox="0 0 24 24"
-                  width="15"
-                  height="15"
-                  fill="none"
-                  stroke="currentColor"
-                  strokeWidth="2"
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                >
-                  <circle cx="12" cy="12" r="3" />
-                  <path d="M12 2v3M12 19v3M2 12h3M19 12h3" />
-                </svg>
-              </button>
+              {hasNav ? <TocSeg view={tocView} onChange={setTocView} /> : <span>目录</span>}
+              <span className="toc-n">
+                {tocCount} {tocUnit}
+              </span>
+              <TocLocate onClick={locateCurrent} />
               <button className="btn sm" onClick={() => setTocOpen(false)}>
                 ✕
               </button>
             </div>
             <div className="drawer-body">
-              {useTocTree ? (
-                <TocTree
-                  entries={mergedToc}
-                  itemClass="drawer-item"
-                  activeSet={activeSet}
-                  resolve={resolveTocHref}
-                  onPick={pickToc}
-                  collapsed={tocCollapsed}
-                  onToggle={toggleToc}
-                />
-              ) : (
-                chapters.map((c, i) => (
-                  <button
-                    key={c.id}
-                    className={`drawer-item${c.id === current ? ' active' : ''}`}
-                    onClick={() => openChapter(c.id)}
-                  >
-                    <span className="num">{String(i + 1).padStart(2, '0')}</span>
-                    {c.title}
-                  </button>
-                ))
-              )}
+              <TocList
+                view={tocView}
+                toc={toc}
+                chapters={chapters}
+                itemClass="drawer-item"
+                activeSet={activeSet}
+                resolve={resolveTocHref}
+                onPick={pickToc}
+                current={current}
+                openChapter={openChapter}
+                collapsed={tocCollapsed}
+                onToggle={toggleToc}
+              />
             </div>
           </aside>
         </div>

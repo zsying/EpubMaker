@@ -885,6 +885,50 @@ a {
   margin-left: auto;
 }
 
+/* 目录 / 文件 switch. The nav is the book's own outline, the file view is the
+   spine; they answer different questions, so the control sits at the head of
+   the list rather than in a menu. */
+.toc-seg {
+  display: inline-flex;
+  flex: 0 0 auto;
+  gap: 2px;
+  padding: 2px;
+  border-radius: 7px;
+  background: var(--fill-2);
+}
+
+.toc-seg > button {
+  border: 0;
+  background: none;
+  padding: 2px 8px;
+  border-radius: 5px;
+  color: var(--text-3);
+  font-family: inherit;
+  font-size: 11.5px;
+  font-weight: 650;
+  letter-spacing: 0;
+  line-height: 1.5;
+  text-transform: none;
+  cursor: pointer;
+}
+
+.toc-seg > button:hover {
+  color: var(--text);
+}
+
+.toc-seg > button.on {
+  background: var(--panel);
+  color: var(--text);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.14);
+}
+
+/* The count the switch belongs to: 33 节 / 18 章. */
+.toc-n {
+  flex: 0 0 auto;
+  text-transform: none;
+  font-variant-numeric: tabular-nums;
+}
+
 /* "Locate current chapter" icon in the TOC header. */
 .toc-locate {
   display: inline-flex;
