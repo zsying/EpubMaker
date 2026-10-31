@@ -1,5 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { api, WebDavConn, WebDavEntry } from '../api';
 import { toast, toastError } from '../toast';
 import SubHeader from '../components/SubHeader';
@@ -25,6 +24,87 @@ function fmtDate(s: string | null): string {
   return d.toLocaleString();
 }
 
+/* ---- listing order ---- */
+
+const SORT_LS = 'epubmaker.webdav.sort';
+type WdSortKey = 'name' | 'date';
+type WdSortDir = 'asc' | 'desc';
+
+const SORT_OPTIONS: Array<{ id: WdSortKey; label: string }> = [
+  { id: 'name', label: '名称' },
+  { id: 'date', label: '修改日期' },
+];
+
+// Natural direction per key: names read A→Z, and a question about modification
+// time is nearly always "what is new". Picking a key starts at its natural
+// direction, so 修改日期 does not open on the oldest file in the folder.
+const NATURAL_DIR: Record<WdSortKey, WdSortDir> = { name: 'asc', date: 'desc' };
+
+/** The stored order, or the default when it is missing / unreadable. */
+function loadSort(): { key: WdSortKey; dir: WdSortDir } {
+  try {
+    const raw = JSON.parse(localStorage.getItem(SORT_LS) || '{}');
+    const key: WdSortKey = raw?.key === 'date' ? 'date' : 'name';
+    const dir: WdSortDir = raw?.dir === 'asc' || raw?.dir === 'desc' ? raw.dir : NATURAL_DIR[key];
+    return { key, dir };
+  } catch {
+    return { key: 'name', dir: NATURAL_DIR.name };
+  }
+}
+
+/** Name order as a file list wants it: 第2章 before 第10章 (numeric), case
+ *  alone does not decide (base sensitivity), and the raw comparison is the
+ *  tiebreak so the order stays total. */
+function nameOrder(a: string, b: string): number {
+  const c = a.localeCompare(b, 'zh-Hans-CN', { numeric: true, sensitivity: 'base' });
+  return c !== 0 ? c : a < b ? -1 : a > b ? 1 : 0;
+}
+
+function modificationTime(e: WebDavEntry): number {
+  return e.lastModified ? Date.parse(e.lastModified) : NaN;
+}
+
+/** Directories first, then the chosen key in the chosen direction. */
+function orderEntries(rows: WebDavEntry[], key: WdSortKey, dir: WdSortDir): WebDavEntry[] {
+  const mul = dir === 'asc' ? 1 : -1;
+  return [...rows].sort((a, b) => {
+    // Directories are navigation and files are content; the two never
+    // interleave, whatever the key — the server's own order draws that line.
+    if (a.isDirectory !== b.isDirectory) return a.isDirectory ? -1 : 1;
+    if (key === 'date') {
+      const ta = modificationTime(a);
+      const tb = modificationTime(b);
+      // A server that omits getlastmodified gets its undated rows last in both
+      // directions: flipping them to the top under 降序 would put files nobody
+      // can date above the newest one.
+      if (Number.isNaN(ta) || Number.isNaN(tb)) {
+        if (Number.isNaN(ta) && Number.isNaN(tb)) return nameOrder(a.name, b.name);
+        return Number.isNaN(ta) ? 1 : -1;
+      }
+      if (ta !== tb) return mul * (ta - tb);
+      return nameOrder(a.name, b.name);
+    }
+    return mul * nameOrder(a.name, b.name);
+  });
+}
+
+/** The phone's date column: MM-DD, with a two-digit year only when it is not
+ *  this year — "10-31" of a folder's recent files needs no year to be read. */
+function fmtDateMini(s: string): string {
+  const d = new Date(s);
+  if (isNaN(d.getTime())) return s;
+  const pad = (n: number) => String(n).padStart(2, '0');
+  const md = `${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+  const year = d.getFullYear();
+  return year === new Date().getFullYear() ? md : `${String(year).slice(2)}-${md}`;
+}
+
+/** Filter text → the tokens a name must all contain. Spaces separate, so
+ *  「马伯 合集」 finds the collection's volumes without knowing the separator. */
+function filterTokens(keyword: string): string[] {
+  return keyword.toLowerCase().split(/\s+/).filter(Boolean);
+}
+
 export default function WebDav() {
   const [form, setForm] = useState<WebDavConn>({
     baseUrl: '',
@@ -37,6 +117,13 @@ export default function WebDav() {
   const [conn, setConn] = useState<WebDavConn | null>(null);
   const [path, setPath] = useState('');
   const [entries, setEntries] = useState<WebDavEntry[]>([]);
+  // The order is a preference and outlives the visit; the filter is not — a
+  // filter left on overnight must never make a folder look like it lost files.
+  const [sort, setSort] = useState(loadSort);
+  const [keyword, setKeyword] = useState('');
+  // Which directory the list is showing. Entering another one clears the
+  // filter (its rows are a different question); 刷新 does not.
+  const pathRef = useRef('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [selected, setSelected] = useState<Set<string>>(new Set());
@@ -61,15 +148,25 @@ export default function WebDav() {
     }
   }, []);
 
+  /**
+   * Lists a directory. `via` exists because 连接并测试 has a connection object
+   * that `conn` state does not have yet: the callback in this render still
+   * closes over `conn === null`, so the first listing after connecting used to
+   * bail out silently and leave an empty folder on screen until 刷新 was
+   * pressed. A connection that was just tested is as good as one in state.
+   */
   const loadList = useCallback(
-    async (p: string) => {
-      if (!conn) return;
+    async (p: string, via?: WebDavConn) => {
+      const active = via ?? conn;
+      if (!active) return;
       setLoading(true);
       setError(null);
       setSelected(new Set());
       try {
-        const list = await api.webdavList(conn, p);
+        const list = await api.webdavList(active, p);
         setEntries(list);
+        if (p !== pathRef.current) setKeyword('');
+        pathRef.current = p;
         setPath(p);
         setImportResult(null);
       } catch (e) {
@@ -96,7 +193,7 @@ export default function WebDav() {
       setConn(c);
       localStorage.setItem(LS_KEY, JSON.stringify(c));
       setConnected(true);
-      await loadList('');
+      await loadList('', c);
       toast(res.server ? `已连接（${res.server}）` : '已连接', 'success');
     } catch (e) {
       toastError(e);
@@ -110,6 +207,8 @@ export default function WebDav() {
     setConn(null);
     setEntries([]);
     setPath('');
+    pathRef.current = '';
+    setKeyword('');
     setSelected(new Set());
     setError(null);
     setImportResult(null);
@@ -131,6 +230,36 @@ export default function WebDav() {
       return next;
     });
   }
+
+  /** Picking a key starts at that key's natural direction; picking the key
+   *  already in use changes nothing (the arrow is the way to reverse). */
+  function pickSortKey(key: WdSortKey) {
+    setSort((s) => (s.key === key ? s : { key, dir: NATURAL_DIR[key] }));
+  }
+
+  function toggleDir() {
+    setSort((s) => ({ ...s, dir: s.dir === 'asc' ? 'desc' : 'asc' }));
+  }
+
+  useEffect(() => {
+    localStorage.setItem(SORT_LS, JSON.stringify(sort));
+  }, [sort]);
+
+  // Ordering and filtering are display concerns: the listing is one PROPFIND
+  // (Depth: 1) for the whole directory, so neither needs a round trip, and
+  // neither may hide the fact that the server's own order is what it is.
+  const tokens = useMemo(() => filterTokens(keyword), [keyword]);
+  const shown = useMemo(() => {
+    const rows = tokens.length
+      ? entries.filter((e) => {
+          const name = e.name.toLowerCase();
+          return tokens.every((t) => name.includes(t));
+        })
+      : entries;
+    return orderEntries(rows, sort.key, sort.dir);
+  }, [entries, tokens, sort.key, sort.dir]);
+
+  const filtering = tokens.length > 0;
 
   async function importItems(list: WebDavEntry[]) {
     if (!conn || !list.length) return;
@@ -253,6 +382,59 @@ export default function WebDav() {
         ))}
       </div>
 
+      {/* One row of view controls: what to show, in what order. The listing is
+          the whole directory already, so both act on what is on screen — and
+          neither has any business reaching the server. */}
+      <div className="wd-tools">
+        <input
+          className="input wd-filter"
+          placeholder="过滤文件名…"
+          value={keyword}
+          autoComplete="off"
+          aria-label="过滤文件名"
+          onChange={(e) => setKeyword(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === 'Escape') setKeyword('');
+          }}
+        />
+        {keyword && (
+          <button className="btn sm ghost" onClick={() => setKeyword('')} title="清除过滤">
+            清除
+          </button>
+        )}
+        <div className="wd-sortseg" role="group" aria-label="排序方式">
+          {SORT_OPTIONS.map((o) => (
+            <button
+              key={o.id}
+              className={sort.key === o.id ? 'on' : ''}
+              aria-pressed={sort.key === o.id}
+              onClick={() => pickSortKey(o.id)}
+            >
+              {o.label}
+            </button>
+          ))}
+          <button
+            className="wd-dirtoggle"
+            aria-label={sort.dir === 'asc' ? '升序，点击改为降序' : '降序，点击改为升序'}
+            title={
+              sort.key === 'date'
+                ? sort.dir === 'asc'
+                  ? '升序：旧 → 新'
+                  : '降序：新 → 旧'
+                : sort.dir === 'asc'
+                  ? '升序：A → Z'
+                  : '降序：Z → A'
+            }
+            onClick={toggleDir}
+          >
+            {sort.dir === 'asc' ? '↑' : '↓'}
+          </button>
+        </div>
+        <span className="wd-count">
+          {filtering ? `${shown.length} / ${entries.length} 项` : `${entries.length} 项`}
+        </span>
+      </div>
+
       {selectedEntries.length > 0 && (
         <div className="wd-bulk">
           <span>已选 {selectedEntries.length} 个 EPUB</span>
@@ -302,9 +484,16 @@ export default function WebDav() {
         <div className="empty">
           <p>此目录为空</p>
         </div>
+      ) : shown.length === 0 ? (
+        <div className="empty">
+          <p>没有匹配「{keyword.trim()}」的文件</p>
+          <button className="btn sm" onClick={() => setKeyword('')}>
+            清除过滤
+          </button>
+        </div>
       ) : (
-        <div className="wd-list">
-          {entries.map((e) => {
+        <div className={`wd-list${sort.key === 'date' ? ' dates' : ''}`}>
+          {shown.map((e) => {
             const epub = isEpub(e.name);
             return (
               <div
@@ -319,9 +508,18 @@ export default function WebDav() {
                   {e.name}
                 </span>
                 <span className="wd-meta">
-                  {!e.isDirectory && e.size ? fmtSize(e.size) : ''}
-                  {!e.isDirectory && e.size && e.lastModified ? ' · ' : ''}
-                  {e.lastModified ? fmtDate(e.lastModified) : ''}
+                  {!e.isDirectory && e.size ? (
+                    <span className="wd-size">{fmtSize(e.size)}</span>
+                  ) : null}
+                  {!e.isDirectory && e.size && e.lastModified ? (
+                    <span className="wd-dot"> · </span>
+                  ) : null}
+                  {e.lastModified ? (
+                    <span className="wd-date" title={fmtDate(e.lastModified)}>
+                      <span className="wd-date-long">{fmtDate(e.lastModified)}</span>
+                      <span className="wd-date-mini">{fmtDateMini(e.lastModified)}</span>
+                    </span>
+                  ) : null}
                 </span>
                 <span className="wd-actions" onClick={(ev) => ev.stopPropagation()}>
                   {e.isDirectory ? (

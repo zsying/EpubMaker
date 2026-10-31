@@ -2939,6 +2939,69 @@ html[data-app-theme='midnight'] .turn-veil-band {
   font-weight: 550;
 }
 
+/* Filter + order, one row above the listing. The filter grows into whatever
+   space is left; on a phone the two controls share two rows rather than let
+   the sort chip shrink below a readable width. */
+.wd-tools {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.wd-filter {
+  flex: 1 1 200px;
+  min-width: 0;
+}
+
+.wd-sortseg {
+  display: inline-flex;
+  align-items: stretch;
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  background: var(--panel);
+  overflow: hidden;
+  flex: none;
+}
+
+.wd-sortseg button {
+  height: 30px;
+  padding: 0 10px;
+  border: 0;
+  background: transparent;
+  color: var(--text-3);
+  font-size: 12.5px;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.wd-sortseg button:hover {
+  background: var(--fill-2);
+  color: var(--text);
+}
+
+.wd-sortseg button.on {
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.wd-sortseg .wd-dirtoggle {
+  width: 34px;
+  padding: 0;
+  border-left: 1px solid var(--border);
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+}
+
+.wd-count {
+  margin-left: auto;
+  font-size: 12px;
+  color: var(--text-3);
+  font-variant-numeric: tabular-nums;
+}
+
 .wd-bulk {
   display: flex;
   align-items: center;
@@ -3028,6 +3091,12 @@ html[data-app-theme='midnight'] .turn-veil-band {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+/* Two renderings of the same timestamp: the long one for a desktop column,
+   the short one for the phone (see the 640px block below). */
+.wd-meta .wd-date-mini {
+  display: none;
 }
 
 .wd-actions {
@@ -3338,6 +3407,23 @@ html[data-app-theme='midnight'] .turn-veil-band {
 @media (max-width: 640px) {
   .wd-meta {
     display: none;
+  }
+  /* Ordering by 修改日期 is unreadable with the column hidden, so a list sorted
+     that way brings it back as MM-DD (a two-digit year only when it is not
+     this year) and lets the size step aside — the name keeps its room. */
+  .wd-list.dates .wd-meta {
+    display: inline-flex;
+    align-items: baseline;
+    max-width: 66px;
+    font-size: 11.5px;
+  }
+  .wd-list.dates .wd-meta .wd-size,
+  .wd-list.dates .wd-meta .wd-dot,
+  .wd-list.dates .wd-meta .wd-date-long {
+    display: none;
+  }
+  .wd-list.dates .wd-meta .wd-date-mini {
+    display: inline;
   }
 }
 

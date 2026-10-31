@@ -16,6 +16,25 @@ of described.
 
 ### Added
 
+- **The WebDAV list can be sorted and filtered** — a shared folder with forty
+  epubs left the reader scrolling in the order the server happened to return,
+  which was directories first and then bytes. The list now carries one row of
+  view controls: a 过滤文件名 box, 名称 / 修改日期, and a direction arrow. Both keys
+  sort in place — the whole directory already arrived in one PROPFIND, so
+  neither the order nor the filter costs a request. Directories stay above the
+  files whatever the key (they are navigation, not content), names sort
+  naturally (第2章 before 第10章), and a row a server never dated stays at the
+  bottom in both directions instead of surfacing above the newest file when the
+  order is reversed. Every key opens on its natural direction — 修改日期 starts at
+  the newest — and the arrow's tooltip says which way time runs (旧 → 新 / 新 → 旧).
+  The filter takes several words, all of which must appear (马伯 合集), ignores
+  case, and is session-only: an order left over from yesterday is a preference,
+  a filter left over from yesterday makes a folder look like it lost files. On a
+  phone the date column comes back (as MM-DD) exactly when the order is by date —
+  otherwise the list would be ordered by something it does not show. Connecting
+  also lists the folder now: 连接并测试 used to leave an empty screen until 刷新
+  was pressed, because the callback still closed over the old, null connection.
+  See ADR-35.
 - **The review card shows the AI gloss it already has, and offers to ask when it
   does not** — a word explained while reading had its answer sitting in the cache
   while the review card showed only the dictionary line. The card now asks what
