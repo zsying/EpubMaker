@@ -1414,3 +1414,51 @@ settle、不再发事件）、`src` 已释放、重读最近 3 句 0 次请求�
 22 次取音/33 次播放共用 1 个元素，页面跟随，关闭即停。`ttslog.cjs` 9/9：开始/暂停/继续/下一句/
 语速/引擎/手动翻页/退出全部落进 `tts` 分类。
 
+## ADR-34 目录名认「文档」不认「文档#锚点」：标题、门禁、锚点跳转三处一起改
+
+**问题。** 《邓小平时代》在 epub 里的目录是中文的（33 条小节名），手机上的目录和顶栏却全是英文
+书名 `Deng Xiaoping and the Transformation of China (Chinese Edition)`。
+
+**现场。** 三条独立的原因叠在一起，每一条单独都足以让中文目录消失：
+
+1. **标题查表键带锚点。** `flattenTOC` 把 nav 建成 `href -> title`，键用的是**带 `#fragment`**
+   的 href；章节是 spine 文档，`href` 没有 fragment。这本书 33 条 nav **全部**指向
+   `index_split_00N.html#fileposMMM`，于是 18 个章节一个都没命中，全部走
+   `html.ExtractTitle`——也就是每个 split 文档自己的 `<title>`，正好是英文书名。
+2. **平铺目录被门禁丢掉。** `useTocTree` 要求 nav 有嵌套（ADR-31 之后是 `nested`）；这本书的
+   nav 是平的 33 条，于是回退到 18 行章节列表。而 33 条比 18 个文档**更细**：扉页、地图、香港
+   中文版序、出版说明、前言、导言、第1章 全在 `index_split_000.html` 一个文件里，章节列表只能
+   显示其中第一条，其余六条根本进不去。
+3. **锚点被净化掉。** 章节 HTML 过 `DOMPurify` 时 `FORBID_ATTR: ['class','id']`（防止 epub 用
+   `id="root"` 抢宿主页面的选择器），而 nav 指向的正是 `#filepos…` 这些 id。所以即使画出了
+   33 条，点「第5章」也只能落在文件开头（第4章的起始页）。
+
+**决定。**
+
+1. `flattenTOC` 的键改成 `docKey(href)`（去掉 fragment），文档顺序、首个标签优先不变。
+2. **老书架不用重新导入**：加一次性数据迁移（`PRAGMA user_version` 0→1），从 `books.toc` 里已
+   存的中文 nav 重新算章节标题。标题是导入时写进 `chapters.title` 的，不回填就等于只有新导入
+   的书才对。没有 nav 命中的文档（封面、书内目录页）保留原样。
+3. 门禁从「必须嵌套」放宽成「嵌套 **或** 比章节列表更细」：`entries > chapters.length` 时保留
+   平铺 nav。calibre 那种「3 个标签 29 章」仍然是章节列表赢（3 < 29），ADR-31 的不变量不变。
+4. 锚点：`RenderChapter` 把 `id="x"` 改写成 `data-anc="x"`（DOMPurify 默认放行 `data-*`，
+   也不会和宿主 id 撞车）；`TocTree` 的 `onPick` 带上 href，`pickToc` 把 `#fragment` 存进
+   `anchorJumpRef`；测量 pass（翻页）与 restore effect（卷动）在**这一章的 DOM 已经就位**时
+   把锚点换算成文本偏移（`anchorOffset(anchor)`：包着文字的锚点取其首字，空锚点取其后第一个
+   字符），再用现成的 `pageIndexForOffset` / `scrollTextTo` 落位。
+
+**否决。** ①**要求用户删掉重导**：进度、书签、划线全在 book id 上，重导等于清零；②**保留 `id`
+不净化**：`#root` 冲突是真实风险（`CHAPTER_PURIFY` 的注释早就写着），换 `data-anc` 同样能定位；
+③**后端算好锚点字符偏移存进 toc**：正文要过 DOMPurify，前后端的「渲染后文本」不保证逐字相同，
+偏移必须由真正渲染的那一侧算；④**平铺 nav 一律保留**：calibre 的粗粒度 nav 会让 26 个章节变成
+「第 N 节」，ADR-31 的理由仍然成立。
+
+**证据。** Go：`TestFlattenTOCDropsFragments`（带锚点的 nav 仍能命名文档、首个标签优先、
+不留带 fragment 的废键）、`TestIdsToAnchors`（`data-id`/`xml:id`/空 id 不受影响）、
+`TestMigrateRetitlesChaptersFromTOC` + `TestRetitleRunsOnce`（回填生效且只跑一次）。
+真书核对：把手机上的 `original.epub` 拉下来跑解析，18 个章节全部拿到中文名
+（扉页 / 第2章 … / 邓小平时代的关键人物），封面与书内目录页保持 `Cover`/原题。
+前端 `tocanchor.cjs` 9/9：平铺却更细的 nav 画出来了（3 行）、行名来自 nav 而不是文件标题、
+点第 2 节落到第 5 页且锚点在视口内、点第 1 节回第 1 页、跨文档条目切章并落在首屏。
+`mergetoc.cjs` 7 项、`turnlisten` 12/12、`listen` 29/29、`online` 8/8、`ttslog` 9/9、
+`seg` 10/10、`spans` 10/10 全部回归。

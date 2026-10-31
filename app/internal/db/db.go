@@ -5,8 +5,10 @@ package db
 
 import (
 	"database/sql"
+	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	_ "modernc.org/sqlite"
@@ -309,7 +311,91 @@ func migrate(d *sql.DB) error {
 	// row a plain user prompt; aiprompt.seed() then fills the system rows in.
 	_, _ = d.Exec(`ALTER TABLE ai_prompts ADD COLUMN is_system INTEGER NOT NULL DEFAULT 0`)
 	_, _ = d.Exec(`UPDATE ai_prompts SET is_system = 0 WHERE is_system IS NULL`)
-	return nil
+	return retitleChaptersFromTOC(d)
+}
+
+// retitleChaptersFromTOC is a one-time data migration, guarded by
+// PRAGMA user_version so it runs once per database rather than on every open.
+//
+// Chapter titles were derived by looking the spine href up in a flat
+// href->title map keyed by the nav's href *including* its #fragment, which
+// never matches a document. A book whose nav anchors every section therefore
+// fell back to each file's own <title>: 邓小平时代 shipped 33 Chinese section
+// names and every chapter was called "Deng Xiaoping and the Transformation of
+// China (Chinese Edition)". The import now strips the fragment, but the titles
+// are written at import time — so existing shelves are re-derived here from the
+// nav JSON already stored in books.toc. No re-import, no progress lost.
+func retitleChaptersFromTOC(d *sql.DB) error {
+	var version int
+	if err := d.QueryRow(`PRAGMA user_version`).Scan(&version); err != nil {
+		return err
+	}
+	if version >= 1 {
+		return nil
+	}
+	rows, err := d.Query(`SELECT id, toc FROM books WHERE toc IS NOT NULL AND toc <> ''`)
+	if err != nil {
+		return err
+	}
+	type bookToc struct {
+		id  string
+		toc string
+	}
+	var books []bookToc
+	for rows.Next() {
+		var b bookToc
+		if err := rows.Scan(&b.id, &b.toc); err != nil {
+			rows.Close()
+			return err
+		}
+		books = append(books, b)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return err
+	}
+
+	type node struct {
+		Href     string `json:"href"`
+		Title    string `json:"title"`
+		Children []node `json:"children"`
+	}
+	for _, b := range books {
+		var list []node
+		if err := json.Unmarshal([]byte(b.toc), &list); err != nil {
+			continue // a toc we cannot read is a toc we leave alone
+		}
+		titles := map[string]string{}
+		var walk func([]node)
+		walk = func(ns []node) {
+			for _, n := range ns {
+				key := n.Href
+				if i := strings.IndexByte(key, '#'); i >= 0 {
+					key = key[:i]
+				}
+				if key != "" && n.Title != "" {
+					if _, seen := titles[key]; !seen {
+						titles[key] = n.Title // document order: first label wins
+					}
+				}
+				walk(n.Children)
+			}
+		}
+		walk(list)
+		if len(titles) == 0 {
+			continue
+		}
+		upd, err := d.Prepare(`UPDATE chapters SET title = ? WHERE book_id = ? AND href = ?`)
+		if err != nil {
+			return err
+		}
+		for href, title := range titles {
+			_, _ = upd.Exec(title, b.id, href)
+		}
+		upd.Close()
+	}
+	_, err = d.Exec(`PRAGMA user_version = 1`)
+	return err
 }
 
 // Close closes the shared database connection. Safe to call multiple times.

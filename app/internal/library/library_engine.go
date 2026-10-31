@@ -58,6 +58,10 @@ func RenderChapter(bookID, chapterID string) (*ChapterRender, error) {
 		}
 		return DataURL(mime.GuessMediaType(target), buf)
 	})
+	// Anchors survive purification as data-anc; see html.IdsToAnchors. Without
+	// this, every TOC entry that points inside a document (rather than at its
+	// first page) lands on the top of that document.
+	out = html.IdsToAnchors(out)
 	return &ChapterRender{Title: ch.Title, HTML: out}, nil
 }
 

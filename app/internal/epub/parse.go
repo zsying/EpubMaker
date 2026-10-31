@@ -227,14 +227,23 @@ func navLi(li *XMLNode, navPath string) TOCEntry {
 
 // flattenTOC collapses a hierarchical TOC into the flat href->title map used
 // for spine title lookups. Document order is preserved; first occurrence wins.
+//
+// The keys lose their #fragment: a nav entry points at an anchor *inside* a
+// document (`index_split_002.html#filepos330338`) while the spine names the
+// document alone, so keying by the raw href missed every entry of every book
+// whose nav anchors its sections — and the chapter then fell back to the
+// document's own <title>. 邓小平时代 hits this on all 33 of its entries: the
+// Chinese section names were in the nav all along, and every chapter was titled
+// "Deng Xiaoping and the Transformation of China (Chinese Edition)".
 func flattenTOC(entries []TOCEntry) map[string]string {
 	out := map[string]string{}
 	var walk func([]TOCEntry)
 	walk = func(es []TOCEntry) {
 		for _, e := range es {
 			if e.Href != "" && e.Title != "" {
-				if _, ok := out[e.Href]; !ok {
-					out[e.Href] = e.Title
+				key := docKey(e.Href)
+				if _, ok := out[key]; !ok {
+					out[key] = e.Title
 				}
 			}
 			walk(e.Children)
@@ -242,6 +251,15 @@ func flattenTOC(entries []TOCEntry) map[string]string {
 	}
 	walk(entries)
 	return out
+}
+
+// docKey is a TOC href without its fragment — the identity of the document it
+// lands in.
+func docKey(href string) string {
+	if i := strings.IndexByte(href, '#'); i >= 0 {
+		return href[:i]
+	}
+	return href
 }
 
 const zipLocalHeader = "PK\x03\x04"

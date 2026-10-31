@@ -62,6 +62,24 @@ function elementStart(root: Node, el: Element): number {
   return seen;
 }
 
+/** The text offset an anchor mark stands at.
+ *
+ *  An anchor is usually an empty element (`<a data-anc="filepos109"></a>`), so
+ *  asking where its own text starts finds nothing — the position is the next
+ *  character *after* it. A wrapped anchor (`<a data-anc="x">标题</a>`) points at
+ *  its first character instead. Both cases are what a TOC jump needs. */
+export function anchorOffset(root: Node, el: Element): number {
+  const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+  let seen = 0;
+  let n: Node | null;
+  while ((n = walker.nextNode())) {
+    if (el.contains(n)) return seen;
+    if (el.compareDocumentPosition(n) & Node.DOCUMENT_POSITION_FOLLOWING) return seen;
+    seen += (n.textContent || '').length;
+  }
+  return seen;
+}
+
 export function getSelectionOffsets(
   root: HTMLElement,
   range: Range,

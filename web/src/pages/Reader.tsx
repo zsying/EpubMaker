@@ -28,6 +28,7 @@ import { toast, toastError } from '../toast';
 import { Anchor, EDGE_GAP, placeOverlay } from '../overlay';
 import { wordAt, isCJK, stripInvisible } from '../wordHit';
 import {
+  anchorOffset,
   blockOf,
   charOffset,
   getSelectionOffsets,
@@ -298,7 +299,7 @@ function TocTree({
   itemClass: string;
   activeSet: Set<string>;
   resolve: (href: string) => string | undefined;
-  onPick: (cid: string) => void;
+  onPick: (cid: string, href?: string) => void;
   collapsed: Set<string>;
   onToggle: (key: string) => void;
   pathBase?: string;
@@ -343,7 +344,7 @@ function TocNode({
   itemClass: string;
   activeSet: Set<string>;
   resolve: (href: string) => string | undefined;
-  onPick: (cid: string) => void;
+  onPick: (cid: string, href?: string) => void;
   collapsed: Set<string>;
   onToggle: (key: string) => void;
 }) {
@@ -356,7 +357,9 @@ function TocNode({
     onToggle(nodeKey);
   };
   const labelClick = () => {
-    if (cid) onPick(cid);
+    // The href travels with the id: a nav entry usually points at a section
+    // inside the document (#filepos…), not at the document's top.
+    if (cid) onPick(cid, entry.href);
     else if (hasKids) onToggle(nodeKey);
   };
   return (
@@ -1092,6 +1095,11 @@ export default function Reader() {
   // chapter intents may only be consumed by a measure pass whose DOM actually
   // holds that chapter — see htmlChapterRef below.
   const restoreCidRef = useRef<string | null>(null);
+  // A TOC entry that points at a section *inside* a document: the anchor name
+  // (the nav href's #fragment) plus the chapter that carries it. Resolved to a
+  // text offset by the first measure pass / scroll restore that holds that
+  // chapter, because the element only exists once the HTML is in the DOM.
+  const anchorJumpRef = useRef<{ cid: string; anchor: string } | null>(null);
   // The chapter whose html was last handed to setHtml. setCurrent immediately
   // re-runs the render effect (the annotation list changed) while the DOM
   // still holds the PREVIOUS chapter, and that pass can beat the
@@ -1319,6 +1327,28 @@ export default function Reader() {
     const timer = window.setTimeout(() => setFlash(null), 1400);
     return () => window.clearTimeout(timer);
   }, [safeHtml, mode, preview]);
+
+  // Scroll-mode counterpart of the anchor jump: the TOC asked for a section in
+  // the middle of this document, so after the html is committed, move the
+  // container to the anchor instead of leaving the reader at the top.
+  useEffect(() => {
+    if (mode !== 'scroll' || !anchorJumpRef.current) return;
+    if (!contentRef.current) return;
+    const off = takeAnchorOffset(current);
+    if (off === null) return;
+    const after = scrollTextTo(off);
+    if (!after) return;
+    if (!preview && current) api.saveProgress(id, current, off, 1).catch(() => {});
+    setFlash({
+      left: after.left - 2,
+      top: after.top - 3,
+      width: Math.max(after.width, 6),
+      height: after.height + 6,
+    });
+    const timer = window.setTimeout(() => setFlash(null), 1400);
+    return () => window.clearTimeout(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [safeHtml, mode]);
 
   // The word a 生词本 jump points at stays lit for as long as you are on the
   // page — the highlight marks the spot; no menus are raised by themselves.
@@ -2074,7 +2104,20 @@ export default function Reader() {
     let nextPage = 0;
     let landed = false;
 
-    if (restoreOffsetRef.current !== null && restoreHere && offsetMapRef.current.length > 0) {
+    // A TOC entry pointing at a section inside a document (nav anchors carry
+    // #filepos…): land on the page that holds the anchor, not on page one.
+    // Resolved here because this is the first pass with both the chapter's DOM
+    // and the offset map.
+    const anchorOff = takeAnchorOffset(htmlChapterRef.current);
+
+    if (anchorOff !== null && offsetMapRef.current.length > 0) {
+      nextPage = Math.min(pageIndexForOffset(anchorOff), maxIdx);
+      landed = true;
+    } else if (
+      restoreOffsetRef.current !== null &&
+      restoreHere &&
+      offsetMapRef.current.length > 0
+    ) {
       // Explicit restore (bookmark / annotation / saved progress): land on the
       // page that currently holds this source offset regardless of layout.
       nextPage = Math.min(pageIndexForOffset(restoreOffsetRef.current), maxIdx);
@@ -2448,16 +2491,23 @@ export default function Reader() {
   //  * it is flat, one row per chapter and no nesting, in which case the
   //    chapter list says the same thing and keeps the chapter numbers.
   //
-  // The chapter list still wins for flat outlines. A nested outline is kept
-  // even when it misses documents: the missing ones are woven back in below,
-  // so the "must reach every chapter" invariant holds without flattening
-  // collection epubs whose tree is otherwise perfect.
+  // The chapter list still wins for flat outlines *of the same grain*. A flat
+  // outline that names more sections than there are documents is finer than
+  // the chapter list, not equal to it: 邓小平时代's nav lists 33 sections across
+  // 15 files (扉页, 地图, 序, 前言, 导言 and 第1章 all live in one file), so the
+  // chapter list would hide six of them — and each row would be titled after
+  // its file, which for this book is the English cover title. Those are kept.
+  // A nested outline is kept even when it misses documents: the missing ones
+  // are woven back in below, so the "must reach every chapter" invariant holds
+  // without flattening collection epubs whose tree is otherwise perfect.
   const tocShape = useMemo(() => {
     const ids = new Set<string>();
     let nested = false;
+    let entries = 0;
     const walk = (es: TocEntry[]) => {
       for (const e of es) {
         if (e.href) {
+          entries += 1;
           const cid = byHref.get(docKey(e.href))?.id;
           if (cid) ids.add(cid);
         }
@@ -2468,13 +2518,33 @@ export default function Reader() {
       }
     };
     walk(toc);
-    return { covered: ids, nested };
+    return { covered: ids, nested, entries };
   }, [toc, byHref]);
   const mergedToc = useMemo(
     () => mergeTocChapters(toc, chapters, tocShape.covered),
     [toc, chapters, tocShape],
   );
-  const useTocTree = mergedToc.length > 0 && tocShape.nested;
+  const useTocTree =
+    mergedToc.length > 0 && (tocShape.nested || tocShape.entries > chapters.length);
+  // The header counts what the list actually shows. A nav is a list of
+  // *sections*, and there can be more of them than there are documents (this
+  // book: 33 sections in 15 files), so "18 章" over 33 rows would be a lie in
+  // the other direction.
+  const tocRows = useMemo(() => {
+    let n = 0;
+    const walk = (es: TocEntry[]) => {
+      for (const e of es) {
+        if (e.href) n += 1;
+        if (e.children?.length) walk(e.children);
+      }
+    };
+    walk(mergedToc);
+    return n;
+  }, [mergedToc]);
+  const tocCount = useTocTree ? tocRows : chapters.length;
+  // "节" only for a flat nav that is finer than the spine: a nested outline is
+  // a chapter tree whatever its leaf count, and reads better as "章".
+  const tocUnit = useTocTree && !tocShape.nested ? '节' : '章';
   const currentChapter = current ? (chapters.find((c) => c.id === current) ?? null) : null;
   const activeDoc = currentChapter?.href ?? null;
   // Active highlight for the hierarchical TOC (no-op for flat-legacy books).
@@ -2508,6 +2578,25 @@ export default function Reader() {
   }, [locateNonce]);
 
   /* ---- navigation ---- */
+  /** Consumes the pending TOC anchor if it belongs to this chapter and returns
+   *  the text offset it marks. The anchor only becomes a position once the
+   *  chapter's HTML is in the DOM, which is why this runs inside the measure /
+   *  scroll-restore pass rather than at click time. */
+  function takeAnchorOffset(cid: string | null): number | null {
+    const jump = anchorJumpRef.current;
+    if (!jump || !cid || jump.cid !== cid) return null;
+    anchorJumpRef.current = null;
+    const root = contentRef.current;
+    if (!root) return null;
+    let el: Element | null = null;
+    try {
+      el = root.querySelector(`[data-anc="${CSS.escape(jump.anchor)}"]`);
+    } catch {
+      el = null;
+    }
+    return el ? anchorOffset(root, el) : null;
+  }
+
   function openChapter(cid: string, intent: PageIntent = { type: 'first' }) {
     // A preview visit is pinned to its anchor: chapter hopping from the TOC
     // would drift through the book, and the mode exists precisely so that
@@ -2532,6 +2621,23 @@ export default function Reader() {
       scheduleMeasure();
     }
     setCurrent(cid);
+  }
+
+  /** A click in the outline: open the chapter the entry belongs to, then move
+   *  to the section it names. Most nav entries point inside their document
+   *  (`…html#filepos330338`) — the chapter is only the container. */
+  function pickToc(cid: string, href?: string) {
+    if (previewRef.current) return;
+    anchorJumpRef.current = null;
+    const hash = href && href.indexOf('#') >= 0 ? href.slice(href.indexOf('#') + 1) : '';
+    let anchor = hash;
+    try {
+      anchor = hash ? decodeURIComponent(hash) : '';
+    } catch {
+      // A malformed escape is still a usable id in most books.
+    }
+    openChapter(cid, { type: 'first' });
+    if (anchor) anchorJumpRef.current = { cid, anchor };
   }
 
   const turnStep = Math.max(1, pagesPerView);
@@ -5221,7 +5327,7 @@ export default function Reader() {
       <div className="reader">
         <aside className="toc">
           <div className="toc-head">
-            目录 · {chapters.length} 章
+            目录 · {tocCount} {tocUnit}
             <button
               className="toc-locate"
               title="定位到当前章节"
@@ -5249,7 +5355,7 @@ export default function Reader() {
               itemClass="toc-item"
               activeSet={activeSet}
               resolve={resolveTocHref}
-              onPick={openChapter}
+              onPick={pickToc}
               collapsed={tocCollapsed}
               onToggle={toggleToc}
             />
@@ -5380,7 +5486,7 @@ export default function Reader() {
       {tocDocked && (
         <aside className="toc-dock">
           <div className="toc-head">
-            目录 · {chapters.length} 章
+            目录 · {tocCount} {tocUnit}
             <button
               className="toc-locate"
               title="定位到当前章节"
@@ -5412,7 +5518,7 @@ export default function Reader() {
                 itemClass="toc-item"
                 activeSet={activeSet}
                 resolve={resolveTocHref}
-                onPick={openChapter}
+                onPick={pickToc}
                 collapsed={tocCollapsed}
                 onToggle={toggleToc}
               />
@@ -5696,7 +5802,7 @@ export default function Reader() {
         <div className="drawer-mask" onClick={() => setTocOpen(false)}>
           <aside className="drawer" onClick={(e) => e.stopPropagation()}>
             <div className="drawer-head">
-              目录 · {chapters.length} 章
+              目录 · {tocCount} {tocUnit}
               <button
                 className="toc-locate"
                 title="定位到当前章节"
@@ -5728,7 +5834,7 @@ export default function Reader() {
                   itemClass="drawer-item"
                   activeSet={activeSet}
                   resolve={resolveTocHref}
-                  onPick={openChapter}
+                  onPick={pickToc}
                   collapsed={tocCollapsed}
                   onToggle={toggleToc}
                 />
