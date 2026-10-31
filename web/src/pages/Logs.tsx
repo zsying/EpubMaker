@@ -16,7 +16,7 @@ import { toast, toastError } from '../toast';
  * written while the reader was doing something else, and a list that reorders
  * itself under a thumb is worse than a button.
  */
-type CatFilter = '' | 'ai' | 'ui' | 'nav';
+type CatFilter = '' | 'ai' | 'ui' | 'nav' | 'tts';
 type LevelFilter = '' | 'warn';
 
 const CATS: { id: CatFilter; label: string }[] = [
@@ -24,6 +24,10 @@ const CATS: { id: CatFilter; label: string }[] = [
   { id: 'ai', label: 'AI' },
   { id: 'ui', label: '界面' },
   { id: 'nav', label: '跳转' },
+  // 听书: the session's own operations plus the online voice's timings. Its own
+  // chip because that is the one category the reader scrolls back through to
+  // decide whether the reading keeps stalling.
+  { id: 'tts', label: '听书' },
 ];
 
 export default function Logs() {

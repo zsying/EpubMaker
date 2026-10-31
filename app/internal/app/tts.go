@@ -9,10 +9,14 @@ import (
 	"fmt"
 	"math"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/coder/websocket"
+
+	"epubmaker-desktop/internal/logx"
 )
 
 // 听书音色: the online "high quality" engine.
@@ -33,6 +37,11 @@ const (
 	edgeTTSVersion = "2-143.0.3650.75"
 	edgeTTSAgent   = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 " +
 		"(KHTML, like Gecko) Chrome/143.0.0.0 Safari/537.36 Edg/143.0.0.0"
+
+	// slowSynthMS is where a synthesis becomes worth a log line of its own. A
+	// warm sentence on a decent network is 200-500ms; past this the gap between
+	// two sentences is long enough to be heard.
+	slowSynthMS = 1500
 )
 
 // EdgeVoice is one selectable online voice, as the settings sheet lists it.
@@ -65,7 +74,12 @@ func (b *Backend) EdgeVoices() []EdgeVoice { return edgeVoices }
 // Sentences are ~60 characters, so the payload is a few tens of KB.
 //
 // `rate` is a multiplier (1.0 = normal), the same unit the system engine takes.
-func (b *Backend) TtsEdge(text, voice string, rate float64) (string, error) {
+//
+// Every request lands in the on-device log: a failure logs its stage and the
+// real error (the toast can only say 请求失败), and a slow one logs how long it
+// took. The frontend adds the reader-side numbers — silence between sentences,
+// cache hits — so a week of real listening is enough to decide what to tune.
+func (b *Backend) TtsEdge(text, voice string, rate float64) (out string, err error) {
 	text = strings.TrimSpace(text)
 	if text == "" {
 		return "", fmt.Errorf("没有要朗读的文字")
@@ -76,6 +90,24 @@ func (b *Backend) TtsEdge(text, voice string, rate float64) (string, error) {
 	if rate <= 0 || rate > 3 {
 		rate = 1
 	}
+
+	start := time.Now()
+	defer func() {
+		ms := time.Since(start).Milliseconds()
+		chars := strconv.Itoa(utf8.RuneCountInString(text))
+		if err != nil {
+			logx.Event(logx.LevelWarn, "tts", "edge failed",
+				"chars", chars, "voice", voice,
+				"ms", strconv.FormatInt(ms, 10), "err", err.Error())
+			return
+		}
+		if ms >= slowSynthMS {
+			logx.Event(logx.LevelDebug, "tts", "edge slow",
+				"chars", chars, "voice", voice,
+				"ms", strconv.FormatInt(ms, 10),
+				"kb", strconv.Itoa(len(out)*3/4/1024))
+		}
+	}()
 
 	// 45s: a cold connection plus a long sentence. A sentence that takes longer
 	// than this is not worth waiting for — the caller reports it and moves on.

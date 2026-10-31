@@ -7005,10 +7005,10 @@ html[data-app-theme='midnight'] .turn-veil-band {
   z-index: 45;
   display: flex;
   align-items: center;
-  gap: 2px;
+  gap: 1px;
   width: min(560px, calc(100vw - 20px));
   box-sizing: border-box;
-  padding: 7px 8px;
+  padding: 7px 6px;
   border-radius: 18px;
   background: var(--chrome-bg);
   border: 1px solid var(--chrome-border);
@@ -7041,6 +7041,16 @@ html[data-app-theme='midnight'] .turn-veil-band {
   padding: 0 6px 0 8px;
   line-height: 1.25;
 }
+/* The reader turned away from the voice: say so, and make the way back look
+   like something you can press. */
+.lb-meta.lb-away {
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+.lb-meta.lb-away .lb-sub {
+  color: var(--accent);
+  font-weight: 600;
+}
 .lb-title {
   font-size: 12.5px;
   font-weight: 600;
@@ -7059,8 +7069,11 @@ html[data-app-theme='midnight'] .turn-veil-band {
 
 .lb-btn {
   flex: 0 0 auto;
-  width: 34px;
-  height: 34px;
+  /* Two pixels smaller than the old 34: at 360px the bar carries five controls
+     besides play and close, and every pixel they give up is a character the
+     sentence counter gets to keep. */
+  width: 32px;
+  height: 32px;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -7077,7 +7090,7 @@ html[data-app-theme='midnight'] .turn-veil-band {
 
 .lb-rate {
   flex: 0 0 auto;
-  min-width: 44px;
+  min-width: 40px;
   height: 28px;
   padding: 0 6px;
   border: 1px solid var(--chrome-btn-border);

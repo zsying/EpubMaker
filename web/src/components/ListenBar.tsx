@@ -13,11 +13,15 @@ export type ListenBarProps = {
   rate: number;
   index: number;
   total: number;
+  /** False once the reader turned a page by hand: the bar then offers the way
+   * back to where the voice is, instead of silently chasing it. */
+  following: boolean;
   /** Shown as a chip when the online voice is in use. */
   voiceLabel?: string;
   onToggle: () => void;
   onPrev: () => void;
   onNext: () => void;
+  onFollow: () => void;
   onRate: () => void;
   onSettings: () => void;
   onClose: () => void;
@@ -80,25 +84,46 @@ export default function ListenBar({
   rate,
   index,
   total,
+  following,
   voiceLabel,
   onToggle,
   onPrev,
   onNext,
+  onFollow,
   onRate,
   onSettings,
   onClose,
   style,
 }: ListenBarProps) {
+  // "晓晓 · 女声，亲和" is a settings-sheet label; the bar has room for the name.
+  const shortVoice = voiceLabel ? voiceLabel.split(' · ')[0] : '';
   return (
     <div className="listen-bar" style={style} role="group" aria-label="听书">
       <button className="lb-play" onClick={onToggle} aria-label={playing ? '暂停朗读' : '继续朗读'}>
         {playing ? <IconPause /> : <IconPlay />}
       </button>
-      <div className="lb-meta">
+      {/* The whole meta block is the way back while the reader is away from the
+          voice: it is the widest target on the bar and it already names the
+          sentence, so it reads as "tap here to return to it". */}
+      <div
+        className={`lb-meta${following ? '' : ' lb-away'}`}
+        onClick={following ? undefined : onFollow}
+        role={following ? undefined : 'button'}
+        aria-label={following ? undefined : '回到正在朗读的句子'}
+        title={following ? undefined : '回到正在朗读的句子'}
+      >
         <div className="lb-title">{title}</div>
+        {/* A 360px phone leaves this line about ninety pixels — six Han
+            characters or so. That is why the counter lost its 第/句 wrapper, why
+            the voice is named by its first word only, and why the way back says
+            just "回到朗读": everything longer ends up as "回到朗读 · 34…", which
+            reads like a bug. */}
         <div className="lb-sub">
-          {total > 0 ? `第 ${Math.min(index + 1, total)}/${total} 句` : ''}
-          {voiceLabel ? ` · ${voiceLabel}` : ''}
+          {following
+            ? [total > 0 ? `${Math.min(index + 1, total)}/${total} 句` : '', shortVoice]
+                .filter(Boolean)
+                .join(' · ')
+            : '回到朗读'}
         </div>
       </div>
       <button className="lb-btn" onClick={onPrev} aria-label="上一句">

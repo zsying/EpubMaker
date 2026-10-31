@@ -43,6 +43,7 @@ import {
   OnlinePlayer,
   prepareTts,
   setOnlineFetcher,
+  setTtsLogger,
   setTtsSink,
   spanIndexAt,
   ttsAvailability,
@@ -108,6 +109,15 @@ const LISTEN_VOICE_KEY = 'epubmaker.listen.voice';
 
 /** The rates the bar cycles through. 0.75 for a hard passage, 2 for skimming. */
 const LISTEN_RATES = [0.75, 1, 1.25, 1.5, 2];
+
+/** 听书 goes into the on-device log under its own category, so a week of real
+ * listening is a record the reader can scroll back through — the numbers a
+ * tuning decision needs (how slow a fetch was, how long the silence between
+ * sentences) are not guessable after the fact. Fire and forget: a log write
+ * must never be a reason for the reading to stutter or fail. */
+function ttsLog(level: 'debug' | 'info' | 'warn', msg: string, detail = '') {
+  void api.logClient(level, 'tts', msg, detail).catch(() => {});
+}
 
 type ListenState = {
   playing: boolean;
@@ -761,6 +771,16 @@ export default function Reader() {
   // page. Never spans injected into the text: the chapter DOM belongs to React.
   const [listenMarks, setListenMarks] = useState<MarkBox[]>([]);
   const [listenSheet, setListenSheet] = useState(false);
+  // Whether the page still follows the voice. A manual turn says "I want to
+  // look over here": the reading must not drag the page back a second later,
+  // which is exactly what it did — every sentence start re-paged, so a swipe
+  // looked like it had never happened. The bar keeps the way home.
+  const [following, setFollowing] = useState(true);
+  const followRef = useRef(true);
+  /** When the reader's own code last scrolled the text (following the voice,
+   * restoring a position). A scroll inside this window is ours, not a signal
+   * that the reader went somewhere else. */
+  const autoScrollAtRef = useRef(0);
   const [edgeVoices, setEdgeVoices] = useState<Array<{ name: string; label: string }>>([]);
   // Preferences outlive the session; the session snapshots them when it starts
   // so changing the rate mid-chapter is an explicit action, not a side effect.
@@ -1533,6 +1553,26 @@ export default function Reader() {
     return edgeVoices?.find((v) => v.name === listenVoice)?.label || '在线音色';
   }
 
+  /** The reader took the page into their own hands. Reading carries on; the
+   * page and the band stop chasing the voice until the reader asks for them
+   * back. Without this every sentence start re-paged the reader a second after
+   * a swipe, so a manual turn looked like it had been ignored. */
+  function pauseFollow() {
+    if (!listenRef.current || !followRef.current) return;
+    followRef.current = false;
+    setFollowing(false);
+    setListenMarks([]);
+    ttsLog('debug', '手动翻页，暂停跟随', `第 ${(listenRef.current.index || 0) + 1} 句`);
+  }
+
+  /** Back to where the voice is, and follow it again from here. */
+  function resumeFollow() {
+    followRef.current = true;
+    setFollowing(true);
+    const L = listenRef.current;
+    if (L) showListenSpan(L.index);
+  }
+
   /** Silences every engine at once. Called before any restart, so a sentence is
    * never read twice by two engines that both think they are in charge. */
   function clearListenEngine() {
@@ -1627,6 +1667,9 @@ export default function Reader() {
     const top = rects[0].top;
     const bottom = rects[rects.length - 1].bottom;
     if (top >= box.top + 24 && bottom <= box.bottom - 24) return;
+    // Tell the scroll listener this one is ours, so following the voice does
+    // not read as the reader scrolling away.
+    autoScrollAtRef.current = Date.now();
     scroller.scrollTo({
       top: scroller.scrollTop + (top - box.top) - box.height / 3,
       behavior: 'smooth',
@@ -1637,8 +1680,12 @@ export default function Reader() {
    * then paints the band once the layout has settled. Both frames test that the
    * session is still alive first — a stop that lands inside the two frames would
    * otherwise be followed by a repaint, leaving a band on the page with nothing
-   * left to clear it. */
+   * left to clear it.
+   *
+   * Does nothing at all once the reader has turned away: their page is theirs
+   * until they ask for the voice's again. */
   function showListenSpan(i: number) {
+    if (!followRef.current) return;
     const span = spansRef.current[i];
     if (!span) return;
     if (mode === 'paged') {
@@ -1663,7 +1710,10 @@ export default function Reader() {
    * selection, or the beginning of a chapter that was just opened. */
   function startListen(fromOffset?: number) {
     const avail = ttsAvailability();
-    if (!avail.system && !avail.web) {
+    // The online voice is fetched by the backend and played by an <audio>
+    // element, so it needs neither the phone's engine nor Web Speech: only the
+    // local engines have to prove they exist.
+    if (listenEngine !== 'online' && !avail.system && !avail.web) {
       toast('这台设备没有可用的朗读引擎', 'error');
       return;
     }
@@ -1682,6 +1732,8 @@ export default function Reader() {
     clearListenEngine();
     spansRef.current = spans;
     pushedRef.current = at;
+    followRef.current = true;
+    setFollowing(true);
     const L: ListenState = {
       playing: true,
       index: at,
@@ -1694,14 +1746,24 @@ export default function Reader() {
     prepareTts(L.engine);
     pumpListen(at);
     showListenSpan(at);
+    ttsLog(
+      'info',
+      '开始朗读',
+      `${chapters.find((c) => c.id === current)?.title || ''} · 第 ${at + 1}/${spans.length} 句 · ` +
+        `引擎 ${L.engine === 'online' ? `在线 ${listenVoiceLabel()}` : '系统'} · 语速 ${L.rate}×`,
+    );
   }
 
   function stopListen() {
+    const L = listenRef.current;
+    if (L) ttsLog('info', '退出听书', `停在第 ${L.index + 1} 句`);
     clearListenEngine();
     listenRef.current = null;
     setListen(null);
     setListenMarks([]);
     setListenSheet(false);
+    followRef.current = true;
+    setFollowing(true);
   }
 
   /** Play / pause. Pausing keeps the position: the bar stays, and pressing play
@@ -1717,13 +1779,19 @@ export default function Reader() {
       const paused = { ...L, playing: false };
       listenRef.current = paused;
       setListen(paused);
+      ttsLog('info', '暂停朗读', `第 ${L.index + 1} 句`);
       return;
     }
     const resumed = { ...L, playing: true };
     listenRef.current = resumed;
     setListen(resumed);
     pushedRef.current = L.index;
+    // Pressing play is a request to listen, not to look at the page the reader
+    // left behind: follow the voice again from here.
+    followRef.current = true;
+    setFollowing(true);
     pumpListen(L.index);
+    ttsLog('info', '继续朗读', `第 ${L.index + 1} 句`);
   }
 
   function jumpListen(delta: number) {
@@ -1735,8 +1803,13 @@ export default function Reader() {
     listenRef.current = s;
     setListen(s);
     pushedRef.current = at;
+    // 上一句/下一句 are explicit moves along the voice's own path, so they take
+    // the page back with them.
+    followRef.current = true;
+    setFollowing(true);
     pumpListen(at);
     showListenSpan(at);
+    ttsLog('debug', delta > 0 ? '下一句' : '上一句', `第 ${at + 1}/${spansRef.current.length} 句`);
   }
 
   function changeListenRate() {
@@ -1749,6 +1822,7 @@ export default function Reader() {
     localStorage.setItem(LISTEN_RATE_KEY, String(rate));
     const L = listenRef.current;
     if (!L) return;
+    ttsLog('info', '调整语速', `${L.rate}× → ${rate}×`);
     // The platform applies the rate per utterance, so the current sentence has
     // to start over for the change to be audible now.
     const s = { ...L, rate };
@@ -1765,6 +1839,11 @@ export default function Reader() {
     localStorage.setItem(LISTEN_ENGINE_KEY, engine);
     const L = listenRef.current;
     if (!L) return;
+    ttsLog(
+      'info',
+      '切换朗读引擎',
+      `${L.engine === 'online' ? '在线' : '系统'} → ${engine === 'online' ? '在线' : '系统'}`,
+    );
     const s = { ...L, engine };
     listenRef.current = s;
     setListen(s);
@@ -1779,6 +1858,7 @@ export default function Reader() {
     localStorage.setItem(LISTEN_VOICE_KEY, voice);
     const L = listenRef.current;
     if (!L) return;
+    ttsLog('info', '切换音色', voice);
     const s = { ...L, voice };
     listenRef.current = s;
     setListen(s);
@@ -1820,16 +1900,23 @@ export default function Reader() {
       }
       // The chapter is finished: read on into the next one, which is the whole
       // point of 听书 — the reader should not have to turn a page every minute.
+      // A chapter boundary is also where following resumes: the book moved on
+      // under the reader, and there is no page of the old chapter left to hold.
       if (next) {
+        followRef.current = true;
+        setFollowing(true);
+        ttsLog('info', '本章读完，接着读下一章', next.title);
         openChapter(next.id, { type: 'first' });
         return;
       }
       toast('全书已读完', 'success');
+      ttsLog('info', '全书读完', '');
       stopListen();
       return;
     }
     if (e.type === 'error') {
       const code = e.code || '';
+      ttsLog('warn', '朗读失败', `${code} · 第 ${L.index + 1} 句`);
       if (code === 'no_zh_voice') {
         toast('手机上没有中文语音，请先在系统设置里安装中文朗读引擎', 'error');
         stopListen();
@@ -2089,6 +2176,7 @@ export default function Reader() {
       scroller.getBoundingClientRect().top +
       scroller.scrollTop -
       scroller.clientHeight / 3;
+    autoScrollAtRef.current = Date.now();
     scroller.scrollTo({ top: Math.max(0, top), behavior: 'auto' });
 
     // Measured again after scrolling so the caller's highlight lands on the
@@ -2160,6 +2248,10 @@ export default function Reader() {
     if (!scroller) return;
     let timer = 0;
     const onScroll = () => {
+      // In scroll mode, scrolling IS the page turn: the reader has moved the
+      // text themselves, so the voice must stop dragging it back to the
+      // sentence it is reading. Our own reveal-scroll is not that.
+      if (Date.now() - autoScrollAtRef.current > 700) pauseFollow();
       window.clearTimeout(timer);
       timer = window.setTimeout(() => {
         api.saveProgress(id, current, offsetAtViewportTop(), 1).catch(() => {});
@@ -2189,6 +2281,9 @@ export default function Reader() {
 
   useEffect(() => {
     setTtsSink((e) => listenHandlerRef.current(e));
+    // The engines' own timing goes to the on-device log: after a week of real
+    // listening it is the record a tuning decision is made from.
+    setTtsLogger((level, msg, detail) => ttsLog(level, msg, detail));
     // The online voice is fetched one sentence at a time and handed back as a
     // data URL: an <audio> element plays it with no CORS and no second server.
     setOnlineFetcher(async (text, voice, rate) => {
@@ -2197,6 +2292,7 @@ export default function Reader() {
     });
     return () => {
       setTtsSink(null);
+      setTtsLogger(null);
       setOnlineFetcher(null);
       clearListenEngine();
     };
@@ -2213,11 +2309,16 @@ export default function Reader() {
     if (spans.length === 0) return;
     spansRef.current = spans;
     pushedRef.current = 0;
+    // A new chapter is a new place: the reader's detour, if there was one, is
+    // over and the page follows the voice again.
+    followRef.current = true;
+    setFollowing(true);
     const s = { ...L, index: 0 };
     listenRef.current = s;
     setListen(s);
     pumpListen(0);
     showListenSpan(0);
+    ttsLog('debug', '换章朗读', `${spans.length} 句`);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [safeHtml]);
 
@@ -2225,29 +2326,33 @@ export default function Reader() {
   // measured on changed underneath it.
   useEffect(() => {
     const L = listenRef.current;
-    if (!L) return;
+    // Not while the reader is away: a page turn of theirs must not bring a band
+    // back for a sentence they are not looking at.
+    if (!L || !followRef.current) return;
     const span = spansRef.current[L.index];
     if (!span) return;
     const raf = window.requestAnimationFrame(() => {
       // Re-checked inside the frame: closing the bar between the effect and the
       // frame must not resurrect the band.
-      if (listenRef.current) paintListen(span);
+      if (listenRef.current && followRef.current) paintListen(span);
     });
     return () => window.cancelAnimationFrame(raf);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pageIndex, mode, fontSize, fontEpoch, theme]);
 
-  // The online voice list is only needed by the settings sheet, so it is not
-  // fetched on a reading session that never opens it.
+  // The online voice list is needed by the settings sheet — and by the bar,
+  // which names the voice it is using. Not fetched on a reading session that
+  // never listens.
+  const needsVoices = listenSheet || listen?.engine === 'online';
   useEffect(() => {
-    if (!listenSheet || edgeVoices.length > 0) return;
+    if (!needsVoices || edgeVoices.length > 0) return;
     api
       .edgeVoices()
       // A backend that answers null (older build, failed call) must not take
       // the reader down with it: the list is a picker, not a dependency.
       .then((list) => setEdgeVoices(Array.isArray(list) ? list : []))
       .catch(() => {});
-  }, [listenSheet, edgeVoices.length]);
+  }, [needsVoices, edgeVoices.length]);
 
   /* ---- the neighbouring chapter's page, laid out before it is needed ---- */
   // A chapter turn only slides if there is a page to slide in, and that page has
@@ -2680,6 +2785,10 @@ export default function Reader() {
   function finishDragTurn() {
     window.clearTimeout(dragEndTimer.current);
     const d = dragTurnRef.current;
+    // A committed swipe is the reader turning the page themselves: from here
+    // the page is theirs and 听书 must stop paging it back. (A drag that was
+    // pulled back and abandoned is not a turn and changes nothing.)
+    if (d?.commit) pauseFollow();
     if (d?.commit && d.kind === 'chapter') {
       const target = d.dir > 0 ? next : prev;
       if (target) {
@@ -2772,6 +2881,11 @@ export default function Reader() {
     // A chapter turn is already in flight, with its chapter loading behind the
     // peek: another turn would have nowhere to land.
     if (peekHandoffRef.current) return;
+    // A deliberate turn while the book is being read aloud: the page is the
+    // reader's from here, and 听书 keeps reading without taking it back. This
+    // is what made a swipe look broken — the next sentence start paged the
+    // reader to the voice a second later, so the turn appeared not to happen.
+    pauseFollow();
     // The card points at a word on the page being left behind.
     cancelWordLookup();
     setLookupCard(null);
@@ -4330,6 +4444,8 @@ export default function Reader() {
             setLookupCard(null);
             setSel(null);
             setPopover(null);
+            // Dragging the slider is a deliberate move through the chapter.
+            pauseFollow();
             setPageIndex(Number(e.target.value));
           }}
           aria-label="阅读进度"
@@ -4983,10 +5099,12 @@ export default function Reader() {
           rate={listen.rate}
           index={listen.index}
           total={spansRef.current.length}
+          following={following}
           voiceLabel={listen.engine === 'online' ? listenVoiceLabel() : undefined}
           onToggle={toggleListen}
           onPrev={() => jumpListen(-1)}
           onNext={() => jumpListen(1)}
+          onFollow={resumeFollow}
           onRate={changeListenRate}
           onSettings={() => setListenSheet(true)}
           onClose={stopListen}

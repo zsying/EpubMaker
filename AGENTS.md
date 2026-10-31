@@ -143,6 +143,13 @@
     `tts_test.go` 里钉了三组上游生成的向量。它哪天 403 了，正确做法是拿新版 `edge-tts` 重新对照
     移植并重钉向量，不是"清理"成普通 SHA-256——旧算法早就被拒了。这是私有接口，不在稳定承诺内。
 
+15. **在线音色一个播放器只许有一个 `<audio>`，`stop()` 必须先结算在途 promise**。每句
+    `new Audio(url)` 在 WebView 上就是每句一个 MediaPlayer 加一份 base64 mp3（data URL 里装的
+    是整个文件），长听书直接涨内存；而 `pause()` 一个 `play()` 已 resolve 的元素不会让
+    `await play()` 返回，挂起的 pump 帧会一直引用 player、队列和元素。缓存是双上限（24 条
+    **且** 4 MB base64），退出阅读器清空。听书日志（cat=`tts`）**只记异常与每 20 句的统计**：
+    逐句一条会在十分钟内把 300 条环形缓冲刷满，其他分类再也查不到。
+
 ## 开发约定
 
 - **首选入口 `.\run.ps1`**（无参数打印帮助）：`dev` / `build` / `nsis` / `mobile` / `mobile-install`

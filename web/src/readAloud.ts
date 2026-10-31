@@ -49,12 +49,18 @@ const BLOCK = new Set([
   'BODY',
 ]);
 
-/** Sentence-final marks. 「…」 counts double: it is how Chinese prose ends. */
-const TERM = /[。！？!?…；;]/;
-/** Marks that belong to the sentence they follow, not to the next one. */
-const CLOSER = /["'”’）)」』】》〉]/;
-/** A long paragraph is cut here before it becomes an unreadable mouthful. */
-const SOFT = /[，、,:：]/;
+/** Sentence-final marks. Nothing else ends a span. A semicolon, an ellipsis,
+ * an em dash or a closing book-title mark all sit *inside* a sentence, and
+ * cutting there is heard as a pause mid-thought — on the online voice it also
+ * costs an extra request, so the seam becomes a real gap. */
+const TERM = /[。！？!?]/;
+/** Marks that may follow a terminator and still belong to that sentence:
+ * closing quotes and brackets. Never an opening one, and never 》〉 — a book
+ * title closes inside a sentence far more often than at the end of one. */
+const CLOSER = /["'”’）)」』】〕]/;
+/** Where an over-long span may be cut, best pause first. Same set the reader
+ * hears as a beat: clause punctuation, ellipsis, em dash. */
+const SOFT = /[，、,:：；;…—]/;
 
 /** Longest text handed to a single utterance. Cloud voices bill and stall by
  * length; the system engine's prosody also drifts on very long input, and a
@@ -124,10 +130,15 @@ export function chapterSpans(html: string): Span[] {
   let prevBlock: Element | null = null;
   let buf = '';
   let bufStart = 0;
+  // Set when a sentence terminator has been seen; the sentence ends at the
+  // first character after it that is neither a terminator nor a closing mark,
+  // so quotes and brackets stay attached to the sentence they close.
+  let sawTerm = false;
 
   const cut = () => {
     if (buf) pushSegment(out, bufStart, buf);
     buf = '';
+    sawTerm = false;
   };
 
   let node: Node | null;
@@ -144,14 +155,12 @@ export function chapterSpans(html: string): Span[] {
         cut();
         continue;
       }
+      // The cut happens *before* the new character: "他说：「走吧。」然后…"
+      // ends at 」 and the next span starts at 然.
+      if (sawTerm && !TERM.test(ch) && !CLOSER.test(ch)) cut();
       if (!buf) bufStart = offset + i;
       buf += ch;
-      const next = text[i + 1];
-      // Cut after a terminator (or a closing quote after one) only when the
-      // sentence really ends: "他说：「走吧。」" ends at 」, not at 。.
-      if ((TERM.test(ch) || CLOSER.test(ch)) && !(next && (TERM.test(next) || CLOSER.test(next)))) {
-        cut();
-      }
+      if (TERM.test(ch)) sawTerm = true;
     }
     offset += text.length;
   }
@@ -199,8 +208,39 @@ export function setTtsSink(fn: Sink | null) {
   const w = window as unknown as { __epubTts?: (e: TtsEvent) => void };
   if (fn) {
     w.__epubTts = (e) => sink?.(e);
+  } else {
+    // The Android bridge holds this name: leaving a dead closure behind keeps
+    // the module (and everything the reader closed over) reachable.
+    delete w.__epubTts;
   }
 }
+
+/* ---------------------------------- logging ---------------------------------
+   The reader wants a trail it can look at after a week of real listening, not a
+   measurement session. The engines are the only place that knows how long the
+   network took and how much silence there was between sentences, so they report
+   it here; where it goes (the on-device log) is the reader's business. */
+
+export type TtsLogLevel = 'debug' | 'info' | 'warn';
+export type TtsLogFn = (level: TtsLogLevel, msg: string, detail: string) => void;
+let ttsLog: TtsLogFn | null = null;
+
+export function setTtsLogger(fn: TtsLogFn | null) {
+  ttsLog = fn;
+}
+
+function log(level: TtsLogLevel, msg: string, detail = '') {
+  ttsLog?.(level, msg, detail);
+}
+
+/** Sentences between summary lines. One line per sentence would bury every
+ * other category in a 300-entry ring buffer within ten minutes of listening;
+ * the average and the worst case are what a tuning decision needs anyway. */
+const LOG_EVERY = 20;
+/** A fetch slower than this is worth its own line. */
+const SLOW_FETCH_MS = 1500;
+/** Silence between two sentences that is long enough to be heard as a stall. */
+const SLOW_GAP_MS = 600;
 
 /** The Android bridge, or null in a desktop / browser host. */
 export function nativeTts(): {
@@ -273,27 +313,67 @@ export function webStop() {
 type OnlineFetch = (text: string, voice: string, rate: number) => Promise<string>;
 
 let onlineFetch: OnlineFetch | null = null;
-const audioCache = new Map<string, Promise<string>>();
-const CACHE_MAX = 60;
+
+type CachedAudio = { p: Promise<string>; chars: number };
+const audioCache = new Map<string, CachedAudio>();
+/** Sentences kept. The player prefetches four at a time, so this is several
+ * windows deep — enough for a skipped-back sentence to be free, small enough
+ * that a 500-chapter book cannot pile up. */
+const CACHE_MAX = 24;
+/** Characters of base64 kept, about 4 MB. The count cap alone is not a memory
+ * bound: one long sentence is a few hundred KB of mp3 as text. */
+const CACHE_CHARS = 4 << 20;
+let cachedChars = 0;
+
+function audioKey(text: string, voice: string, rate: number) {
+  return `${voice}|${rate}|${text}`;
+}
+
+/** Bounded by both count and weight, oldest first. Called on insert and again
+ * when a payload lands and its real size becomes known. */
+function trimAudioCache() {
+  for (const [k, v] of audioCache) {
+    if (audioCache.size <= CACHE_MAX && cachedChars <= CACHE_CHARS) break;
+    audioCache.delete(k);
+    cachedChars -= v.chars;
+  }
+  if (cachedChars < 0) cachedChars = 0;
+}
 
 export function setOnlineFetcher(fn: OnlineFetch | null) {
   onlineFetch = fn;
+  // A closed session's audio is dead weight — and on a phone it is megabytes.
+  if (!fn) {
+    audioCache.clear();
+    cachedChars = 0;
+  }
 }
 
 function fetchAudio(text: string, voice: string, rate: number): Promise<string> {
-  const key = `${voice}|${rate}|${text}`;
+  const key = audioKey(text, voice, rate);
   const hit = audioCache.get(key);
-  if (hit) return hit;
+  if (hit) return hit.p;
   if (!onlineFetch) return Promise.reject(new Error('no fetcher'));
-  const p = onlineFetch(text, voice, rate);
-  audioCache.set(key, p);
-  // A failed sentence must not be remembered as a failure.
-  p.catch(() => audioCache.delete(key));
-  if (audioCache.size > CACHE_MAX) {
-    const oldest = audioCache.keys().next().value;
-    if (oldest !== undefined) audioCache.delete(oldest);
-  }
-  return p;
+  const entry: CachedAudio = { p: onlineFetch(text, voice, rate), chars: 0 };
+  audioCache.set(key, entry);
+  entry.p.then(
+    (url) => {
+      // Weighed once the payload exists: a promise is not what fills the heap.
+      if (audioCache.get(key) !== entry) return;
+      entry.chars = url.length;
+      cachedChars += url.length;
+      trimAudioCache();
+    },
+    () => {
+      // A failed sentence must not be remembered as a failure.
+      if (audioCache.get(key) === entry) {
+        audioCache.delete(key);
+        cachedChars -= entry.chars;
+      }
+    },
+  );
+  trimAudioCache();
+  return entry.p;
 }
 
 /** Sequential online player: one <audio> at a time, prefetching ahead. */
@@ -301,7 +381,19 @@ export class OnlinePlayer {
   private queue: { sid: string; text: string }[] = [];
   private running = false;
   private stopped = false;
-  private audio: HTMLAudioElement | null = null;
+  /** The one element this player ever owns. A data-URL src holds the whole mp3
+   * in memory and the element owns a decoder; `new Audio()` per sentence left
+   * one behind each time and a long session grew by tens of MB. Re-sourcing
+   * one element keeps exactly one decoder alive. */
+  private el: HTMLAudioElement | null = null;
+  /** Settles the sentence in flight. `stop()` has to call it: pausing an
+   * element whose `play()` already resolved leaves the awaited promise pending
+   * forever, and that suspended pump frame keeps the player (and its audio)
+   * reachable for the rest of the session. */
+  private settle: (() => void) | null = null;
+  private lastEnd = 0;
+  private stat = { n: 0, fetchSum: 0, fetchMax: 0, gapSum: 0, gapN: 0, gapMax: 0 };
+
   constructor(
     private voice: string,
     private rate: number,
@@ -325,6 +417,8 @@ export class OnlinePlayer {
     let misses = 0;
     while (this.queue.length > 0 && !this.stopped) {
       const item = this.queue.shift()!;
+      const hit = audioCache.has(audioKey(item.text, this.voice, this.rate));
+      const t0 = Date.now();
       let url: string;
       try {
         url = await fetchAudio(item.text, this.voice, this.rate);
@@ -336,43 +430,106 @@ export class OnlinePlayer {
         }
         continue;
       }
+      const fetchMs = Date.now() - t0;
       misses = 0;
       if (this.stopped) break;
+      // Silence the reader actually hears: from the end of the previous
+      // sentence to the moment this one can start.
+      const gap = this.lastEnd ? Date.now() - this.lastEnd : -1;
+      const t1 = Date.now();
       try {
         await this.play(url, item.sid);
       } catch {
         sink?.({ type: 'error', sid: item.sid, code: 'online_playback' });
         continue;
       }
+      if (this.stopped) break;
+      this.lastEnd = Date.now();
+      this.record(item, fetchMs, hit, gap, this.lastEnd - t1);
       sink?.({ type: 'done', sid: item.sid });
     }
     this.running = false;
     if (!this.stopped && this.queue.length === 0) sink?.({ type: 'idle' });
   }
 
+  /** Per-sentence numbers, kept quiet unless something was wrong; a rolling
+   * average every LOG_EVERY sentences is what a later tuning pass reads. */
+  private record(
+    item: { sid: string; text: string },
+    fetchMs: number,
+    hit: boolean,
+    gap: number,
+    playMs: number,
+  ) {
+    const s = this.stat;
+    s.n += 1;
+    s.fetchSum += fetchMs;
+    s.fetchMax = Math.max(s.fetchMax, fetchMs);
+    if (gap > 0) {
+      s.gapSum += gap;
+      s.gapN += 1;
+      s.gapMax = Math.max(s.gapMax, gap);
+    }
+    const tail = `取音 ${Math.round(fetchMs)}ms${hit ? '(缓存)' : ''} 静默 ${Math.max(0, Math.round(gap))}ms 播放 ${Math.round(playMs)}ms`;
+    if (fetchMs >= SLOW_FETCH_MS) {
+      log('debug', '在线取音偏慢', `句 ${item.sid} ${item.text.length}字 ${tail}`);
+    } else if (gap >= SLOW_GAP_MS) {
+      log('debug', '句间停顿偏长', `句 ${item.sid} ${item.text.length}字 ${tail}`);
+    }
+    if (s.n % LOG_EVERY === 0) this.summary();
+  }
+
+  private summary() {
+    const s = this.stat;
+    if (s.n === 0) return;
+    log(
+      'debug',
+      '在线朗读统计',
+      `${s.n} 句 · 取音 均 ${Math.round(s.fetchSum / s.n)}ms 最慢 ${Math.round(s.fetchMax)}ms` +
+        ` · 静默 均 ${s.gapN ? Math.round(s.gapSum / s.gapN) : 0}ms 最长 ${Math.round(s.gapMax)}ms`,
+    );
+  }
+
   private play(url: string, sid: string): Promise<void> {
+    if (!this.el) {
+      this.el = new Audio();
+      this.el.preload = 'auto';
+    }
+    const a = this.el;
     return new Promise((resolve, reject) => {
-      const a = new Audio(url);
-      this.audio = a;
-      a.onended = () => {
-        this.audio = null;
-        resolve();
+      let settled = false;
+      const finish = (err?: Error) => {
+        if (settled) return;
+        settled = true;
+        this.settle = null;
+        a.onended = null;
+        a.onerror = null;
+        if (err) reject(err);
+        else resolve();
       };
-      a.onerror = () => {
-        this.audio = null;
-        reject(new Error('audio'));
-      };
+      this.settle = () => finish();
+      a.onended = () => finish();
+      a.onerror = () => finish(new Error('audio'));
       sink?.({ type: 'start', sid });
-      a.play().catch(reject);
+      a.src = url;
+      a.play().catch((e) => finish(e instanceof Error ? e : new Error('play')));
     });
   }
 
   stop() {
+    if (this.stopped) return;
     this.stopped = true;
     this.queue = [];
-    if (this.audio) {
-      this.audio.pause();
-      this.audio = null;
+    this.summary();
+    this.settle?.();
+    this.settle = null;
+    const a = this.el;
+    if (a) {
+      a.pause();
+      // Let go of the mp3 behind the data URL. Without this the element holds
+      // the last sentence's audio until the player itself is collected.
+      a.removeAttribute('src');
+      a.load();
     }
   }
 }
