@@ -31,6 +31,16 @@ of described.
   without losing its nav. Exactly one row is ever current, picked by the last
   anchor that has passed the bottom of the screen, so a jump to 第7章 says 第7章
   even when its heading is halfway down the page. See ADR-36.
+- **A file's name opens out where it stands** — a WebDAV row has room for the
+  badge, the buttons and whatever the name can fit between them, so a long one
+  ended in an ellipsis, and on a phone there is no hover to ask for the rest.
+  Tapping a file row now wraps that row's name onto as many lines as it needs
+  (breaking inside words, because file names have no spaces), growing downward
+  while the badge, the date and the buttons stay on the first line. Tapping it
+  again closes it; several rows can be open at once; the name becomes
+  selectable so a recognised book can be copied. The open state is not a
+  preference — it clears on refresh or when the folder changes — and the name
+  takes focus and answers Enter / Space for keyboard readers. See ADR-37.
 - **The WebDAV list can be sorted and filtered** — a shared folder with forty
   epubs left the reader scrolling in the order the server happened to return,
   which was directories first and then bytes. The list now carries one row of

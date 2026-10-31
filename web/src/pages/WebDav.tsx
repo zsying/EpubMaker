@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import type { KeyboardEvent } from 'react';
 import { api, WebDavConn, WebDavEntry } from '../api';
 import { toast, toastError } from '../toast';
 import SubHeader from '../components/SubHeader';
@@ -127,6 +128,11 @@ export default function WebDav() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [selected, setSelected] = useState<Set<string>>(new Set());
+  // Rows whose name is opened out in full. A server's file name can be the most
+  // informative thing on the line — "邓小平时代（港版·全译修订）_v2.epub" — and
+  // the row truncates it to whatever fits between the badge and the buttons.
+  // Tapping a file row wraps that name instead of leaving it with an ellipsis.
+  const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [importing, setImporting] = useState(false);
   const [importResult, setImportResult] = useState<{ ok: number; errors: string[] } | null>(null);
 
@@ -162,6 +168,7 @@ export default function WebDav() {
       setLoading(true);
       setError(null);
       setSelected(new Set());
+      setExpanded(new Set());
       try {
         const list = await api.webdavList(active, p);
         setEntries(list);
@@ -210,6 +217,7 @@ export default function WebDav() {
     pathRef.current = '';
     setKeyword('');
     setSelected(new Set());
+    setExpanded(new Set());
     setError(null);
     setImportResult(null);
   }
@@ -227,6 +235,17 @@ export default function WebDav() {
       const next = new Set(prev);
       if (next.has(e.path)) next.delete(e.path);
       else next.add(e.path);
+      return next;
+    });
+  }
+
+  /** Open or close one row's name. Several may be open at once — comparing two
+   *  long names is exactly when the full text matters. */
+  function toggleExpanded(p: string) {
+    setExpanded((prev) => {
+      const next = new Set(prev);
+      if (next.has(p)) next.delete(p);
+      else next.add(p);
       return next;
     });
   }
@@ -495,16 +514,37 @@ export default function WebDav() {
         <div className={`wd-list${sort.key === 'date' ? ' dates' : ''}`}>
           {shown.map((e) => {
             const epub = isEpub(e.name);
+            const open = !e.isDirectory && expanded.has(e.path);
             return (
               <div
-                className={`wd-row${e.isDirectory ? ' dir' : ''}${selected.has(e.path) ? ' sel' : ''}`}
+                className={`wd-row${e.isDirectory ? ' dir' : ''}${selected.has(e.path) ? ' sel' : ''}${open ? ' open' : ''}`}
                 key={e.path}
-                onClick={() => (e.isDirectory ? openDir(e) : undefined)}
+                onClick={() => (e.isDirectory ? openDir(e) : toggleExpanded(e.path))}
+                title={open ? '点击收起文件名' : e.isDirectory ? e.name : '点击展开文件名'}
               >
                 <span className={`wd-badge ${e.isDirectory ? 'dir' : epub ? 'epub' : 'file'}`}>
                   {e.isDirectory ? '目录' : epub ? 'EPUB' : '文件'}
                 </span>
-                <span className="wd-name" title={e.name}>
+                <span
+                  className="wd-name"
+                  title={e.name}
+                  // A file's name is the control that opens it out; a
+                  // directory's is just its label (the row already opens it).
+                  {...(e.isDirectory
+                    ? {}
+                    : {
+                        role: 'button',
+                        tabIndex: 0,
+                        'aria-expanded': open,
+                        'aria-label': `${open ? '收起' : '展开'}文件名 ${e.name}`,
+                        onKeyDown: (ev: KeyboardEvent) => {
+                          if (ev.key === 'Enter' || ev.key === ' ') {
+                            ev.preventDefault();
+                            toggleExpanded(e.path);
+                          }
+                        },
+                      })}
+                >
                   {e.name}
                 </span>
                 <span className="wd-meta">
