@@ -43,6 +43,8 @@ import {
   nativeTts,
   OnlinePlayer,
   prepareTts,
+  publishNowPlaying,
+  setListenCommandHandler,
   setOnlineFetcher,
   setTtsLogger,
   setTtsSink,
@@ -50,6 +52,8 @@ import {
   ttsAvailability,
   webSpeak,
   webStop,
+  type ListenCommand,
+  type NowPlaying,
   type Span,
   type TtsEngine,
   type TtsEvent,
@@ -110,6 +114,17 @@ const LISTEN_VOICE_KEY = 'epubmaker.listen.voice';
 
 /** The rates the bar cycles through. 0.75 for a hard passage, 2 for skimming. */
 const LISTEN_RATES = [0.75, 1, 1.25, 1.5, 2];
+
+/** What the phone's media widget is told when there is no session. Sending it
+ * is how the notification is taken down; the host does not guess. */
+const INACTIVE_NOW_PLAYING: NowPlaying = {
+  active: false,
+  playing: false,
+  title: '',
+  artist: '',
+  canPrev: false,
+  canNext: false,
+};
 
 /** 听书 goes into the on-device log under its own category, so a week of real
  * listening is a record the reader can scroll back through — the numbers a
@@ -908,6 +923,14 @@ export default function Reader() {
   const pushedRef = useRef(0);
   const onlineRef = useRef<OnlinePlayer | null>(null);
   const listenHandlerRef = useRef<(e: TtsEvent) => void>(() => {});
+  // Same trick for the notification's buttons: they arrive on a channel the
+  // host owns, installed once, and must reach the session as it is *now*.
+  const listenCmdRef = useRef<(c: ListenCommand) => void>(() => {});
+  /** The last now-playing record handed to the host, as JSON. Publishing is a
+   * side effect with a real cost on the phone (a notification rebuild), and the
+   * session object is recreated on every sentence — so equality is judged on
+   * what the widget actually shows, not on the object identity. */
+  const nowPlayingRef = useRef('');
   const [chromeOpen, setChromeOpen] = useState(false);
   const [chromeHover, setChromeHover] = useState(false);
   // Resolved once: the pointer class of a device does not change mid-session,
@@ -1937,7 +1960,20 @@ export default function Reader() {
   function jumpListen(delta: number) {
     const L = listenRef.current;
     if (!L) return;
-    const at = Math.max(0, Math.min(spansRef.current.length - 1, L.index + delta));
+    const total = spansRef.current.length;
+    const at = L.index + delta;
+    // Past either end of the chapter, the voice walks into the neighbouring
+    // one — the same thing 听书 already does on its own when a chapter runs out.
+    // Going back lands on the previous chapter's first sentence rather than its
+    // last: the reader asked for "the previous one", and a chapter is the unit
+    // they can see.
+    if (at < 0 || at >= total) {
+      const target = at < 0 ? prev : next;
+      if (!target) return;
+      ttsLog('info', at < 0 ? '上一章' : '下一章', target.title);
+      openChapter(target.id, { type: 'first' });
+      return;
+    }
     clearListenEngine();
     const s = { ...L, index: at, playing: true };
     listenRef.current = s;
@@ -1950,6 +1986,28 @@ export default function Reader() {
     pumpListen(at);
     showListenSpan(at);
     ttsLog('debug', delta > 0 ? '下一句' : '上一句', `第 ${at + 1}/${spansRef.current.length} 句`);
+  }
+
+  /** A button on the media notification / lock screen / headset. The host has
+   * no idea where the voice is — it only knows which button was pressed — so
+   * every one of these is routed into the same handlers the bar uses. */
+  function onListenCommand(cmd: ListenCommand) {
+    const L = listenRef.current;
+    if (cmd === 'toggle') {
+      toggleListen();
+      return;
+    }
+    if (cmd === 'stop') {
+      if (L) stopListen();
+      return;
+    }
+    // Skipping with no session at all is a request to listen, not a no-op: the
+    // widget can outlive a reader that was rebuilt under it.
+    if (!L) {
+      startListen();
+      return;
+    }
+    jumpListen(cmd === 'next' ? 1 : -1);
   }
 
   function changeListenRate() {
@@ -2438,9 +2496,13 @@ export default function Reader() {
   // The engines call back from outside React; the handler is refreshed every
   // render so it always speaks for the chapter on screen.
   listenHandlerRef.current = onTtsEvent;
+  // Same for the notification's buttons.
+  listenCmdRef.current = onListenCommand;
 
   useEffect(() => {
     setTtsSink((e) => listenHandlerRef.current(e));
+    // The media notification's buttons come back through this channel.
+    setListenCommandHandler((c) => listenCmdRef.current(c));
     // The engines' own timing goes to the on-device log: after a week of real
     // listening it is the record a tuning decision is made from.
     setTtsLogger((level, msg, detail) => ttsLog(level, msg, detail));
@@ -2452,12 +2514,20 @@ export default function Reader() {
     });
     return () => {
       setTtsSink(null);
+      setListenCommandHandler(null);
       setTtsLogger(null);
       setOnlineFetcher(null);
       clearListenEngine();
+      // Leaving the reader ends the session, so the widget goes with it.
+      publishNowPlaying(INACTIVE_NOW_PLAYING);
+      nowPlayingRef.current = JSON.stringify(INACTIVE_NOW_PLAYING);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // What the phone's media notification shows lives below, next to
+  // `currentChapter`: the widget's title *is* the chapter, and a TDZ reference
+  // is not worth the shrug.
 
   // A new chapter means a new span list. Reading continues from its beginning —
   // that is also how an automatic chapter turn hands over to the next chapter
@@ -2625,6 +2695,29 @@ export default function Reader() {
 
   const currentChapter = current ? (chapters.find((c) => c.id === current) ?? null) : null;
   const activeDoc = currentChapter?.href ?? null;
+
+  /* The media notification's contents. Published only when the widget would
+     actually look different: the session object is rebuilt on every sentence,
+     and one notification per sentence would be several hundred pointless
+     updates in a single chapter. */
+  useEffect(() => {
+    const np: NowPlaying = listen
+      ? {
+          active: true,
+          playing: listen.playing,
+          // The chapter is what the reader is following; the book goes under it.
+          title: currentChapter?.title || book?.title || '',
+          artist: book?.title || '',
+          canPrev: listen.index > 0 || !!prev,
+          canNext: listen.index < spansRef.current.length - 1 || !!next,
+        }
+      : INACTIVE_NOW_PLAYING;
+    const json = JSON.stringify(np);
+    if (json === nowPlayingRef.current) return;
+    nowPlayingRef.current = json;
+    publishNowPlaying(np);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [listen, currentChapter, book, prev, next]);
 
   // Which section the reader is inside. A nav can name several sections inside
   // one document — 邓小平时代's 第6章 and 第7章 both live in split_004 — so

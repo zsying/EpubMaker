@@ -8,6 +8,7 @@ import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
+import android.os.PowerManager;
 import android.speech.tts.TextToSpeech;
 import android.speech.tts.UtteranceProgressListener;
 import android.speech.tts.Voice;
@@ -53,8 +54,18 @@ public class TtsBridge {
     private final WebView webView;
     private final Handler main = new Handler(Looper.getMainLooper());
 
-    /** Sentences parked while the engine is still initialising (~300ms). */
+    /** Sentences parked while the engine is still initialising (~300ms).
+     *
+     * Bounded by characters, not by count: the reader hands the engine a whole
+     * chapter at once, because the engine's queue is the only part of 听书 that
+     * survives the screen going off (JS is throttled there). A 32-entry cap
+     * silently dropped everything after the 32nd sentence, so the first listen
+     * of a session read four minutes and then jumped to the next chapter. Half
+     * a megabyte is a very long chapter of Chinese text, and nothing worth
+     * worrying about in a 27 MB app. */
     private final ArrayDeque<String[]> pending = new ArrayDeque<>();
+    private int pendingChars;
+    private static final int PENDING_CHARS_MAX = 512 * 1024;
 
     private TextToSpeech tts;
     private boolean starting;
@@ -68,7 +79,28 @@ public class TtsBridge {
     private boolean focusHeld;
     private AudioManager audioManager;
     private AudioFocusRequest focusRequest;
+    /** The foreground service (and its notification) is up. */
     private boolean speakingSession;
+    /** The reader still wants a session. It outlives a drained queue: between
+     * the last sentence of one chapter and the first of the next the reader has
+     * to fetch and render, and that gap must not be a window in which the app
+     * drops focus and the service — which is exactly when the system would
+     * decide the app is idle and freeze it. Only `clear()` (pause, exit, engine
+     * switch) ends a session deliberately. */
+    private boolean sessionActive;
+    private PowerManager.WakeLock wakeLock;
+    /** How long a session survives an empty queue before it is wound down on
+     * its own, so a reader that died mid-chapter cannot strand a notification
+     * and a wake lock. Long enough for a slow chapter fetch on a bad network. */
+    private static final long DRAIN_GRACE_MS = 90_000;
+    private final Runnable drainGrace = () -> {
+        if (!sessionActive) return;
+        sessionActive = false;
+        abandonFocus();
+        endSession();
+    };
+    /** The instance a notification button should reach. */
+    private static volatile TtsBridge current;
     private final AudioManager.OnAudioFocusChangeListener focusListener = change -> {
         // A phone call or another player taking the stream: stop cleanly rather
         // than talk over it. JS sees `idle` and shows the bar as paused.
@@ -82,6 +114,25 @@ public class TtsBridge {
         this.activity = activity;
         this.webView = webView;
         this.audioManager = (AudioManager) activity.getSystemService(android.content.Context.AUDIO_SERVICE);
+        current = this;
+    }
+
+    /** A control on the media notification / lock screen / headset was pressed.
+     * The reader owns the session, so all this does is hand the button over. */
+    static void dispatchCommand(String command) {
+        TtsBridge self = current;
+        if (self == null) return;
+        self.main.post(() -> {
+            WebView view = self.webView;
+            if (view == null) return;
+            try {
+                view.evaluateJavascript(
+                        "window.__epubListen&&window.__epubListen(" + JSONObject.quote(command) + ");",
+                        null);
+            } catch (Exception e) {
+                Log.w(TAG, "dispatch " + command + " failed", e);
+            }
+        });
     }
 
     /** Engine state as JSON. Safe to call before init: reports what is known. */
@@ -115,12 +166,51 @@ public class TtsBridge {
         final String id = sid == null || sid.isEmpty() ? "u" + System.nanoTime() : sid;
         main.post(() -> {
             this.rate = rate > 0 ? rate : 1f;
+            // Asking for speech is also asking for a session: it cancels a
+            // grace that was running out between two chapters.
+            sessionActive = true;
+            main.removeCallbacks(drainGrace);
             if (!ready) {
-                if (pending.size() < 32) pending.add(new String[] { id, text });
+                if (pendingChars + text.length() <= PENDING_CHARS_MAX) {
+                    pending.add(new String[] { id, text });
+                    pendingChars += text.length();
+                }
                 ensureEngine();
                 return;
             }
             speakNow(id, text);
+        });
+    }
+
+    /** What the media notification should show: `{active, playing, title,
+     * artist, canPrev, canNext}`.
+     *
+     * This is also what owns the session, which is why it does more than paint
+     * a notification. The phone's own engine and the online voice reach audio
+     * by completely different roads — the first queues inside Android, the
+     * second plays an <audio> element in the WebView — and only one of them
+     * passes through this class. A session that existed only because `speak()`
+     * had been called therefore did not exist at all for the online voice:
+     * no foreground service, no wake lock, no media session, and with the
+     * screen off that reader was an ordinary background app, which is exactly
+     * the one thing a phone is allowed to freeze. The reader says "a session is
+     * running" and both engines now get the same protection. */
+    @JavascriptInterface
+    public void setNowPlaying(final String json) {
+        main.post(() -> {
+            boolean active = true;
+            try {
+                active = new JSONObject(json).optBoolean("active", true);
+            } catch (Exception ignored) {
+            }
+            main.removeCallbacks(drainGrace);
+            sessionActive = active;
+            if (active) {
+                startSession();
+            } else {
+                endSession();
+            }
+            WailsForegroundService.postNowPlaying(activity, json);
         });
     }
 
@@ -177,6 +267,8 @@ public class TtsBridge {
                 tts = null;
             }
             ready = false;
+            // A dead bridge must not answer a notification button.
+            if (current == this) current = null;
         });
     }
 
@@ -244,8 +336,10 @@ public class TtsBridge {
     private void drainPending() {
         while (ready && !pending.isEmpty()) {
             String[] item = pending.poll();
+            pendingChars -= item[1].length();
             speakNow(item[0], item[1]);
         }
+        if (pendingChars < 0) pendingChars = 0;
     }
 
     private void speakNow(String id, String text) {
@@ -264,7 +358,10 @@ public class TtsBridge {
 
     private void stopInternal(String reason) {
         pending.clear();
+        pendingChars = 0;
         inflight = 0;
+        sessionActive = false;
+        main.removeCallbacks(drainGrace);
         if (tts != null) {
             try {
                 tts.stop();
@@ -280,6 +377,10 @@ public class TtsBridge {
     private final UtteranceProgressListener listener = new UtteranceProgressListener() {
         @Override
         public void onStart(String utteranceId) {
+            // Every sentence refreshes the wake lock: it is held with a timeout
+            // so a session that dies without a `clear` cannot strand it, and a
+            // sentence starting is the one moment that proves we still need it.
+            holdWakeLock();
             emit("start", utteranceId, null, null);
         }
 
@@ -309,8 +410,12 @@ public class TtsBridge {
         }
         if (inflight > 0) inflight--;
         if (inflight == 0 && pending.isEmpty()) {
-            abandonFocus();
-            endSession();
+            // The queue ran dry, but the reader has not asked to stop: what
+            // comes next is a chapter fetch and a re-render, and the process has
+            // to stay awake and foreground through it. Dropping focus and the
+            // service here (the old behaviour) meant the system could freeze us
+            // in exactly the gap the next chapter had to be loaded in.
+            if (sessionActive) main.postDelayed(drainGrace, DRAIN_GRACE_MS);
             emit("idle", "", "drained", null);
         }
     }
@@ -349,10 +454,13 @@ public class TtsBridge {
     }
 
     /** Keeps the process alive (and the notification honest) while reading
-     * continues with the screen off. Reused WailsForegroundService. */
+     * continues with the screen off. Reused WailsForegroundService, which now
+     * also carries the media session and the notification's buttons. */
     private void startSession() {
+        holdWakeLock();
         if (speakingSession) return;
         speakingSession = true;
+        askForNotificationPermission();
         try {
             Intent i = new Intent(activity, WailsForegroundService.class);
             i.setAction(WailsForegroundService.ACTION_START);
@@ -369,7 +477,60 @@ public class TtsBridge {
         }
     }
 
+    /**
+     * Holds the CPU awake for the session.
+     *
+     * The engine's own playback keeps the device from deep sleep while a
+     * sentence is sounding, but 听书 also has to survive the silences — between
+     * sentences while the next chapter is fetched, and across a chapter
+     * boundary, which is a zip read, an HTML render and a re-measure. Those are
+     * exactly the moments a suspended CPU turns "reading" into "stopped".
+     *
+     * Timeout, not an open-ended acquire: it is refreshed on every sentence
+     * start, so a session that ends without a clean `clear` (a ROM killing the
+     * page, a crash) cannot leave a wake lock behind.
+     */
+    private void holdWakeLock() {
+        try {
+            if (wakeLock == null) {
+                PowerManager pm = (PowerManager) activity.getSystemService(android.content.Context.POWER_SERVICE);
+                if (pm == null) return;
+                wakeLock = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "epubmaker:listen");
+                wakeLock.setReferenceCounted(false);
+            }
+            // Refreshing an already-held lock is cheap and extends the timeout.
+            wakeLock.acquire(10 * 60 * 1000L);
+        } catch (Exception e) {
+            Log.w(TAG, "wake lock failed", e);
+        }
+    }
+
+    private void releaseWakeLock() {
+        try {
+            if (wakeLock != null && wakeLock.isHeld()) wakeLock.release();
+        } catch (Exception e) {
+            Log.w(TAG, "wake lock release failed", e);
+        }
+    }
+
+    /** Android 13+: without it the media notification may never be shown, and
+     * an invisible foreground service is one a ROM is free to trim. */
+    private void askForNotificationPermission() {
+        if (Build.VERSION.SDK_INT < 33) return;
+        try {
+            if (activity.checkSelfPermission("android.permission.POST_NOTIFICATIONS")
+                    != android.content.pm.PackageManager.PERMISSION_GRANTED) {
+                activity.requestPermissions(
+                        new String[] { "android.permission.POST_NOTIFICATIONS" }, 7020);
+            }
+        } catch (Exception e) {
+            Log.w(TAG, "notification permission request failed", e);
+        }
+    }
+
     private void endSession() {
+        main.removeCallbacks(drainGrace);
+        releaseWakeLock();
         if (!speakingSession) return;
         speakingSession = false;
         try {

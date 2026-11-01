@@ -16,6 +16,13 @@ of described.
 
 ### Added
 
+- **听书 now has a media widget in the notification shade** — 上一句 / 播放暂停 / 下一句 / 退出,
+  the chapter as the title and the book underneath, working from the shade, the lock screen, a
+  headset button and a Bluetooth remote alike. The buttons do not decide anything: the reader owns
+  the session (it alone knows which sentence "next" is), so a press comes back as
+  `window.__epubListen('toggle'|'prev'|'next'|'stop')` and the answer is the next now-playing
+  record. The widget is also what makes the phone treat this as a media app instead of a
+  background one. See ADR-38.
 - **The table of contents has two views: the book's own outline, and the files**
   — 邓小平时代 showed 35 sections for a 33-entry nav, one of them the English book
   title stranded after 注　释, and 第6章 / 第7章 lit up together because both live
@@ -472,6 +479,22 @@ of described.
 
 ### Fixed
 
+- **听书 no longer stops by itself once the screen goes off** — reported as "熄屏听了一阵子就自动
+  停止播放". Two separate holes, both structural rather than a timeout:
+  1. The session (foreground service, wake lock, media session) could only be started from the native
+     TTS path, so **the online voice never had one at all** — and the phone in question was listening
+     with 云希. With the screen off that reader was an ordinary background app: `<audio>` → 取下一句 →
+     `TtsEdge`, all inside a WebView the system was free to freeze, which then hit the player's "two
+     failed fetches in a row → give up". A session is now declared by the reader
+     (`setNowPlaying({active})`) and covers both engines.
+  2. On the system engine, the queue running dry meant `abandonFocus()` + `endSession()` — so the
+     foreground service and the audio focus were dropped in exactly the gap where the next chapter is
+     fetched, rendered and re-measured. That gap is now protected by a 90-second grace, and a partial
+     wake lock (refreshed per sentence) keeps the CPU up through the silences between sentences, where
+     there is no audio doing it for us.
+  Also fixed on the way: the pre-init queue was capped at 32 sentences, so the first 听书 of a session
+  read four minutes, silently dropped the rest of the chapter (JS had already marked it queued) and
+  jumped to the next one. Half a megabyte now. See ADR-38.
 - **A hard navigation to any page no longer dies with `net::ERR_CONNECTION_REFUSED`**
   — reported from the phone as `/llm` failing to load, where 退回 and tapping again
   worked. The page it asked for had nothing to serve it: every route is a 404 on

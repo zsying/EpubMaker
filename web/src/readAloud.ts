@@ -250,12 +250,64 @@ export function nativeTts(): {
   status(): string;
   voices(): string;
   setVoice(name: string): void;
+  /** Optional: the notification/session surface, absent on older bridges. */
+  setNowPlaying?(json: string): void;
 } | null {
   const w = window as unknown as {
     EpubMakerTts?: { speak?: unknown };
   };
   const t = w.EpubMakerTts;
   return t && typeof t.speak === 'function' ? (t as ReturnType<typeof nativeTts>) : null;
+}
+
+/* ------------------------- the phone's media widget ------------------------
+   A listening session has two faces: the bar in the app and the media
+   notification in the shade. The notification is the reader's when the screen
+   is off — it is also the only thing that keeps a stock ROM from treating this
+   process as a background app to be trimmed. Both faces show the same three
+   facts (what is being read, whether it is playing, which buttons make sense),
+   so the reader publishes them here and the host paints them; and the host
+   sends back the button that was pressed.
+
+   The contract is deliberately one-way in each direction:
+     out  native.setNowPlaying(json)      — chapter, book, playing, canPrev/Next
+     in   window.__epubListen(command)    — toggle | prev | next | stop
+   Nothing here decides anything: the reader owns the session, this is a wire. */
+
+/** What the notification should show. `active: false` takes the widget away. */
+export type NowPlaying = {
+  active: boolean;
+  playing: boolean;
+  /** The chapter being read — the notification's title line. */
+  title: string;
+  /** The book — the line under it. */
+  artist: string;
+  canPrev: boolean;
+  canNext: boolean;
+};
+
+/** A button on the media notification, or on a headset / lock screen. */
+export type ListenCommand = 'toggle' | 'prev' | 'next' | 'stop';
+
+/** Tells the host what to paint. A host without the bridge ignores it. */
+export function publishNowPlaying(state: NowPlaying) {
+  try {
+    nativeTts()?.setNowPlaying?.(JSON.stringify(state));
+  } catch {
+    /* the widget is a mirror, never a dependency */
+  }
+}
+
+/** Installs the channel the notification's buttons arrive on. */
+export function setListenCommandHandler(fn: ((c: ListenCommand) => void) | null) {
+  const w = window as unknown as { __epubListen?: (c: string) => void };
+  if (fn) {
+    w.__epubListen = (c) => fn(c as ListenCommand);
+  } else {
+    // Same reason as setTtsSink: a dead closure here would keep the reader
+    // (and every DOM node it closed over) reachable for the session.
+    delete w.__epubListen;
+  }
 }
 
 /** Whether this host can read aloud at all, and with what. */

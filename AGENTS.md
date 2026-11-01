@@ -144,6 +144,23 @@
     `.listen-marks` / `Reader.tsx` 的 `pumpListen` 一起想：**熄屏后 JS 会冻结**，所以系统引擎
     一次把整章入队，靠 `start` 回调推进，`done` 不翻页。
 
+13b. **听书会话的所有权在阅读器手上，不在引擎手上**（ADR-38）。两件事必须一起看：
+    - 会话由 `setNowPlaying({active,...})` 声明：`active:true` 起前台服务 + 唤醒锁 + MediaSession，
+      `active:false` 全收。**别把 `startSession()` 挪回 `speakNow()` 里**——在线音色（`TtsEdge` +
+      `<audio>`）根本不经过原生 TTS，那样它就没有任何保护，熄屏即死（这就是 2026-11-01 那条
+      "听一阵子自己停"的真因）。
+    - 通知栏按钮由 `WailsForegroundService` 的 `MediaSession`/`PendingIntent` 收，**它不知道
+      读到第几句**，所以只把 `window.__epubListen('toggle'|'prev'|'next'|'stop')` 交回 JS
+      （`TtsBridge.dispatchCommand`），回话是下一条 now-playing。加按钮 = 加一个 action 常量 +
+      `Reader.tsx` 的 `onListenCommand` 分支，别在 Java 里自己判断播放状态。
+    - 队列见底**不等于**会话结束：`finished()` 只排一个 90 秒 `drainGrace`，换章那几秒的保护
+      全靠它。只有在"没人再说话"或 `clear()` 时才真正收掉。
+    - 通知只在"看得见的变化"上更新（前端按整条记录的 JSON 签名比较），所以别往 payload 里塞
+      "第 n 句"这种每句都变的东西——那是每章几百次 `notify()`。
+    - 门禁脚本：`D:\tmp\epub-verify\listen-native.cjs`（上行 now-playing + 下行 `__epubListen`，
+      桌面 Edge 跑）；真机侧用 `D:\tmp\listen-device.mjs`（CDP 读 `.lb-play` 的 aria-label）+
+      `dumpsys media_session`/`cmd statusbar expand-notifications`，别只看截图猜。
+
 14. **Edge 音色的握手是 `Sec-MS-GEC` v2，别自己改算法**。`app/internal/app/edge_token.go` 是
     `edge-tts` 7.3.1 `drm.py` 的逐行移植（加盐 SHA-256 + CS64 折叠，5 分钟取整），
     `tts_test.go` 里钉了三组上游生成的向量。它哪天 403 了，正确做法是拿新版 `edge-tts` 重新对照

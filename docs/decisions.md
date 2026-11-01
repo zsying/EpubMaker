@@ -1599,3 +1599,76 @@ DOM，滚动/换字号/转屏都要重测，代价远大于「所有文件行都
 `scrollWidth == clientWidth`（一个字符不少）、行自身与页面都无横向溢出；`aria-expanded` 随之翻转；
 点「导入」和点勾选框都不会把行收起来；连开两行；刷新后全部收起；目录行点击仍是进目录；键盘
 Enter 展开、空格收起；360px 下 6 行 117px、按钮右边缘 325 < 360、页面 0 溢出。
+
+## ADR-38 听书要有"媒体应用"的样子：通知栏小部件 + 会话由阅读器说了算
+
+**问题。** 两条来自真机的反馈：①熄屏听了一阵子会自己停；②希望像音乐播放器一样，在下拉通知栏里
+有播放控制。
+
+**现场。** 手机是 JEF-AN00 / HarmonyOS 4.2，`localStorage` 里存的音色是**在线（云希）**。这一点
+决定了整条链路的形状：在线的每一句都要走 `TtsEdge`（Go 直连 Edge 的 WebSocket）→ data URL → 一个
+`<audio>`，全程在 WebView 里；而旧代码的会话只可能由 `TtsBridge.speakNow()` 里的 `startSession()`
+拉起——**在线音色根本不经过那里**，于是：
+
+```
+dumpsys activity services com.wails.app   →  只有 chromium 的 SandboxedProcessService，没有 WailsForegroundService
+dumpsys media_session   →  Sessions Stack - have 0 sessions
+```
+
+没有前台服务、没有唤醒锁、没有 MediaSession：熄屏后这就是一个普通后台应用，而普通后台应用正是
+Android 唯一被允许冻结的东西。`<audio>` 的 `onended` → 取下一句 → `TtsEdge` 这条链一断，
+`OnlinePlayer` 的"连续两次取音失败就停"就把它收尾了。ADR-29 里"熄屏 22 秒仍在读、并已进入下一章"
+是在**系统引擎**上测的（整章入原生的队列），对在线音色从来不成立。
+
+第二处结构性问题在系统引擎那一侧：`finished()` 在 `inflight==0` 时会 `abandonFocus()` +
+`endSession()`。一章读完 → 队列见底 → **前台服务和音频焦点在换章的那几秒里正好被自己撤掉**，
+而换章恰恰要读 zip、渲染 HTML、重新排版。这三秒是整个会话最脆的时候，旧代码把它变成最脆且最裸露
+的三秒。
+
+**决定。**
+
+- **会话由阅读器声明，不由引擎决定。** `setNowPlaying({active, playing, title, artist, canPrev,
+  canNext})` 这条本来就为通知存在的通道，同时是会话的所有权声明：`active:true` → 起前台服务 +
+  唤醒锁 + MediaSession，`active:false` → 全部收掉。于是系统引擎与在线音色拿到**同一份**保护，
+  而不是"哪个引擎碰巧走了原生桥才有保护"。
+- **服务里挂 MediaSession + MediaStyle 通知**（`WailsForegroundService`，`fgType=media`）：
+  上一句 / 播放暂停 / 下一句 / 退出，`setShowActionsInCompactView(0,1,2)`（收起时只看得到这三个）。
+  **按钮不在这里处理**——阅读器才知道"下一句"是哪一句，所以按下只是
+  `window.__epubListen('toggle'|'prev'|'next'|'stop')`，回话是下一条 now-playing。耳机键、锁屏、
+  蓝牙走的是同一个 `MediaSession.Callback`。
+- **只在"看得见的变化"上推通知。** 会话对象每句都重建，若照对象身份去推就是每句一次通知更新
+  （一章几百次）。前端把整条记录 `JSON.stringify` 成签名，签名没变就不发；通知里因此**没有**"第 n
+  句"这种每个字都在变的数字。
+- **队列见底不等于会话结束。** `finished()` 只在 `sessionActive` 为真时排一个 90 秒的宽限
+  （`drainGrace`），期间前台服务、音频焦点、唤醒锁都留着；`speak()` 一到就取消宽限。真正结束只有
+  `clear()`（暂停、退出、换引擎）或宽限到期——后者是给"阅读器已经死了但没说"兜底的。
+- **唤醒锁按句续期。** `PARTIAL_WAKE_LOCK`，tag `epubmaker:listen`，10 分钟超时，每句 `onStart`
+  续一次。语音本身会让设备不睡，但**句与句之间、换章之间**没有音频，那才是 CPU 被挂起的窗口。
+  带超时是为了：万一没人再说话了，锁自己会松，不会留一个永久的 wake lock。
+- **Android 13+ 起会话时申请 `POST_NOTIFICATIONS`。** 通知看不见的前台服务，在国产 ROM 上等于
+  可以被裁。
+- **系统引擎初始化前的待发队列按字符算，不按条数算。** 旧代码是 `pending.size() < 32`：第一次
+  `听书` 时引擎还没 ready，整章（269 句）只有前 32 句进了队列，其余被静默丢弃，而 JS 的
+  `pushedRef` 已经推到章尾——于是"读了四分钟就跳下一章"。上限改成 512 KB 文本。
+- **通知的小图标是纯矩形拼的**（`res/drawable/ic_listen.xml`）：状态栏图标只留 alpha，细线和描边
+  在 24dp 里会消失；同一路径反向绕出来的"描边"在 nonZero 填充下还是实心块。
+
+**否决。** ①**给在线音色写一个原生播放器**（Go 取 mp3 + `MediaPlayer` 播）——那才能让在线音色真正
+不依赖 WebView，但要重写取音、缓存、预取、进度、失败重试，且与 ADR-29"在线只是可选赠品"的定位
+冲突；②**只在前台服务里加一个"暂停/继续"**：没有 MediaSession 的应用在系统眼里不是媒体应用，
+锁屏和耳机键都到不了；③**每句都推一次通知**：一章几百次 `notify()`，锁屏上数字狂跳；④**见底就
+结束会话**（旧行为）：换章那几秒正好被撤掉保护；⑤**`REQUEST_IGNORE_BATTERY_OPTIMIZATIONS`**：
+要用户手工点两次系统弹窗，而实测（见证据）不需要它。
+
+**证据。** 新包真机实测（`listen-native.cjs` 16/16 打前端契约；设备侧 `dumpsys` + CDP）：
+
+- 通知栏出现媒体卡片：标题 `第9章　苏联和越南的威胁：1978–1979`、副标题 `邓小平时代`、四个按钮
+  （上一句/播放/下一句/退出）；`dumpsys media_session` 里 `EpubMakerListen active=true
+  state=PlaybackState{state=3} controllers=4`，`metadata` 与卡片一致。
+- 媒体键暂停：`input keyevent KEYCODE_MEDIA_PAUSE` → 阅读器 `.lb-play` 从「暂停朗读」变「继续朗读」。
+- 通知栏「下一句」：点按 → 第 585 句 → 586 句，并自动继续播放（跳过即播放，与音乐播放器一致）。
+- **熄屏 12 分钟**（在线音色，最脆的那条路）：`document.visibilityState=hidden` 全程，进度
+  590 → 662 句，并**自动换章**到第 11 章（4/1246 → 9/1246）；通知标题跟着换成第 11 章。
+- **强制深 Doze**（`dumpsys deviceidle force-idle`，`mState=IDLE`）4 分钟：22 → 38 句，仍在播，
+  没有失败提示（该机在 USB 供电，真 Doze 的省电判定要脱机才能完整复现，这一条是按"最坏情况"手动
+  压进去的）。
