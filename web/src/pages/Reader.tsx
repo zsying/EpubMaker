@@ -1220,6 +1220,10 @@ export default function Reader() {
   // mouseup must not turn a second one.
   const dragRef = useRef<{ x: number; y: number; fired: boolean } | null>(null);
   const turnedAtRef = useRef(0);
+  // When a touch tap was last answered. `routeTap()` is the only router for one
+  // (ADR-43); this is what keeps a WebView that still synthesises a click after
+  // the prevented touchstart from answering the same tap twice.
+  const tapAtRef = useRef(0);
   const pageIntentRef = useRef<PageIntent>(null);
   // Layout-independent restore target: a source character offset to land on.
   // Kept in a ref (not a one-shot intent) so it survives across measure passes
@@ -1270,6 +1274,11 @@ export default function Reader() {
     w: typeof window !== 'undefined' ? window.innerWidth : 1280,
     h: typeof window !== 'undefined' ? window.innerHeight : 800,
   });
+  // A resize was refused because a field had focus and the view had shrunk —
+  // i.e. it looked like a soft keyboard. The refusal is a deferral, not a
+  // verdict: the moment that field is done, the page still has to fit (see the
+  // focusout listener in the measure effect).
+  const keyboardSkipRef = useRef(false);
 
   // Mirrors tocDocked into a ref so measureAndLayout (which reads the window
   // size from winSizeRef) can also subtract the dock width for page geometry
@@ -1551,7 +1560,20 @@ export default function Reader() {
       // page count would change while the reader is typing an annotation and
       // change back when the keyboard closes, so the text would jump twice per
       // comment. The overlays follow the keyboard themselves; the page does not.
-      if (next.keyboard && next.h < winSizeRef.current.h) return;
+      //
+      // Two things make this a deferral rather than a permanent verdict. A
+      // change in WIDTH is never a keyboard (rotation, a split screen, the
+      // window being dragged narrower), so it is always obeyed. And a skip is
+      // remembered: `focusout` below re-runs the measurement once the field is
+      // done. Without both, a device that leaves the composer focused after the
+      // keyboard goes away — Android does — froze the geometry for the rest of
+      // the session: the sheet stayed 844 tall inside a 600px window.
+      const sameWidth = next.w === winSizeRef.current.w;
+      if (next.keyboard && sameWidth && next.h < winSizeRef.current.h) {
+        keyboardSkipRef.current = true;
+        return;
+      }
+      keyboardSkipRef.current = false;
       // Snapshot the window size synchronously so measureAndLayout reads a
       // fresh value even if the inner element's clientWidth lags the resize.
       winSizeRef.current = { w: next.w, h: next.h };
@@ -1560,6 +1582,13 @@ export default function Reader() {
       // Re-measure on every size change so the page count (1 vs 2) and sheet
       // geometry adapt to the window.
       scheduleMeasure();
+    };
+    // The other half of the keyboard guard: a skip that was a keyboard is paid
+    // back here, and one that was not is corrected as soon as it is clear.
+    const onFocusOut = () => {
+      if (!keyboardSkipRef.current) return;
+      keyboardSkipRef.current = false;
+      update();
     };
     // The ResizeObserver catches layout changes of the stage element. In the
     // Wails WebView2 shell a window resize does NOT reliably re-fire a
@@ -1575,11 +1604,15 @@ export default function Reader() {
     window.addEventListener('resize', update);
     const vv = window.visualViewport;
     vv?.addEventListener('resize', update);
+    // Capture phase: the field that had focus may be inside a sheet that is
+    // about to unmount, and focusout does not bubble from a removed node.
+    document.addEventListener('focusout', onFocusOut, true);
     update();
     return () => {
       ro.disconnect();
       window.removeEventListener('resize', update);
       vv?.removeEventListener('resize', update);
+      document.removeEventListener('focusout', onFocusOut, true);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [mode, html]);
@@ -2495,6 +2528,15 @@ export default function Reader() {
   const idx = chapters.findIndex((c) => c.id === current);
   const prev = idx > 0 ? chapters[idx - 1] : null;
   const next = idx >= 0 && idx < chapters.length - 1 ? chapters[idx + 1] : null;
+  // The neighbours as the LONG-LIVED callbacks see them. The gesture listeners
+  // are registered once per chapter (see the touch effect): a callback captured
+  // there would otherwise still be holding the neighbours of the chapter the
+  // reader opened with, and the first turn past an edge would aim at the wrong
+  // chapter — or at none at all.
+  const nextRef = useRef(next);
+  nextRef.current = next;
+  const prevRef = useRef(prev);
+  prevRef.current = prev;
   const progressPct = chapters.length
     ? ((idx + (pageCount ? pageIndex / pageCount : 0)) / chapters.length) * 100
     : 0;
@@ -3024,7 +3066,9 @@ export default function Reader() {
     if (mode !== 'paged' || previewRef.current) return false;
     const p = peekLive.current;
     if (peekHandoffRef.current || !p || p.side !== dir) return false;
-    return dir > 0 ? !!next : !!prev;
+    // Through the refs: this is called from a gesture listener that outlives
+    // the render it was registered in.
+    return dir > 0 ? !!nextRef.current : !!prevRef.current;
   }
 
   // Returns whether the page took the gesture. A chapter edge takes it too, as
@@ -3138,7 +3182,9 @@ export default function Reader() {
     // pulled back and abandoned is not a turn and changes nothing.)
     if (d?.commit) pauseFollow();
     if (d?.commit && d.kind === 'chapter') {
-      const target = d.dir > 0 ? next : prev;
+      // Read from the refs: this runs from a timer armed by a listener that may
+      // predate the last render.
+      const target = d.dir > 0 ? nextRef.current : prevRef.current;
       if (target) {
         // Everything stays exactly where the slide left it: the peek covers the
         // page while the chapter loads, and measureAndLayout drops the offset in
@@ -3256,6 +3302,12 @@ export default function Reader() {
     }
   }
 
+  // `turn` closes over the page it is turning from, so a gesture callback that
+  // captured it would keep turning from the page it was registered on. Same
+  // reason as nextRef above.
+  const turnRef = useRef(turn);
+  turnRef.current = turn;
+
   /* keep the current view inside the book when switching 1<->2 page mode */
   useEffect(() => {
     if (mode !== 'paged') return;
@@ -3304,21 +3356,15 @@ export default function Reader() {
     // turn again.
     if (Date.now() - turnedAtRef.current < 300) return;
 
-    // Touch division of labour (微信读书/番茄 school):
-    //   0. a tap while the dictionary card is open dismisses the card; a tap
-    //      inside the card belongs to the card;
-    //   1. otherwise a tap on a word looks it up — wherever the word is;
-    //   2. every remaining tap toggles the chrome. Taps never turn pages on
-    //      touch: the thirds split meant a slightly mis-aimed tap skipped a
-    //      page, so a turn is a horizontal swipe and nothing else.
+    // Touch division of labour (微信读书/番茄 school), one rule: a tap never
+    // turns a page. See `routeTap` for the order of meanings; it is the same
+    // list, called from `onEnd` for a real gesture. This branch only answers a
+    // click the WebView synthesised anyway — after the prevented touchstart the
+    // gesture has already been routed, so anything within the dedupe window is
+    // the tail of that same tap.
     if (touchPrimary) {
-      const el = document.elementFromPoint(e.clientX, e.clientY) as HTMLElement | null;
-      if (lookupCard) {
-        if (!el?.closest('.dict-card')) setLookupCard(null);
-        return;
-      }
-      if (scheduleWordLookup(e.clientX, e.clientY)) return;
-      setChromeOpen((o) => !o);
+      if (Date.now() - tapAtRef.current < 400) return;
+      routeTap(e.clientX, e.clientY);
       return;
     }
 
@@ -3405,6 +3451,9 @@ export default function Reader() {
   // this reader has prevented.
   function routeTap(x: number, y: number) {
     if (Date.now() - turnedAtRef.current < 300) return;
+    // One tap, one answer: this is the only place a touch tap is routed, and
+    // the timestamp is how a synthesised click is kept out of it.
+    tapAtRef.current = Date.now();
     const el = document.elementFromPoint(x, y) as HTMLElement | null;
     // The dictionary card is a floating layer over the text: a tap outside it
     // dismisses it, a tap inside it belongs to the card (its buttons get real
@@ -3482,8 +3531,12 @@ export default function Reader() {
     let pulling = false;
     let armed = false;
     let lpTimer = 0;
-    // Set only when the hold actually produced a selection, so a held press on
-    // blank paper still counts as a (chrome-toggling) tap on release.
+    // The hold, in two parts. `lpArmed` means the press outlived the tap window
+    // and is no longer an ordinary tap; `lpFired` means it also produced a word
+    // selection. Keeping them apart is what lets a hold on blank paper still
+    // open the chrome (ADR-43): a press that selected nothing must not end in
+    // silence just because it was long. Only `lpFired` may swallow the tap.
+    let lpArmed = false;
     let lpFired = false;
     // Recent finger positions of the current drag, for the release decision: a
     // flick has to count even when it barely moved the page, and one frame of
@@ -3573,6 +3626,7 @@ export default function Reader() {
       );
 
     const onStart = (e: TouchEvent) => {
+      lpArmed = false;
       lpFired = false;
       samples.length = 0;
       // Multi-touch is never a page turn (pinch, or a stray second finger).
@@ -3611,6 +3665,8 @@ export default function Reader() {
       lpTimer = window.setTimeout(() => {
         lpTimer = 0;
         if (!active) return;
+        // Past the tap window from here on, whatever the hit test says.
+        lpArmed = true;
         // allowCJK: a hold on Chinese text selects that one character (a tap
         // must not — there is no Chinese dictionary to open).
         const hit = wordHitAt(startX, startY, true);
@@ -3707,8 +3763,11 @@ export default function Reader() {
       }
       if (!horizontal) {
         // A tap: the native click was suppressed at touchstart, so route it
-        // ourselves. A hold that produced a selection is not a tap.
-        if (!lpFired && Date.now() - startT < TAP_MS) routeTapRef.current(t.clientX, t.clientY);
+        // ourselves. A hold that produced a selection is not a tap; a hold that
+        // produced nothing still is one, and is routed the same way no matter
+        // how long the thumb stayed down (ADR-43).
+        if (!lpFired && (lpArmed || Date.now() - startT < TAP_MS))
+          routeTapRef.current(t.clientX, t.clientY);
         return;
       }
       // Dismiss whatever floats over the page only once the gesture is over.
@@ -3734,7 +3793,7 @@ export default function Reader() {
       // The gesture was ours end to end; no stray click can follow.
       turnedAtRef.current = Date.now();
       dismiss();
-      turn(dx < 0 ? 1 : -1);
+      turnRef.current(dx < 0 ? 1 : -1);
     };
 
     const onCancel = () => {
@@ -3761,10 +3820,10 @@ export default function Reader() {
       host.removeEventListener('touchmove', onMove);
       host.removeEventListener('touchend', onEnd);
       host.removeEventListener('touchcancel', onCancel);
-      // A re-registration (page change, mode switch, rotation) mid-gesture
-      // orphans the drag: put the page back rather than leave it half turned.
-      // Not while a chapter turn is handing over, though — that drag is the
-      // chapter load's, and the handoff drops it when the new page is painted.
+      // A re-registration (chapter change, mode switch) mid-gesture orphans the
+      // drag: put the page back rather than leave it half turned. Not while a
+      // chapter turn is handing over, though — that drag is the chapter load's,
+      // and the handoff drops it when the new page is painted.
       if (dragTurnRef.current && !peekHandoffRef.current) {
         dragTurnRef.current = null;
         window.clearTimeout(dragEndTimer.current);
@@ -3776,7 +3835,15 @@ export default function Reader() {
       // Same for a pull caught by the re-registration: retract, write nothing.
       if (pulling) releaseTag(true);
     };
-  }, [mode, pageIndex, pageCount, pagesPerView, prev, next]);
+    // `mode` and the chapter, nothing else. Everything a gesture decides on —
+    // where the page is, how many there are, which chapter is next — is read
+    // through a ref (turnGeomRef, nextRef, prevRef, turnRef), so a change in any
+    // of them must not re-register these listeners. It used to: one image
+    // finishing its load called setPageCount, the effect tore down and rebuilt
+    // itself under the finger, and the cleanup pinned the page back while the
+    // closure's `active` died with it — the rest of the swipe went nowhere
+    // (ADR-43, tap-hold.cjs H2).
+  }, [mode, current]);
 
   /* ---- detour (opened from the notebook) ---- */
   // Ends the preview and switches to normal reading. Every exit below calls
