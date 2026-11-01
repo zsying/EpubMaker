@@ -972,6 +972,15 @@ export default function Reader() {
   const [turnDrag, setTurnDrag] = useState<TurnDrag | null>(null);
   const dragLayerRef = useRef<HTMLDivElement>(null);
   const veilRef = useRef<HTMLDivElement>(null);
+  // The tag hanging out of the page's top edge, and the gesture that pulls it
+  // out (see the touch effect). Both are written straight to the DOM for the
+  // same reason the page turn is: this runs on every touchmove.
+  const tagWrapRef = useRef<HTMLDivElement>(null);
+  const tagRef = useRef<HTMLDivElement>(null);
+  // The gesture lives in an effect registered once per page, so it cannot read
+  // the bookmark callbacks of the render it was created in; it calls through
+  // this instead. Assigned at the bottom of the bookmark section.
+  const bookmarkToggleRef = useRef<() => void>(() => {});
   // The neighbouring chapter's page, laid out and waiting one spread off-screen
   // (see TurnPeek). A chapter edge is then a place where the book still turns
   // like a book: the finger pulls the page it is actually going to into view.
@@ -3457,11 +3466,21 @@ export default function Reader() {
     const LP_MS = 450; // hold-to-select threshold, tuned like 微信读书
     const LP_SLOP = 10; // finger drift that cancels the hold
     const TAP_MS = 500; // holds longer than this are a press, not a tap
+    // Pulling the page down pulls a tag out of its top edge, and letting go past
+    // the arm point marks the page. The numbers are the ribbon's, not the
+    // finger's: the ribbon lags the finger (TAG_DAMP) so it reads as something
+    // being drawn out of the book rather than as a slider, and it stops growing
+    // at TAG_MAX_RAW so an enthusiastic pull cannot run it down the page.
+    const TAG_ARM = 70; // ribbon height at which a release marks the page
+    const TAG_DAMP = 0.7;
+    const TAG_MAX_RAW = 150;
     let startX = 0;
     let startY = 0;
     let startT = 0;
     let active = false;
     let horizontal = false;
+    let pulling = false;
+    let armed = false;
     let lpTimer = 0;
     // Set only when the hold actually produced a selection, so a held press on
     // blank paper still counts as a (chrome-toggling) tap on release.
@@ -3484,6 +3503,51 @@ export default function Reader() {
     const cancelLongPress = () => {
       window.clearTimeout(lpTimer);
       lpTimer = 0;
+    };
+
+    // The ribbon is drawn at the finger's pace, and it says what letting go will
+    // do as soon as it is long enough to be a promise: armed is the moment the
+    // colour changes, not the moment anything is written.
+    const drawTag = (raw: number) => {
+      const el = tagRef.current;
+      if (!el) return;
+      const h = Math.round(Math.min(Math.max(raw, 0), TAG_MAX_RAW) * TAG_DAMP);
+      el.style.height = `${h}px`;
+      const next = h >= TAG_ARM;
+      if (next === armed) return;
+      armed = next;
+      if (tagWrapRef.current) tagWrapRef.current.dataset.armed = String(armed);
+      if (armed) {
+        // One tick, exactly where the gesture becomes a commitment.
+        try {
+          navigator.vibrate?.(8);
+        } catch {
+          /* no vibration on this device */
+        }
+      }
+    };
+
+    // Putting the ribbon down. Handing the height back to CSS IS the settle:
+    // `.page-tag` is shut and `.page-tag-wrap.on` is a resting height, so one
+    // deleted inline property covers both outcomes — and the reader's own state
+    // (the bookmark row) decides which of the two the page ends up showing.
+    const releaseTag = (cancel: boolean) => {
+      const el = tagRef.current;
+      const h = el ? parseFloat(el.style.height) || 0 : 0;
+      const fire = !cancel && h >= TAG_ARM;
+      pulling = false;
+      armed = false;
+      const wrap = tagWrapRef.current;
+      if (wrap) {
+        wrap.dataset.drag = 'false';
+        wrap.dataset.armed = 'false';
+      }
+      if (el) el.style.height = '';
+      if (fire) {
+        // The drag was ours end to end; no stray click can follow it.
+        turnedAtRef.current = Date.now();
+        bookmarkToggleRef.current();
+      }
     };
 
     // Surfaces that keep native behaviour — their buttons, sliders and inputs
@@ -3527,6 +3591,8 @@ export default function Reader() {
       startT = Date.now();
       active = true;
       horizontal = false;
+      pulling = false;
+      armed = false;
       // Owning the gesture: no native long-press selection, no synthesized
       // click, no native text handles. Everything below is ours.
       if (e.cancelable) e.preventDefault();
@@ -3603,6 +3669,21 @@ export default function Reader() {
         samples.push({ x: t.clientX, t: Date.now() });
         if (samples.length > 8) samples.shift();
         beginDragTurn(dx);
+        return;
+      }
+      // Down, and downwards by more than sideways: the finger is pulling the
+      // page's tag. A hold that already selected a word is a selection, not a
+      // pull — dragging it is how you extend the selection.
+      if (pulling || (!lpFired && dy > 10 && dy > Math.abs(dx) * MIN_RATIO)) {
+        if (!pulling) {
+          pulling = true;
+          samples.length = 0;
+          if (tagWrapRef.current) tagWrapRef.current.dataset.drag = 'true';
+        }
+        // Non-passive: the WebView must not take a downward drag as its own
+        // overscroll while the ribbon is coming out.
+        if (e.cancelable) e.preventDefault();
+        drawTag(dy);
       }
     };
 
@@ -3612,11 +3693,18 @@ export default function Reader() {
       active = false;
       const t = e.changedTouches[0];
       if (!t) {
-        if (dragTurnRef.current) releaseDragTurn(0);
+        if (pulling) releaseTag(true);
+        else if (dragTurnRef.current) releaseDragTurn(0);
         return;
       }
       const dx = t.clientX - startX;
       const dy = t.clientY - startY;
+      // A pull is never a tap, however short: a thumb that settles 30px down
+      // the page and lets go there is not asking for the chrome.
+      if (pulling) {
+        releaseTag(false);
+        return;
+      }
       if (!horizontal) {
         // A tap: the native click was suppressed at touchstart, so route it
         // ourselves. A hold that produced a selection is not a tap.
@@ -3657,6 +3745,8 @@ export default function Reader() {
       // app switch): nobody let go, so the page must not be left standing half
       // turned — and must not be turned on a decision no finger made. A page
       // still sliding from an earlier flick is not this gesture's to interrupt.
+      // The same goes for a ribbon half out of the book: it goes back, unwritten.
+      if (pulling) releaseTag(true);
       const held = dragTurnRef.current;
       if (held && !held.settling) releaseDragTurn(0, true);
     };
@@ -3683,6 +3773,8 @@ export default function Reader() {
         placeDrag(0, true);
         setTurnDrag(null);
       }
+      // Same for a pull caught by the re-registration: retract, write nothing.
+      if (pulling) releaseTag(true);
     };
   }, [mode, pageIndex, pageCount, pagesPerView, prev, next]);
 
@@ -4587,6 +4679,9 @@ export default function Reader() {
       bookmarkBusyRef.current = false;
     }
   }
+  // The pull gesture was registered before this function existed (it is created
+  // once per page), so it reaches the current one through a ref.
+  bookmarkToggleRef.current = togglePageBookmark;
 
   function jumpBookmark(b: Bookmark) {
     openChapter(b.chapterId, { type: 'restore', offset: b.anchor });
@@ -4623,6 +4718,12 @@ export default function Reader() {
   // answer — and it must have one on desktop too, where the star does not exist.
   // Guarded on bmOpen so a closed drawer costs nothing.
   const pageMarked = pageBookmark !== null || (bmOpen && currentPageBookmark() !== null);
+
+  // The tag on the page itself. It is shown whether or not the chrome is open —
+  // it is the page's own state, and it is what a downward pull moves — so it is
+  // computed unconditionally in paged mode. Scrolling has no page for a tag to
+  // hang from (and no pull gesture: the touch effect only runs when paged).
+  const pageTagged = mode === 'paged' && currentPageBookmark() !== null;
 
   const iconBack = (
     <svg
@@ -5885,6 +5986,19 @@ export default function Reader() {
               <span className="turn-veil-band" />
             </div>
           )}
+          {/* The tag hanging out of the page's top edge. It lives on the sheet
+              rather than in the chrome on purpose: bookmark state has to be
+              readable with the bars closed, and this is the thing a downward
+              pull drags out. `height` is the only property the gesture writes,
+              so React's class can own the resting state without a fight. */}
+          <div
+            className={`page-tag-wrap${pagesPerView === 2 ? ' left' : ''}${pageTagged ? ' on' : ''}`}
+            ref={tagWrapRef}
+            aria-hidden="true"
+          >
+            <div className="page-tag" ref={tagRef} />
+            <span className="page-tag-label">{pageTagged ? '松手删除书签' : '松手添加书签'}</span>
+          </div>
         </div>
       </div>
 

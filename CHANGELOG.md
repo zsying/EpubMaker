@@ -16,6 +16,12 @@ of described.
 
 ### Added
 
+- **拉一下页面，就给它贴标签（页面上的标记就是书签）** — pulling the page down draws a bookmark tab out of the
+  sheet's top corner; let go past the arm point and the page is marked, pull it once more and the
+  mark is gone. The tab is the page's own state, so a page bookmarked from the star or from the
+  书签 drawer opens with it already hanging, and it turns red with 松手删除书签 before it takes one
+  away. Nothing is written until the finger lifts, a pull under the threshold writes nothing at
+  all, and a pull is never read as a tap. See ADR-39.
 - **听书 now has a media widget in the notification shade** — 上一句 / 播放暂停 / 下一句 / 退出,
   the chapter as the title and the book underneath, working from the shade, the lock screen, a
   headset button and a Bluetooth remote alike. The buttons do not decide anything: the reader owns

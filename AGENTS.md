@@ -58,6 +58,18 @@
 5c. **划词工具栏由"选区"驱动，不由"手势"驱动**。`mouseup` 和 `selectionchange`（140ms 防抖）
    都走 `syncSelectionFromDom()`：手机长按只产生选区、永远没有 `mouseup`，只监听 mouseup 等于
    触摸下划词失效。
+5d. **下拉贴标签：只在 paged 模式，且"松手"才是写入**（ADR-39）。几条别改坏的边界：
+   - 手势只存在于 paged。`整理`（scroll）模式里向下拖本来就是滚动，别再挂一个 pull-to-mark。
+   - **跨过阈值不发请求**，只改外观（`.page-tag-wrap[data-armed]` + 一次 `vibrate(8)`）；
+     真正写库发生在 `touchend`，`touchcancel` / 重新注册（换页、旋转）一律回缩不写。
+   - **短拖不是点击**：`pulling` 一旦为真，`onEnd` 直接返回，不能落到 `routeTap`（否则 40px 的
+     一次下沉会开出词典或工具条）。
+   - 标签的高度只有两个写入者：CSS 的 `.on`（React，来自书签行）与手势的 inline `height`。
+     松手就是**删掉那个 inline height**，把丝带交回 CSS——"挂住"和"缩回去"因此是同一行代码。
+     别用 React state 驱动拖动：每个 touchmove 一次渲染是全项目禁止的（同 5/翻页红线）。
+   - 真相只有一份：`AddBookmark`/`DeleteBookmark` 那一行。标签、顶栏星标、书签抽屉都读
+     `pageBookmarks()`，别给标签另建状态或字段，否则三处会各说各话。
+   - 门禁：`D:\tmp\epub-verify\pull-mark.cjs`（26 项，含"臂起不写""短拖不写""取消不写""横滑仍翻页"）。
 5d. **触摸端书页 = 屏幕，不是纸**。`measureAndLayout` 的 `fill` 分支（`touchPrimary`）放弃
    `PAGE_RATIO`/`OUTER_PAD`，sheet 直接取满视口，`MARGIN` 22px，并且：
    - 竖屏永远单页；横屏可用宽度超过 `MAX_COL_W` 才分两列（否则一行 40 多个汉字）。

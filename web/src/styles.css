@@ -1271,6 +1271,80 @@ a {
   right: 20px;
 }
 
+/* ---------- the page's own tag (pull the page down to mark it) ----------
+   A bookmark used to be visible only in the chrome, which meant the page you
+   had marked looked exactly like the ones you had not. This is the tag itself:
+   it hangs from the sheet's outer top corner, inside the page margin (34px on a
+   phone, and 22px wide), so it never covers a line of text at rest.
+
+   Two things write it and they do not overlap: `.on` (React, the bookmark row)
+   decides the resting height, and the pull gesture writes `height` inline while
+   a finger is on it. Releasing deletes that inline height, which hands the
+   ribbon back to CSS — so "settles to hanging" and "slides back into the book"
+   are the same one-line write. */
+.page-tag-wrap {
+  position: absolute;
+  top: 0;
+  right: 26px;
+  width: 22px;
+  height: 100%;
+  z-index: 4;
+  pointer-events: none;
+}
+/* A two-page spread: the current page is the left sheet, so its outer corner
+   is the left one. */
+.page-tag-wrap.left {
+  left: 26px;
+  right: auto;
+}
+.page-tag {
+  width: 100%;
+  height: 0;
+  background: var(--accent);
+  /* The ribbon's tail, cut rather than drawn: it scales with whatever the
+     height happens to be, so one shape serves both the hanging tag and the
+     long one under the finger. */
+  clip-path: polygon(0 0, 100% 0, 100% 100%, 50% 74%, 0 100%);
+  box-shadow: 0 2px 10px rgba(16, 24, 40, 0.18);
+  transition: height 210ms cubic-bezier(0.22, 0.61, 0.36, 1);
+}
+.page-tag-wrap.on .page-tag {
+  height: 28px;
+}
+/* Under the finger it must not ease: it is being drawn out, not settling. */
+.page-tag-wrap[data-drag='true'] .page-tag {
+  transition: none;
+}
+/* Armed = letting go acts. Removing reuses the app's danger colour, so the
+   gesture says which of the two things it is about to do before it does it. */
+.page-tag-wrap[data-armed='true'].on .page-tag {
+  background: var(--danger);
+}
+.page-tag-label {
+  position: absolute;
+  top: 14px;
+  right: calc(100% + 10px);
+  white-space: nowrap;
+  padding: 5px 10px;
+  border-radius: 999px;
+  font-size: 12px;
+  line-height: 1;
+  color: #fff;
+  background: var(--accent);
+  opacity: 0;
+  transform: translateY(-4px);
+  transition:
+    opacity 120ms ease,
+    transform 160ms ease;
+}
+.page-tag-wrap[data-armed='true'] .page-tag-label {
+  opacity: 1;
+  transform: none;
+}
+.page-tag-wrap[data-armed='true'].on .page-tag-label {
+  background: var(--danger);
+}
+
 .reader-spread {
   position: relative;
   will-change: opacity;
@@ -1315,6 +1389,14 @@ a {
 .reader-spread.turning .page-sheet .page-num,
 .reader-spread.turn-drag .page-sheet .page-num,
 .reader-spread.turn-settle .page-sheet .page-num {
+  opacity: 0;
+  transition: opacity 90ms ease;
+}
+
+/* The tag belongs to the page being left, so it steps aside with the number. */
+.reader-spread.turning .page-tag-wrap,
+.reader-spread.turn-drag .page-tag-wrap,
+.reader-spread.turn-settle .page-tag-wrap {
   opacity: 0;
   transition: opacity 90ms ease;
 }
