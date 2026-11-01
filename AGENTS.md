@@ -31,7 +31,7 @@
 | `app/internal/storage` | zip 内路径 ↔ 磁盘映射、回收站（软删除） |
 | `app/internal/db` | modernc.org/sqlite（纯 Go，无 cgo） |
 | `app/internal/{html,config,mime,webdav,opds}` | 字符串改写 / 配置 / MIME / WebDAV 客户端 / OPDS 目录解析 |
-| `web/src` | React 18 + Vite。`pages/` 每页一个文件，`api.ts` 是绑定的唯一封装层，`overlay.ts` 是浮层定位算法 |
+| `web/src` | React 18 + Vite。`pages/` 每页一个文件，`api.ts` 是绑定的唯一封装层，`overlay.ts` 是浮层定位算法，`usePageTurns.ts` 是阅读器的触摸手势与翻页状态机（ADR-45） |
 | `app/cmd/dictimport` | 命令行词库安装器，与界面按钮走同一条代码路径 |
 
 ## 红线（改代码别破坏）
@@ -210,8 +210,9 @@
   用系统 Edge（`channel: 'msedge'`，**必须 `--no-proxy-server`，地址用 `localhost` 而不是 127.0.0.1**）。
   桌面向：`verify` `esc` `drop` `shelf` `vocab-schedule`；触摸向：`mobile.cjs`（390×844，tap / swipe /
   长按选区）；按功能：`shelves`（多书架）、`pull-mark`（下拉贴标签）、`listen-native`（听书桥）、
-  `barfit`（听书条形不省略）。**动 Reader.tsx 就要桌面向与触摸向都跑一遍**，具体条数与要钉住的断言
-  写在各条红线里。
+  `barfit`（听书条形不省略）。**动 `Reader.tsx` 或 `usePageTurns.ts` 就要桌面向与触摸向都跑一遍**
+  （翻页与手势另加 `pageturn-drag` / `turn-sensitivity` / `tap-hold` / `scroll-tap`），具体条数与要
+  钉住的断言写在各条红线里。
 - **格式化前端只用 `npm run format`**（= `prettier --write web/src`，配置在仓库根的
   `.prettierrc.json`：单引号、`printWidth: 100`、LF；已对齐基线，幂等，跑完只动手写的那几行，
   `npm run format:check` 永远应该全绿）。**不要裸跑 `npx prettier --write`**：没有配置时 npx 会拉

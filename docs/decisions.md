@@ -1997,3 +1997,48 @@ Android 12，永远到不了那个分支。
 即把安全区让位的高度也算进了工具栏。模拟 inset 后它报红，而 `sameRow` / `fits` 都是 `true`
 ——布局是对的，是断言把 `padding-top` 误当成"换行撑高了"。改为 `barH - paddingTop < 70`：
 它问的是这一行本身的高度，与宿主是否 edge-to-edge 无关。
+
+## ADR-45 翻页手势搬进 `usePageTurns.ts`：hook 只管手指，Reader 只管这本书
+
+**问题。** `Reader.tsx` 到 2026-11 已经是 6300 行、一个组件，里面同时住着两件不相干的事：**这本书
+是什么**（章节、分页测量、进度、听书、浮层），和**一根手指现在在做什么**（长按计时、拖拽跟随、
+松手判定、从页面上沿拉出来的书签带、被抓住的滑页）。后者是一台约 600 行的状态机，夹在前者中间。
+ADR-43 之后它连续出了三个 P0（`TAP_MS` 吃掉 `onEnd`、effect 依赖里混进 `pageCount`、
+`keyboardSkip` 跨注册残留），每一次都要先把上下两百行读一遍才敢说改对了；而 `tap-hold`、
+`pageturn-drag`、`turn-sensitivity` 这些门禁只能驱动整页来验，没有更小的入口。
+
+**决定。** 手势搬进 `web/src/usePageTurns.ts`，边界只有一条：
+
+- **hook 里是手势**：touchstart/move/end/cancel、`lpArmed`/`lpFired` 两段式长按、拖拽与越界阻尼
+  （0.12）、松手判定（`turnThresholds`）、`placeDrag`/`placeBand`/`placePeek`、被新触摸抓住的
+  滑页、`finishDragTurn` 的落点。
+- **Reader 里是意义**：`routeTap` 的优先级、`openChapter`（哪一章算下一章）、`selectWord`
+  （选中交给划线与工具栏）、`pauseFollow`（听书让位）、`slideTurn`/`startTurn`（两种出场动画）。
+
+hook 只认坐标、几何和回调；凡是需要知道"这本书"的判断，一律以 `on…` 交出去。三处跨界用了三种
+桥，因为它们的理由本来就不一样：
+
+1. `dropDragRef` —— 章节接手（`measureAndLayout`）声明在 hook 之上，只能借一个函数；
+2. `onSettleEnd` —— 渲染层挂在 `.reader-drag` 上的 `transitionend` 是 DOM 事件，不是手势；
+3. `turnDrag` / `turnGeomRef` / `pageIndex` 留在 Reader —— 它们是**几何**。`usePageTurns` 移动
+   一页，不负责把一页排出来。
+
+手势 effect 的依赖仍然只有 `[mode, chapterKey]`，其他一切走 `cb.current`（`args` 的镜像），
+与 ADR-43 里 `nextRef` / `turnRef` 同一个理由：注册一次，读最新。
+
+**被否决的。**
+
+- *整块搬走（连 `openChapter`、`setPageIndex`、`setLookupCard` 一起）*：hook 会变成 Reader 的
+  副本，同一本书两处改，边界等于没有。
+- *只抽 `placeDrag` 这类纯函数*：它们没有状态，抽出去收益为零；复杂度在 `dragTurnRef` 和松手
+  判定里。
+- *用 Context*：调用方只有一个，多一层间接只会让"这个值从哪来"更难查。
+
+**已知代价。** 每次渲染多一次 `cb.current = args`（与既有 ref 镜像同构）；调试时要在两个文件之间
+跳。换来的是 `Reader.tsx` 少 600 行，手势能在一个文件里从头读到尾。
+
+**验收。** `pageturn-drag` 31/31、`turn-sensitivity` 28/28、`tap-hold` 6/6、`scroll-tap` 7/7、
+`progress-hide` 4/4、`mobile` 193/193、`verify` 19/19、`annotate-note` 21/21；`tsc` 与
+`prettier --check` 干净。`pageturn-chapter` 在重构前后同为 9 项红（本机 Edge 上 peek 不跟随
+拖拽，`404 vs 344`），其中"章节翻页中触摸不动页面"一条时红时绿——是既有问题，不是这次引入的，
+留待单独处理。
