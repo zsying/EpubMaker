@@ -2046,3 +2046,59 @@ hook 只认坐标、几何和回调；凡是需要知道"这本书"的判断，�
 **验收。** `pageturn-chapter` 29/29、`pageturn-drag` 31/31、`turn-sensitivity` 28/28、
 `tap-hold` 6/6、`scroll-tap` 7/7、`progress-hide` 4/4、`mobile` 193/193、`verify` 19/19、
 `annotate-note` 21/21；`tsc` 与 `prettier --check` 干净。
+
+## ADR-46 Reader 只留它认识的那本书：目录、文本偏移、浮层定位各自成文件
+
+**问题。** ADR-45 之后 `Reader.tsx` 还有 5719 行。真正属于"这本书"的只有组件体（5012 行）；
+模块级那 707 行是三类**与这本书无关**的代码被顺手放在这里：目录面板的五个组件、把字符偏移和
+DOM 矩形互相换算的五个纯函数、贴着锚点定位浮层的 hook。它们不认识章节、分页或进度，放在 Reader
+里唯一的原因是"最早写在这儿"。
+
+行数不是问题本身。问题是一段不认识的代码和一本书挤在同一屏里：改 `fragmentAt` 的判据是
+`getClientRects` 的语义，读它却要越过两千行阅读逻辑；`TocList` 的 props 里没有一个来自 Reader 的
+状态，它只是在 Reader 的文件里。
+
+**决定。** 只搬"输入输出自洽"的三块，其余一行动。
+
+| 新文件 | 内容 | 为什么它自洽 |
+| --- | --- | --- |
+| `web/src/components/Toc.tsx` | `TocTree`/`TocNode`/`TocSeg`/`TocLocate`/`TocList` | 入口是 entries + resolver + 选中集，出口是两个回调。不读 Reader 的任何状态 |
+| `web/src/tocNav.ts` | `TocView`/`readTocView`/`docKey`/`hrefsInDoc`/`countTocEntries`/`anchorIdOf`/`anchorElement`/`findTocPath` | 全是 href 与条目树之间的纯转换，加一条 localStorage 偏好 |
+| `web/src/textOffset.ts` | `Highlight`/`snapRect`/`selectionEndRects`/`fragmentAt`/`wordRangeAt`/`applyHighlights` | 文本进、偏移或矩形出，没有一个函数碰 React |
+| `web/src/useAnchoredOverlay.ts` | `useAnchoredOverlay`/`overlayStyle` | 入参是锚点 + 尺寸 + 一个 revision，出参是 ref 和坐标 |
+
+`readViewport` 跟着 `useAnchoredOverlay` 走不了（它还要给分页测量用），于是并进 `device.ts`——
+那里本来就是"多处必须一致才算对"的设备能力，`isTouchPrimary` 与 `prefersReducedMotion` 已经在那儿
+讲同一个道理：一个能力抄成两份，迟早有一份会和另一份说法不同。`isEditableFocused` 只被它用，
+不导出。
+
+`tocLayout.ts` 原本自带一份 `docKey`，注释写着 "Mirrors Reader.tsx's docKey"——同一段三行代码抄了
+两遍，靠一句注释维持一致。现在两边都从 `tocNav.ts` 取，注释删了。
+
+顺手删掉 `usePageTurns` 那次的残留：一段断在半句上的注释（"A page turn the finger is holding.
+`follow` is the drag itself — the page"）挂在 `highlightWord` 上面，和它毫无关系。
+
+**被否决的。**
+
+- *把渲染拆成 `<PagedSpread />` / `<ScrollBody />`（1485 行）*：那 1485 行是上面所有状态的投影。
+  抽出去要传 35+ 个 props，扇入一点没少，只是把隐式耦合改写成了显式样板；读代码从此要在两个文件
+  之间跳，而且没有任何一处改动会因此变简单。`usePageTurns` 能成立是因为它输入单一（坐标 + 几何）、
+  输出单一（翻到哪页），渲染没有这种形状。
+- *听书（约 1400 行）*：确实是"另一个东西"，值得搬，但它带 18 个 state/ref、12 个 effect 和一条
+  队列状态机，属于单独立项，不是零风险搬家。见 ADR-45 开头那段教训：依赖一收缩，闭包里读到的
+  就是注册时的旧值。
+- *选词 / 查词 / 批注（约 790 行）*：边界不如听书干净——`routeTap` 要在里面查 `.hl` 高亮，而高亮
+  是写进正文 DOM 的。等它的改动频率配得上风险再动。
+- *新建 `lib/`、`hooks/` 目录*：`src/` 一直是平铺的（`api.ts`、`overlay.ts`、`useLoadMore.ts` 都在
+  根上），多两层目录只为了让文件名好看，不值得。
+
+**已知代价。** 一次改动要在四个文件里看 import；`tocLayout.ts` 现在依赖 `tocNav.ts`（此前是各自
+一份副本，谁都不依赖谁）。换来的是一条能用的判断标准：**打开 `Reader.tsx` 遇到一个不认识这本书的
+函数，它就该在别的文件里。**
+
+**验收。** 零语义变化，所以只验证不新写：`verify` 19/19、`cardplace` 14/14（`overlayStyle` 与
+`useAnchoredOverlay` 的行为）、`dictmiss` 12/12、`annotate-note` 21/21（`textOffset` 的选区与高亮）、
+`mobile` 193/193、`pageturn-chapter` 29/29、`pageturn-drag` 31/31、`turn-sensitivity` 28/28、
+`tap-hold` 6/6、`scroll-tap` 7/7、`progress-hide` 4/4、`shelves` 54/54、`pull-mark` 26/26、
+`organize-mobile` 12/12、`listen-native` 16/16、`sentence-window` 4/4、`hyphen-hit` 10/10；
+`tsc` 与 `prettier --check` 干净。`Reader.tsx` 5719 → 5180 行。

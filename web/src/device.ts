@@ -40,3 +40,33 @@ export function prefersReducedMotion(): boolean {
   if (typeof window === 'undefined' || !window.matchMedia) return false;
   return window.matchMedia('(prefers-reduced-motion: reduce)').matches;
 }
+
+// The reader and every floating surface have to agree on what "the screen"
+// is right now, or a card lands under the keyboard while the text above it
+// paginates as if the keyboard were not there.
+
+/** True while a field is focused — the case where a soft keyboard is (or is
+ * about to be) covering part of the screen. */
+function isEditableFocused(): boolean {
+  const a = typeof document !== 'undefined' ? document.activeElement : null;
+  if (!a) return false;
+  const tag = a.tagName;
+  return tag === 'INPUT' || tag === 'TEXTAREA' || (a as HTMLElement).isContentEditable === true;
+}
+
+/** The area the user can actually see, as opposed to the layout viewport.
+ *
+ * With a soft keyboard up these two disagree: `window.innerHeight` keeps
+ * reporting the full window while the keyboard covers the bottom third. Every
+ * placement decision here — page geometry, word card, selection toolbar — has
+ * to be made against the visible area, or the overlay lands under the keyboard
+ * and the last lines of the page are hidden behind it. `scale !== 1` means the
+ * user has pinch-zoomed, where visualViewport reports the zoomed-in slice; the
+ * layout width is still the right basis for laying out text, so it is ignored.
+ */
+export function readViewport(): { w: number; h: number; keyboard: boolean } {
+  const w = window.innerWidth;
+  const vv = window.visualViewport;
+  const h = vv && vv.scale === 1 ? Math.round(vv.height) : window.innerHeight;
+  return { w, h, keyboard: isEditableFocused() };
+}

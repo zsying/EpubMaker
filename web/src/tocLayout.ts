@@ -1,11 +1,5 @@
 import type { Chapter, TocEntry } from './api';
-
-// Strip any #fragment so a TOC node (e.g. ch1.xhtml#s2) matches its chapter
-// document (ch1.xhtml). Mirrors Reader.tsx's docKey.
-export function docKey(href: string): string {
-  const i = href.indexOf('#');
-  return i >= 0 ? href.slice(0, i) : href;
-}
+import { docKey } from './tocNav';
 
 export type TocRenderItem =
   | { kind: 'group'; key: string; title: string; level: number }

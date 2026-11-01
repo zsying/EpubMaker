@@ -1,5 +1,4 @@
 import {
-  Fragment,
   useEffect,
   useLayoutEffect,
   useMemo,
@@ -23,9 +22,8 @@ import {
   SummaryResult,
   TocEntry,
 } from '../api';
-import { Caret } from '../Caret';
 import { toast, toastError } from '../toast';
-import { Anchor, EDGE_GAP, placeOverlay } from '../overlay';
+import { EDGE_GAP } from '../overlay';
 import { wordAt, isCJK, stripInvisible } from '../wordHit';
 import {
   anchorOffset,
@@ -75,8 +73,28 @@ import {
   type ReadMode,
   type TurnSensitivity,
 } from '../readingPrefs';
-import { isTouchPrimary, prefersReducedMotion } from '../device';
+import { isTouchPrimary, prefersReducedMotion, readViewport } from '../device';
 import { usePageTurns, type TurnDrag } from '../usePageTurns';
+import { useAnchoredOverlay, overlayStyle } from '../useAnchoredOverlay';
+import {
+  applyHighlights,
+  fragmentAt,
+  selectionEndRects,
+  snapRect,
+  wordRangeAt,
+} from '../textOffset';
+import {
+  anchorElement,
+  anchorIdOf,
+  countTocEntries,
+  docKey,
+  findTocPath,
+  hrefsInDoc,
+  readTocView,
+  TOC_VIEW_KEY,
+  type TocView,
+} from '../tocNav';
+import { TocList, TocLocate, TocSeg } from '../components/Toc';
 import { closeForNavigation, navigationDepth, useBackClose } from '../backNav';
 import FontPicker, { CUSTOM_FONT_FAMILY } from '../components/FontPicker';
 import AIPanel from '../components/AIPanel';
@@ -86,6 +104,13 @@ import { lastTextPage } from '../columns';
 
 const FONT_KEY = 'epubmaker.fontSize';
 const TOC_DOCK_KEY = 'epubmaker.tocDocked';
+
+// Where scroll mode parks its position, per book. Since progress moved to the
+// backend (`PageIntent` 'restore' re-derives the page from a source offset) no
+// one reads this key back — the write in the chapter effect is now the only
+// half of the round trip. Left alone here rather than deleted: this change only
+// moves code.
+const posKey = (id: string) => `epubmaker.pos.${id}`;
 
 // Width of the docked TOC sidebar (kept in sync with --toc-dock-w in styles.css
 // and the .toc sidebar width in scroll mode for visual consistency).
@@ -146,382 +171,9 @@ type ListenState = {
 
 type MarkBox = { left: number; top: number; width: number; height: number };
 
-/** Which list the TOC panel is showing: the book's own outline, or the spine. */
-type TocView = 'nav' | 'file';
-const TOC_VIEW_KEY = 'epubmaker.tocView';
-
 /** Below this the scroll-mode aside is hidden (it becomes the drawer), so no
  *  outline is on screen to highlight. Matches the CSS breakpoint. */
 const NARROW_QUERY = '(max-width: 980px)';
-
-function readTocView(): TocView | null {
-  try {
-    const v = localStorage.getItem(TOC_VIEW_KEY);
-    return v === 'nav' || v === 'file' ? v : null;
-  } catch {
-    return null;
-  }
-}
-
-/** True while a field is focused — the case where a soft keyboard is (or is
- * about to be) covering part of the screen. */
-function isEditableFocused(): boolean {
-  const a = typeof document !== 'undefined' ? document.activeElement : null;
-  if (!a) return false;
-  const tag = a.tagName;
-  return tag === 'INPUT' || tag === 'TEXTAREA' || (a as HTMLElement).isContentEditable === true;
-}
-
-/** The area the user can actually see, as opposed to the layout viewport.
- *
- * With a soft keyboard up these two disagree: `window.innerHeight` keeps
- * reporting the full window while the keyboard covers the bottom third. Every
- * placement decision here — page geometry, word card, selection toolbar — has
- * to be made against the visible area, or the overlay lands under the keyboard
- * and the last lines of the page are hidden behind it. `scale !== 1` means the
- * user has pinch-zoomed, where visualViewport reports the zoomed-in slice; the
- * layout width is still the right basis for laying out text, so it is ignored.
- */
-function readViewport(): { w: number; h: number; keyboard: boolean } {
-  const w = window.innerWidth;
-  const vv = window.visualViewport;
-  const h = vv && vv.scale === 1 ? Math.round(vv.height) : window.innerHeight;
-  return { w, h, keyboard: isEditableFocused() };
-}
-
-// Strip any #fragment from a TOC href so a child-section entry
-// (doc.xhtml#section) resolves to its parent chapter document (doc.xhtml).
-function docKey(href: string): string {
-  const i = href.indexOf('#');
-  return i >= 0 ? href.slice(0, i) : href;
-}
-
-// ---- the two views of one book, never mixed -------------------------------
-//
-//  * 目录 (nav) — the book's own outline, EPUB3 nav or NCX, exactly as written.
-//    It is the only thing that knows what the sections are *called*. It may
-//    name several sections inside one document, and it may leave documents out
-//    (a cover, a continuation page a converter split off) because its author
-//    never thought of them as chapters.
-//  * 文件 (files) — the spine, one row per document. It knows every document
-//    and nothing about what they are called.
-//
-// The reader used to weave the two together (ADR-31) so one list reached every
-// document, and against 邓小平时代 that produced rows the book never had: its
-// last document, whose only title is the English book title, appeared after
-// 注 释 as a second title page, and the two sections that share one document
-// lit up together — a chapter that looked duplicated. A faithful list of 33
-// sections that is a little short of 18 documents is easier to understand than
-// 35 rows where two were invented, and the switch is right there.
-
-/** Every nav href that points into `doc`, in outline order. */
-function hrefsInDoc(entries: TocEntry[], doc: string): string[] {
-  const out: string[] = [];
-  const walk = (es: TocEntry[]) => {
-    for (const e of es) {
-      if (e.href && docKey(e.href) === doc) out.push(e.href);
-      if (e.children?.length) walk(e.children);
-    }
-  };
-  walk(entries);
-  return out;
-}
-
-/** Rows a nav actually draws (group nodes without an href are not rows). */
-function countTocEntries(entries: TocEntry[]): number {
-  let n = 0;
-  const walk = (es: TocEntry[]) => {
-    for (const e of es) {
-      if (e.href) n += 1;
-      if (e.children?.length) walk(e.children);
-    }
-  };
-  walk(entries);
-  return n;
-}
-
-/** The `#fragment` a nav entry points at, percent-decoded ('' if it has none). */
-function anchorIdOf(href: string): string {
-  const i = href.indexOf('#');
-  if (i < 0) return '';
-  const raw = href.slice(i + 1);
-  try {
-    return decodeURIComponent(raw);
-  } catch {
-    // A malformed escape is still a usable id in most books.
-    return raw;
-  }
-}
-
-/** The rendered element an anchor was rewritten onto (id → data-anc, because
- *  DOMPurify may not keep `id`), or null when the book has no such anchor — a
- *  section that points at its document's top, or one the sanitizer dropped. */
-function anchorElement(root: Element, id: string): Element | null {
-  if (!id) return null;
-  try {
-    return root.querySelector(`[data-anc="${CSS.escape(id)}"]`);
-  } catch {
-    return null;
-  }
-}
-
-// Return the node-path keys (matching TocNode's key encoding) from the root down
-// to the entry whose document href matches `doc`. Used by "locate current chapter"
-// to expand every ancestor group.
-function findTocPath(es: TocEntry[], doc: string, base = ''): string[] {
-  for (let i = 0; i < es.length; i++) {
-    const e = es[i];
-    const key = base === '' ? `/${i}` : `${base}/${i}`;
-    if (e.href && docKey(e.href) === doc) return [key];
-    if (e.children && e.children.length) {
-      const sub = findTocPath(e.children, doc, key);
-      if (sub.length) return [key, ...sub];
-    }
-  }
-  return [];
-}
-
-// Recursive hierarchical TOC renderer. Collapse state is controlled by the parent
-// via `collapsed` (a Set of node-path keys) so a "locate current chapter" action
-// can expand ancestors. Indentation comes from the row wrapper. The active node is
-// highlighted and clicking a node opens the matching chapter. Group nodes without
-// an href are not clickable to open, but their caret still collapses their subtree.
-function TocTree({
-  entries,
-  depth = 0,
-  itemClass,
-  activeSet,
-  resolve,
-  onPick,
-  collapsed,
-  onToggle,
-  pathBase = '',
-}: {
-  entries: TocEntry[];
-  depth?: number;
-  itemClass: string;
-  activeSet: Set<string>;
-  resolve: (href: string) => string | undefined;
-  onPick: (cid: string, href?: string) => void;
-  collapsed: Set<string>;
-  onToggle: (key: string) => void;
-  pathBase?: string;
-}) {
-  return (
-    <>
-      {entries.map((e, i) => {
-        const key = pathBase === '' ? `/${i}` : `${pathBase}/${i}`;
-        return (
-          <TocNode
-            key={key}
-            entry={e}
-            nodeKey={key}
-            depth={depth}
-            itemClass={itemClass}
-            activeSet={activeSet}
-            resolve={resolve}
-            onPick={onPick}
-            collapsed={collapsed}
-            onToggle={onToggle}
-          />
-        );
-      })}
-    </>
-  );
-}
-
-function TocNode({
-  entry,
-  nodeKey,
-  depth,
-  itemClass,
-  activeSet,
-  resolve,
-  onPick,
-  collapsed,
-  onToggle,
-}: {
-  entry: TocEntry;
-  nodeKey: string;
-  depth: number;
-  itemClass: string;
-  activeSet: Set<string>;
-  resolve: (href: string) => string | undefined;
-  onPick: (cid: string, href?: string) => void;
-  collapsed: Set<string>;
-  onToggle: (key: string) => void;
-}) {
-  const hasKids = !!entry.children && entry.children.length > 0;
-  const open = !collapsed.has(nodeKey);
-  const cid = entry.href ? resolve(entry.href) : undefined;
-  const active = entry.href ? activeSet.has(entry.href) : false;
-  const toggle = (ev: ReactMouseEvent) => {
-    ev.stopPropagation();
-    onToggle(nodeKey);
-  };
-  const labelClick = () => {
-    // The href travels with the id: a nav entry usually points at a section
-    // inside the document (#filepos…), not at the document's top.
-    if (cid) onPick(cid, entry.href);
-    else if (hasKids) onToggle(nodeKey);
-  };
-  return (
-    <>
-      <div className="toc-row" style={{ paddingLeft: depth * 16 }}>
-        {hasKids ? (
-          <button
-            type="button"
-            className="toc-caret"
-            onClick={toggle}
-            aria-label={open ? '折叠' : '展开'}
-          >
-            <Caret open={open} />
-          </button>
-        ) : (
-          <span className="toc-caret toc-caret-empty" />
-        )}
-        <button
-          type="button"
-          className={`${itemClass}${active ? ' active' : ''}${hasKids ? ' group' : ''}`}
-          style={{ padding: '7px 12px' }}
-          onClick={labelClick}
-          title={entry.title}
-          disabled={!cid && !hasKids}
-        >
-          {entry.title || '(无标题)'}
-        </button>
-      </div>
-      {hasKids && open && (
-        <TocTree
-          entries={entry.children!}
-          depth={depth + 1}
-          itemClass={itemClass}
-          activeSet={activeSet}
-          resolve={resolve}
-          onPick={onPick}
-          collapsed={collapsed}
-          onToggle={onToggle}
-          pathBase={nodeKey}
-        />
-      )}
-    </>
-  );
-}
-const posKey = (id: string) => `epubmaker.pos.${id}`;
-
-/** The 目录 / 文件 switch. It only exists when the book has a nav to switch to:
- *  a book without one has exactly one possible view, and a control that cannot
- *  change anything is a question with no answer. */
-function TocSeg({ view, onChange }: { view: TocView; onChange: (v: TocView) => void }) {
-  return (
-    <span className="toc-seg" role="tablist">
-      <button
-        type="button"
-        role="tab"
-        aria-selected={view === 'nav'}
-        className={view === 'nav' ? 'on' : ''}
-        onClick={() => onChange('nav')}
-        title="按书的目录（EPUB nav / NCX），原样显示"
-      >
-        目录
-      </button>
-      <button
-        type="button"
-        role="tab"
-        aria-selected={view === 'file'}
-        className={view === 'file' ? 'on' : ''}
-        onClick={() => onChange('file')}
-        title="按文件（spine 文档），每份文档一行"
-      >
-        文件
-      </button>
-    </span>
-  );
-}
-
-/** "Locate current chapter" — the same icon in all three TOC surfaces. */
-function TocLocate({ onClick }: { onClick: () => void }) {
-  return (
-    <button
-      className="toc-locate"
-      title="定位到当前章节"
-      onClick={onClick}
-      aria-label="定位到当前章节"
-    >
-      <svg
-        viewBox="0 0 24 24"
-        width="15"
-        height="15"
-        fill="none"
-        stroke="currentColor"
-        strokeWidth="2"
-        strokeLinecap="round"
-        strokeLinejoin="round"
-      >
-        <circle cx="12" cy="12" r="3" />
-        <path d="M12 2v3M12 19v3M2 12h3M19 12h3" />
-      </svg>
-    </button>
-  );
-}
-
-/** One list, two sources. The nav is drawn as the tree it is; the file view is
- *  one row per spine document, numbered, which is the only way to reach a
- *  document the nav never names. */
-function TocList({
-  view,
-  toc,
-  chapters,
-  itemClass,
-  activeSet,
-  resolve,
-  onPick,
-  current,
-  openChapter,
-  collapsed,
-  onToggle,
-}: {
-  view: TocView;
-  toc: TocEntry[];
-  chapters: Chapter[];
-  itemClass: string;
-  activeSet: Set<string>;
-  resolve: (href: string) => string | undefined;
-  onPick: (cid: string, href?: string) => void;
-  current: string | null;
-  openChapter: (cid: string) => void;
-  collapsed: Set<string>;
-  onToggle: (key: string) => void;
-}) {
-  if (view === 'nav') {
-    return (
-      <TocTree
-        entries={toc}
-        itemClass={itemClass}
-        activeSet={activeSet}
-        resolve={resolve}
-        onPick={onPick}
-        collapsed={collapsed}
-        onToggle={onToggle}
-      />
-    );
-  }
-  return (
-    <>
-      {chapters.map((c, i) => (
-        <button
-          key={c.id}
-          className={`${itemClass}${c.id === current ? ' active' : ''}`}
-          onClick={() => openChapter(c.id)}
-          title={c.title}
-        >
-          <span className="num">{String(i + 1).padStart(2, '0')}</span>
-          {c.title}
-        </button>
-      ))}
-    </>
-  );
-}
 
 // restore carries a layout-independent source character offset (not a page
 // number), so the target page is re-derived from the current layout.
@@ -572,8 +224,6 @@ type AIPanelState =
   | { kind: 'summary' }
   | null;
 
-// A page turn the finger is holding. `follow` is the drag itself — the page
-
 // Echoes the sentence the word came from with the word itself marked. The
 // sentence is plain text lifted off the page, so the only markup in it is the
 // one this function adds.
@@ -620,190 +270,7 @@ const PREVIEW_SOURCE: Record<Preview['source'], { back: string; hint: string }> 
 // there is nothing to open.
 const ANCHOR_ID = '__vocab_anchor';
 
-/** A range that can be wrapped by applyHighlights. Real annotations satisfy it
- * structurally; the anchor mark is a bare literal. */
-type Highlight = { id: string; startOffset: number; endOffset: number; color?: string };
-
-// Keeps a fixed-position overlay anchored to a point on screen *and* fully
-// inside the viewport. Two problems this solves, both visible at the margins of
-// the reader: a card centred on a word near the right edge loses half its width
-// off-screen, and a card opened near the bottom is cut off vertically.
-//
-// The size is only known after layout, so the overlay starts hidden and is
-// revealed once measured — otherwise it would paint once at its clipped
-// position. `revision` re-measures when the content changes height, e.g. when
-// the dictionary card grows its "already saved" footer.
-//
-// Re-measuring on a size change of the element itself, rather than on a list of
-// state keys, is what keeps a card that GROWS in place. The dictionary card is
-// placed while it is still short and then grows: a cached AI answer arrives a
-// moment later (reopening a word that was asked about before), an image or a
-// font swap re-wraps the text, "加入生词本" turns into one line of text. Each of
-// those pushed the bottom of the card past the window edge, because the clamp
-// applied at open time was computed against the old height.
-function useAnchoredOverlay(
-  anchor: Anchor | null,
-  prefer: 'above' | 'below',
-  gap: number,
-  revision: unknown,
-) {
-  const ref = useRef<HTMLDivElement>(null);
-  const [pos, setPos] = useState<{ left: number; top: number } | null>(null);
-
-  useLayoutEffect(() => {
-    const el = ref.current;
-    if (!anchor || !el) {
-      setPos(null);
-      return;
-    }
-    const measure = () => {
-      const vp = readViewport();
-      const next = placeOverlay(
-        anchor,
-        { width: el.offsetWidth, height: el.offsetHeight },
-        { width: vp.w, height: vp.h },
-        prefer,
-        gap,
-      );
-      // visualViewport fires `scroll` continuously while the page moves under a
-      // raised keyboard; re-rendering for an unchanged position would fight the
-      // browser for no reason.
-      setPos((prev) => (prev && prev.left === next.left && prev.top === next.top ? prev : next));
-    };
-    measure();
-    window.addEventListener('resize', measure);
-    // The keyboard opening changes visualViewport without necessarily firing a
-    // window resize, and it moves the card's anchor with it (scroll). Both are
-    // reasons to re-place, not to land the card half under the keyboard.
-    const vv = window.visualViewport;
-    vv?.addEventListener('resize', measure);
-    vv?.addEventListener('scroll', measure);
-    // Anything that changes the overlay's own height re-places it. Observing the
-    // element is the only way to catch content that arrives asynchronously and
-    // silently (the cached AI answer), and it costs nothing when nothing moves:
-    // the observer fires on size, and `setPos` returns the previous object when
-    // the position is unchanged.
-    const ro = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(() => measure());
-    ro?.observe(el);
-    return () => {
-      window.removeEventListener('resize', measure);
-      vv?.removeEventListener('resize', measure);
-      vv?.removeEventListener('scroll', measure);
-      ro?.disconnect();
-    };
-  }, [anchor?.x, anchor?.top, anchor?.bottom, prefer, gap, revision]);
-
-  return { ref, pos };
-}
-
-// Overlays are invisible for the single frame before their measured size is
-// known, so they never paint once at a clipped position.
-function overlayStyle(pos: { left: number; top: number } | null) {
-  return pos
-    ? { left: pos.left, top: pos.top, visibility: 'visible' as const }
-    : { left: 0, top: 0, visibility: 'hidden' as const };
-}
-
 const COLORS = ['yellow', 'green', 'red'] as const;
-
-/* ----------------------------- text-offset helpers ----------------------------- */
-
-// Snapshot of a client rect for React state.
-function snapRect(r: DOMRect): { left: number; top: number; right: number; bottom: number } {
-  return { left: r.left, top: r.top, right: r.right, bottom: r.bottom };
-}
-
-// First and last line fragment of a selection: where the two drag handles sit.
-function selectionEndRects(range: Range): { first: DOMRect; last: DOMRect } | null {
-  const list = range.getClientRects();
-  if (list.length === 0) return null;
-  return { first: list[0], last: list[list.length - 1] };
-}
-
-// The line fragment of `rects` that a point falls on, if any.
-//
-// getBoundingClientRect() is the UNION of those fragments, and one range in
-// particular lies about itself: the character right after a soft-hyphen (U+00AD)
-// line break — print-converted EPUBs ship them inside words — reports an empty
-// run at the end of the previous line plus its own glyph, so the union is a box
-// as wide as the column and two lines tall. Every point on the following line
-// then looks like it sits on that one character, and every tap there resolves
-// to the hyphenated word. Matching fragment by fragment keeps the answer local
-// to where the glyph is actually painted.
-function fragmentAt(
-  rects: ArrayLike<DOMRect>,
-  x: number,
-  y: number,
-  padX: number,
-  padY: number,
-): DOMRect | null {
-  for (let i = 0; i < rects.length; i++) {
-    const r = rects[i];
-    if (r.width <= 0) continue;
-    if (x >= r.left - padX && x <= r.right + padX && y >= r.top - padY && y <= r.bottom + padY) {
-      return r;
-    }
-  }
-  return null;
-}
-
-// The word a notebook jump points at. Offsets are stored as "where the
-// selection started", so the stored surface text is trusted while it still
-// matches and a word run is used when it has gone stale or was never stored.
-function wordRangeAt(
-  root: HTMLElement,
-  offset: number,
-  candidates: string[],
-): { start: number; end: number } | null {
-  const text = root.textContent || '';
-  if (offset < 0 || offset >= text.length) return null;
-  const rest = text.slice(offset, offset + 64);
-  for (const c of candidates) {
-    const needle = (c || '').trim();
-    if (needle && rest.toLowerCase().startsWith(needle.toLowerCase())) {
-      return { start: offset, end: offset + needle.length };
-    }
-  }
-  const m = /^[A-Za-z][A-Za-z'’-]*/.exec(rest);
-  return m ? { start: offset, end: offset + m[0].length } : null;
-}
-
-// Wraps the character ranges of each annotation in <mark> elements. Operates on
-// the raw text nodes of `root` (run after innerHTML is set, before any mutation).
-function applyHighlights(root: HTMLElement, anns: Highlight[]) {
-  const sorted = [...anns].sort((x, y) => x.startOffset - y.startOffset);
-  const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
-  const textNodes: Text[] = [];
-  let n: Node | null;
-  while ((n = walker.nextNode())) textNodes.push(n as Text);
-
-  let global = 0;
-  for (const node of textNodes) {
-    const len = node.textContent?.length ?? 0;
-    const ns = global;
-    const ne = global + len;
-    global = ne;
-    const overlaps = sorted.filter((a) => a.endOffset > ns && a.startOffset < ne);
-    if (overlaps.length === 0) continue;
-
-    const frag = document.createDocumentFragment();
-    let p = ns;
-    for (const a of overlaps) {
-      const a0 = Math.max(a.startOffset, ns);
-      const a1 = Math.min(a.endOffset, ne);
-      if (a0 > p)
-        frag.appendChild(document.createTextNode(node.textContent!.slice(p - ns, a0 - ns)));
-      const mark = document.createElement('mark');
-      mark.className = 'hl hl-' + (a.color || 'yellow');
-      mark.dataset.annId = a.id;
-      mark.textContent = node.textContent!.slice(a0 - ns, a1 - ns);
-      frag.appendChild(mark);
-      p = a1;
-    }
-    if (p < ne) frag.appendChild(document.createTextNode(node.textContent!.slice(p - ns)));
-    node.parentNode?.replaceChild(frag, node);
-  }
-}
 
 /* ----------------------------- component ----------------------------- */
 
