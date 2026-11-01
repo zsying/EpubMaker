@@ -13,4 +13,4 @@ info:
   description: "EPUB reader and English learning" # The application description
   copyright: "Copyright (c) 2026 john" # Copyright text
   comments: "EPUB ebook editor and reader (local desktop app)" # Comments
-  version: "0.4.0" # The application version
+  version: "0.5.0" # The application version

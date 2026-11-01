@@ -4,7 +4,7 @@ package app
 // and build-android.ps1 inject it from build/config.yml (info.version), so the
 // About page, the Windows version resource and the installer cannot drift apart;
 // the literal below is only what a bare `go run`/`go build` reports.
-var AppVersion = "0.4.0"
+var AppVersion = "0.5.0"
 
 // BuildTimeUnix is the link timestamp injected by the build scripts as plain
 // unix seconds (no spaces, so the flag survives the PowerShell -> wails -> go
