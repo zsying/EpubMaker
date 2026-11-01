@@ -6,7 +6,7 @@
 | --- | --- |
 | `README.md` | 能做什么、怎么跑、数据存在哪、目录怎么分 |
 | 本文件 | 怎么改才不出错：模块职责、红线、提交前门禁 |
-| `docs/decisions.md` | 当初为什么这么选（ADR-1…42），以及被否决的方案 |
+| `docs/decisions.md` | 当初为什么这么选（ADR-1…43），以及被否决的方案 |
 | `docs/troubleshooting.md` | 按现象查：症状 → 原因 → 处理 |
 | `docs/platforms.md` | 多平台兼容现状、风险清单、新增平台检查表 |
 | `app/README-mobile.md` | Android 工具链、构建参数、真机调试 |
@@ -75,13 +75,17 @@
     一次翻页只允许一个活动图层，**绝不能复制整章 HTML**。章节切换保留 130ms 淡入淡出（盖住异步加载空窗）。
 11. **触摸设备没有 hover，每个靠悬停的入口都要有 tap 等价物**。`Reader.tsx` 的 `touchPrimary`
     （`pointer: coarse` / `hover: none`，且 `any-pointer: fine` 为假）是唯一判定，别用
-    `maxTouchPoints > 0`——带触摸屏的笔记本会因此丢掉桌面行为。手机上的点击分工（顺序即优先级）：
-    顶部/底部**正文边距带**（`marginPx`，不是桌面的 64px `CHROME_EDGE`）= 开合工具条 → 左右边 = 翻页
-    → 落在单词上 = 查词 → 其余空白 = 开合工具条。边带宽度**必须等于正文上/下边距**：满屏后正文从
-    22px 处开始，用 64px 会把第一行整行吞掉，点它就永远开不出词典。
-    横向 swipe 翻页由原生非 passive 监听实现（`touchmove` 必须能 `preventDefault`，配合
+    `maxTouchPoints > 0`——带触摸屏的笔记本会因此丢掉桌面行为。手机上的点击分工只有一条规则：
+    **点按永不翻页，翻页只由横向 swipe 承担**。`routeTap()` 是唯一的点击路由器，顺序即优先级：
+    词卡外点关闭 → 划线开弹层 → 落在词上查词 → 其余开合工具条。长按命中词是"选中"，
+    **长按没命中仍算一次点按**（`lpArmed` / `lpFired` 两个变量，只有后者能吞掉点按）。
+    不要再引入"左右边 = 翻页"或"顶/底边距带 = 开合工具条"——那正是"歪一点就翻页"的来源，
+    几何与理由见 ADR-43。`turnZoneAt()` 的 14px 带只服务鼠标拖动，触摸路径不调用它。
+    横向 swipe 由原生非 passive 监听实现（`touchmove` 必须能 `preventDefault`，配合
     `.reader-paged .reader-stage { touch-action: pan-y }`，**不要**改成 React 的 onTouchMove，
-    那是 passive 的）。
+    那是 passive 的）。**手势 handler 读 ref，不读闭包**：`pageIndex`/`pageCount`/邻居章节
+    一律经 ref，effect 依赖里只该出现 `mode`——图片加载完 `setPageCount` 就会重挂 effect，
+    重挂会钉回页面并作废 `active`，正在滑的那一页"弹回去且手势失效"。
 12. **划词工具栏由"选区"驱动，不由"手势"驱动**。`mouseup` 和 `selectionchange`（140ms 防抖）
     都走 `syncSelectionFromDom()`：手机长按只产生选区、永远没有 `mouseup`，只监听 mouseup 等于
     触摸下划词失效。

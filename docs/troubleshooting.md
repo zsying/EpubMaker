@@ -38,6 +38,15 @@
 | 点输入框不出键盘，但 `mInputShown=true` | **设备输入法坏了，不是应用**：测试机 JEF-AN00 默认的 `com.tencent.wetype/.plugin.hld.WxHldService`（微信键盘的插件服务）IME 窗口是 `fmt=TRANSPARENT`、`mViewVisibility=0x0`，连系统设置的搜索框也画不出键盘 | 先 `adb shell settings get secure default_input_method` 看当前是哪个；`adb shell ime enable/set com.baidu.input_huawei/.ImeService` 换一个即可区分，验完 `ime disable` 还原 |
 | 弹层里点输入框没键盘，`document.activeElement` 根本不是那个 `input` | 两层底部弹层叠着：`.sheet-mask` 都是 `inset:0` + 同一个 z-index，**DOM 靠后的那层收走了点击** | 一次只开一层（AGENTS 红线 18）。定位用 `document.elementFromPoint(x, y)` 看那一点到底命中了谁 |
 
+## 阅读器（触摸与手势）
+
+| 现象 | 原因 | 处理 |
+| --- | --- | --- |
+| 在空白处/图片上按住一会儿再松手，什么都不发生（菜单不开、也没查词） | 长按计时器到点了，但没命中词，`lpFired` 仍是 false；`onEnd` 又被 `TAP_MS` 的时限挡住，于是两条路都不走 | 拆成 `lpArmed`（到点）与 `lpFired`（真选中），只有后者能吞掉点按——**长按没选中仍算一次点按**。见 ADR-43 |
+| 图文页滑到一半页面弹回去，之后这次手势完全没反应 | 图片异步加载 → `setPageCount` → 手势 effect 重挂 → cleanup 把页面钉回原位、闭包里的 `active` 作废 | 手势 handler 一律读 ref（`turnGeomRef`/`nextRef`/`prevRef`/`turnRef`），effect 依赖只留 `[mode, current]`。门禁 `tap-hold.cjs` 的 H2 用受控图片复现 |
+| 收起键盘或旋转后正文不再重排，书页比窗口高出一截 | `readViewport().keyboard` 取 `isEditableFocused()`；Android 收起键盘**不清 `activeElement`**，于是"键盘弹着别重排"的守卫永久成立 | 宽度变了就一定是旋转/分屏，一律重排；纯高度变化才当作键盘，并且**跳过要记账**，`focusout` 时补一次测量。门禁 `tap-hold.cjs` 的 H3 |
+| 章节末尾追加的图片加载完了，页数却不涨 | `lastTextPage()` 认的是**最后一段文字**所在列，图片溢出到的空列不算页——这是防空白尾页的既有设计 | 测试里要让图片改变页数，把图放在文字**前面**；放到章末是测不出来的 |
+
 ## 数据与解析
 
 | 现象 | 原因 | 处理 |
