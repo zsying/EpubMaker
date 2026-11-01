@@ -3,7 +3,7 @@
 All notable changes to EpubMaker are recorded here.
 This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.4.0] — 2026-11-01
 
 AI comes to the phone — three capabilities, each hanging off data the app
 already has. A word is explained in the sentence it sits in (and that sentence
@@ -20,6 +20,12 @@ books you would rather not leave on screen when someone picks the phone up are
 behind a lock rather than in plain sight. Moving books between shelves (in
 batches, too) only repoints a column: files, positions, bookmarks and notes stay
 where they are.
+
+Listening left the screen, too: the notification shade gained 上一句 /
+播放暂停 / 下一句 with the book's cover, and a session the reader owns keeps
+going with the phone in a pocket instead of stopping when the screen goes dark.
+Two gestures joined it — pulling the page down marks it (the mark is a bookmark),
+pulling again takes the mark back.
 
 ### Added
 
@@ -1196,7 +1202,8 @@ backend is Go — no Node service, no reverse proxy, no open ports.
 - `build`/`dev` pin `GOTOOLCHAIN` to the version in `app/go.mod`, working around
   wails v2.11 being unable to read Go 1.27 export data.
 
-[Unreleased]: https://github.com/zsying/EpubMaker/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/zsying/EpubMaker/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/zsying/EpubMaker/releases/tag/v0.4.0
 [0.3.0]: https://github.com/zsying/EpubMaker/releases/tag/v0.3.0
 [0.2.0]: https://github.com/zsying/EpubMaker/releases/tag/v0.2.0
 [0.1.0]: https://github.com/zsying/EpubMaker/releases/tag/v0.1.0
