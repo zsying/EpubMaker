@@ -51,9 +51,19 @@ function cachedBooks(shelfId: string): Book[] | null {
   return shelfCache && shelfCache.shelfId === shelfId ? shelfCache.books : null;
 }
 
-/** The create / rename / password form, and which shelf it is editing. */
+/**
+ * The create / rename / password form.
+ *
+ * A sheet replaces the one it was opened from instead of stacking on top of it:
+ * two bottom sheets sit at the same edge, so the lower one either covers the
+ * form's input (the tap lands on a button of the sheet underneath and no
+ * keyboard ever appears) or peeks out above it. `returnTo` is therefore part of
+ * the state, not a callback: 取消 has to know which sheet to put back.
+ */
 type ShelfDialog =
-  { kind: 'create' } | { kind: 'rename'; shelf: Shelf } | { kind: 'password'; shelf: Shelf };
+  | { kind: 'create'; returnTo: 'shelf' | 'move' }
+  | { kind: 'rename'; shelf: Shelf }
+  | { kind: 'password'; shelf: Shelf };
 
 /**
  * Whether a fresh shelf answer says the same thing as the one on screen.
@@ -213,7 +223,7 @@ export default function Library() {
   useBackClose(!!editBook, () => setEditBook(null));
   useBackClose(shelfSheet, () => setShelfSheet(false));
   useBackClose(!!shelfMenu, () => setShelfMenu(null));
-  useBackClose(!!shelfDialog, () => setShelfDialog(null));
+  useBackClose(!!shelfDialog, () => closeShelfDialog(shelfDialog));
   useBackClose(moveOpen, () => setMoveOpen(false));
   useBackClose(!!unlockTarget, () => setUnlockTarget(null));
   // Shelf progress badges (bookId -> 0..1), refreshed with the shelf.
@@ -757,14 +767,35 @@ export default function Library() {
 
   /* ---- shelf management: create / rename / password / delete ---- */
 
+  // Opening the form takes the sheet it came from off the screen first. Two
+  // stacked sheets is not a cosmetic problem on a phone: both are anchored to
+  // the same bottom edge, so whichever is painted second swallows the taps
+  // meant for the other one — the input under the mask never gets focus, which
+  // reads as "the keyboard does not open".
   function openShelfDialog(d: ShelfDialog) {
     setShelfMenu(null);
+    setShelfSheet(false);
+    setMoveOpen(false);
     setShelfForm({
       name: d.kind === 'create' ? '' : d.shelf.name,
       oldPw: '',
       newPw: '',
     });
     setShelfDialog(d);
+  }
+
+  // Cancel / mask / hardware back: put back whatever the form replaced.
+  function closeShelfDialog(d: ShelfDialog | null) {
+    setShelfDialog(null);
+    if (!d) return;
+    const back = d.kind === 'create' ? d.returnTo : 'shelf';
+    if (back === 'move') {
+      // The selection is the reason this sheet exists; if it is gone there is
+      // nothing to move and reopening it would draw "移动 0 本到…".
+      if (selection) setMoveOpen(true);
+    } else {
+      setShelfSheet(true);
+    }
   }
 
   async function submitShelfDialog() {
@@ -774,18 +805,26 @@ export default function Library() {
       if (shelfDialog.kind === 'create') {
         const created = await api.createShelf(shelfForm.name);
         toast(`已创建「${created.name}」`, 'success');
+        const back = shelfDialog.returnTo;
         setShelfDialog(null);
         const list = await loadShelves();
-        // Creating a shelf is a statement about where the next book goes: go
-        // there, so 导入 lands in it rather than in the shelf being left.
-        const target = list.find((s) => s.id === created.id) ?? created;
-        setShelfSheet(false);
-        applyShelf(target.id);
+        if (back === 'move') {
+          // The new shelf is a destination for a batch that is already picked:
+          // walking the page off to it would throw the selection away and leave
+          // the books where they were. Stay put and offer it as a target.
+          if (selection) setMoveOpen(true);
+        } else {
+          // Creating a shelf is a statement about where the next book goes: go
+          // there, so 导入 lands in it rather than in the shelf being left.
+          const target = list.find((s) => s.id === created.id) ?? created;
+          applyShelf(target.id);
+        }
       } else if (shelfDialog.kind === 'rename') {
         await api.renameShelf(shelfDialog.shelf.id, shelfForm.name);
         toast('已重命名', 'success');
         setShelfDialog(null);
         await loadShelves();
+        setShelfSheet(true);
       } else {
         const clearing = shelfDialog.shelf.hasLock && !shelfForm.newPw;
         await api.setShelfLock(shelfDialog.shelf.id, shelfForm.oldPw, shelfForm.newPw);
@@ -793,6 +832,7 @@ export default function Library() {
         setShelfDialog(null);
         // A shelf that just got its password back needs its lock state fresh.
         await loadShelves();
+        setShelfSheet(true);
       }
     } catch (e) {
       toastError(e);
@@ -826,6 +866,7 @@ export default function Library() {
 
   function startSelection(book?: Book) {
     setMenuBook(null);
+    setMoveOpen(false);
     setSelection(new Set(book ? [book.id] : []));
   }
 
@@ -1164,7 +1205,15 @@ export default function Library() {
           <button className="lib-tag-chip" onClick={selectAll}>
             全选
           </button>
-          <button className="lib-tag-chip" onClick={() => setSelection(null)}>
+          <button
+            className="lib-tag-chip"
+            onClick={() => {
+              setSelection(null);
+              // The move sheet belongs to a selection; leaving selection mode
+              // must not leave it behind with "移动 0 本到…" on screen.
+              setMoveOpen(false);
+            }}
+          >
             取消
           </button>
         </div>
@@ -1410,7 +1459,10 @@ export default function Library() {
                     </div>
                   ))}
                 </div>
-                <button className="sheet-item" onClick={() => openShelfDialog({ kind: 'create' })}>
+                <button
+                  className="sheet-item"
+                  onClick={() => openShelfDialog({ kind: 'create', returnTo: 'shelf' })}
+                >
                   ＋ 新建书架
                 </button>
                 <button className="sheet-item cancel" onClick={() => setShelfSheet(false)}>
@@ -1455,7 +1507,10 @@ export default function Library() {
       {/* Create / rename / password. One form, three intents, so the naming
           rules and the password rules are enforced in exactly one place. */}
       {shelfDialog && (
-        <div className="sheet-mask" onClick={() => (shelfBusy ? undefined : setShelfDialog(null))}>
+        <div
+          className="sheet-mask"
+          onClick={() => (shelfBusy ? undefined : closeShelfDialog(shelfDialog))}
+        >
           <div className="sheet shelf-form" onClick={(e) => e.stopPropagation()}>
             <div className="sheet-title">
               {shelfDialog.kind === 'create'
@@ -1512,7 +1567,7 @@ export default function Library() {
               <button
                 className="btn ghost"
                 disabled={shelfBusy}
-                onClick={() => setShelfDialog(null)}
+                onClick={() => closeShelfDialog(shelfDialog)}
               >
                 取消
               </button>
@@ -1531,7 +1586,7 @@ export default function Library() {
       {/* Where the selection goes. A locked destination asks for its password
           right here rather than after a detour, so a batch can be moved into a
           private shelf in one pass. */}
-      {moveOpen && (
+      {moveOpen && selection && (
         <div className="sheet-mask" onClick={() => setMoveOpen(false)}>
           <div className="sheet" role="menu" onClick={(e) => e.stopPropagation()}>
             <div className="sheet-title">移动 {selectionCount} 本到…</div>
@@ -1554,7 +1609,10 @@ export default function Library() {
                   </button>
                 ))
             )}
-            <button className="sheet-item" onClick={() => openShelfDialog({ kind: 'create' })}>
+            <button
+              className="sheet-item"
+              onClick={() => openShelfDialog({ kind: 'create', returnTo: 'move' })}
+            >
               ＋ 新建书架
             </button>
             <button className="sheet-item cancel" onClick={() => setMoveOpen(false)}>

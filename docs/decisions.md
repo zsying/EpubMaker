@@ -1782,7 +1782,7 @@ state 驱动拖动 = 每个 touchmove 一次整棵阅读器树渲染，这条红
 **证据。** `app/internal/library/shelves_test.go` 9 个用例（默认书架、名字规则、删书架返书、
 批量迁移、密码与锁定、退避、跨书列表过滤、导入回落、哈希格式）+ `app/internal/db/shelves_migration_test.go`
 （老库升级后一本书不少、二次 `migrate` 幂等），`go vet ./... && go test ./...` 全绿；
-`D:/tmp/epub-verify/shelves.cjs` 45/45（先跑红再实现），回归 `verify|mobile|pull-mark|listen-native`
+`D:/tmp/epub-verify/shelves.cjs` 51/51（先跑红再实现），回归 `verify|mobile|pull-mark|listen-native`
 19/193/26/16 全过。真机 JEF-AN00（360 CSS px）逐条走查：建书架、长按→多选 3 本→批量迁到新书架
 （toast「已移动 3 本到…」、两边计数同步）、设密码、切走再切回要密码、错密码提示且不切换、对密码
 进入、`am force-stop` 后重启书架仍锁定且落回上次的书架、当前书架锁定后页面画解锁屏（此时 ＋ 与
@@ -1790,3 +1790,21 @@ state 驱动拖动 = 每个 touchmove 一次整棵阅读器树渲染，这条红
 `max-width: 100%` 把负左边距（-9px）也算进了父级 `shrink-to-fit` 宽度，于是连「书架」两个字的
 名字都被截成「书…」，右侧还空着 66px——改成 `calc(100% + 9px)` 把那一格还给标题（见
 `styles.css` 的注释）。
+
+**补充（2026-11-01）：弹层不叠弹层。** 上线后收到两条 bug：「批量移动里点新建书架，输入框被盖住
+没法输入」「新建书架时点输入框不出键盘」。它们其实是同一个原因：`.sheet-mask` 全部 `inset:0` +
+`align-items:flex-end` + 同一个 `z-index`，谁在 DOM 里靠后就谁收点击。移动面板（`moveOpen`）排在
+表单（`shelfDialog`）后面，于是表单虽然"打开"了，输入框底下压着移动面板的按钮——点击落在那个按钮上，
+`<input>` 从来没拿到焦点，系统自然不弹键盘（Android 侧表现为 `mInputShown=true` 与否取决于 DOM 里
+那个 `input` 是否 `document.activeElement`）。**修法不是调 z-index，而是不叠**：
+
+- `openShelfDialog` 先把来处关掉（`setShelfSheet(false)` / `setMoveOpen(false)`），表单独自占屏。
+- 来处写进状态而不是靠"下面那层还开着"：`ShelfDialog.returnTo`（`'shelf' | 'move'`），
+  `closeShelfDialog` 取消时把它放回去；重命名 / 设密码保存后重开切换器，好让新名字和 🔒 立刻可见。
+- 「移动到」面板加 `selection` 前置条件：选择被清掉时它不能自己留在屏上显示「移动 0 本到…」。
+
+同时确认了一件事：**这条 bug 里"没有键盘"的那一半，在测试机上和输入法有关**。那台机器的默认输入法
+是 `com.tencent.wetype/.plugin.hld.WxHldService`（微信键盘的一个插件服务），它 `mInputShown=true`
+但 IME 窗口 `fmt=TRANSPARENT`、`mViewVisibility=0x0`，**任何应用**（系统设置的搜索框也一样）都不画
+键盘；临时切到百度输入法后同一个输入框立刻正常（`adjustResize` 生效、表单完整浮在键盘上方）。所以
+应用侧没有第二个键盘 bug，验证输入相关改动前先确认默认输入法能画出来。

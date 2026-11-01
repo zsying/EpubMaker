@@ -116,7 +116,12 @@
    - 忘记密码**没有自助恢复**。逃生口是 `UPDATE shelves SET pw_hash='' WHERE id='…'`（写在这里给
      技术支持，不放进界面）。
    - `shelfCache` 必须按 `shelfId` 键控，否则切书架会先闪出上一个书架的书——那是泄密，不是闪一下。
-   - 门禁：`D:\tmp\epub-verify\shelves.cjs`（45 项）+ `app/internal/library/shelves_test.go`（9 个）。
+   - 门禁：`D:\tmp\epub-verify\shelves.cjs`（51 项）+ `app/internal/library/shelves_test.go`（9 个）。
+7c. **一次只开一个底部弹层**（ADR-40 补充）。`.sheet-mask` 全是 `inset:0` + `align-items:flex-end` +
+   同一个 `z-index`，所以 DOM 里靠后的那层收点击。叠两层的结果不是"上面盖住下面"，而是**下层抢走
+   上层输入框的点击** —— 表现成"点输入框没有键盘"（`document.activeElement` 压根不是那个 `input`）。
+   换层要把来处写进状态（`ShelfDialog.returnTo: 'shelf' | 'move'`），取消时再放回去；别指望
+   "下面那层还开着"能自动恢复。
 8. 所有 content 目录内的文件访问走 `storage.ContentPath()`（含路径穿越防护），别自己拼路径。
 9. 删除章节只从目录移除，正文文件保留（可能被别处引用）。
 10. **导入只认文件路径，不接受上传**。拖放由原生处理（`main.go` 的 `WebviewWindowOptions.EnableFileDrop`
@@ -227,8 +232,13 @@
 - **交互回归脚本在 `D:\tmp\epub-verify`（仓库外）**：`web/dist` 起 `vite preview --port 4173`，
   用系统 Edge（`channel: 'msedge'`，**必须 `--no-proxy-server`，地址用 `localhost` 而不是 127.0.0.1**）。
   `mobile.cjs` 是 390×844 触摸用例（tap / swipe / 长按选区），`verify.cjs` `esc.cjs` `drop.cjs`
-  `shelf.cjs` `vocab-schedule.cjs` 是桌面用例，`shelves.cjs` 是多书架（切换/密码/多选/迁移，
-  自带状态化 mock，45 项）；`pull-mark.cjs`、`listen-native.cjs` 见各自红线。**动 Reader.tsx 就要两边都跑一遍。**
+  `shelf.cjs` `vocab-schedule.cjs` 是桌面用例，`shelves.cjs` 是多书架（切换/密码/多选/迁移/弹层
+  不叠，自带状态化 mock，51 项）；`pull-mark.cjs`、`listen-native.cjs` 见各自红线。**动 Reader.tsx 就要两边都跑一遍。**
+- **真机验"输入框"之前先看默认输入法**：`adb shell settings get secure default_input_method`。测试机
+  JEF-AN00 的默认输入法一度是 `com.tencent.wetype/.plugin.hld.WxHldService`（微信键盘的插件服务），
+  它 `mInputShown=true` 却不绘制（IME 窗口 `fmt=TRANSPARENT`、`mViewVisibility=0x0`），**系统设置的
+  搜索框也一样没键盘**——那是设备状态，不是应用 bug。临时换 `adb shell ime enable/set
+  com.baidu.input_huawei/.ImeService` 即可区分，验完记得 `ime disable` 还原。
 - 新增依赖克制：标准库 + Wails + modernc.org/sqlite。不要为 XML/WebDAV/EPUB 引第三方库。
 - **git commit 信息用英文**，Conventional Commits（`feat:` / `fix:` / `refactor:` / `docs:`）。
   一个逻辑改动一个 commit，不要攒着一起提交。

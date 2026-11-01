@@ -505,6 +505,15 @@ where they are.
 
 ### Fixed
 
+- **新建书架 in the batch-move sheet covered its own input box** — reported as "选择书籍后点新建书架，书籍
+  名称的弹窗页面被遮盖，没法输入" and, from the other side, "新建书架时点输入框没有弹窗输入键盘". One
+  cause: every bottom sheet is pinned to the same edge with the same `z-index`, so the one later in the DOM
+  takes the taps — the move sheet sat on top of the create form, and the tap meant for the input landed on
+  the move sheet's own ＋ 新建书架 button, so the field never got focus and the keyboard never opened. The
+  form now replaces the sheet it was opened from and remembers it (`returnTo`), so 取消 puts the switcher or
+  the move list back. Creating a shelf from the move flow also stopped walking the page off to the new shelf:
+  the new shelf simply appears as a destination and the batch stays selected. The move sheet additionally
+  refuses to draw without a selection (it used to be able to sit there saying 移动 0 本到…).
 - **听书 no longer stops by itself once the screen goes off** — reported as "熄屏听了一阵子就自动
   停止播放". Two separate holes, both structural rather than a timeout:
   1. The session (foreground service, wake lock, media session) could only be started from the native
