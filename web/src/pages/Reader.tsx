@@ -2494,11 +2494,26 @@ export default function Reader() {
   /* ---- progress persistence (paged mode) ---- */
   useEffect(() => {
     if (mode !== 'paged' || !current || preview) return;
-    const t = setTimeout(() => {
-      const off = offsetForPage(pageIndex);
-      api.saveProgress(id, current, off, pageCount).catch(() => {});
-    }, 600);
-    return () => clearTimeout(t);
+    const flush = () => {
+      api.saveProgress(id, current, offsetForPage(pageIndex), pageCount).catch(() => {});
+    };
+    const t = setTimeout(flush, 600);
+    // A debounce that has not elapsed yet is a page that never got saved: a
+    // phone freezes the WebView the moment the app goes to the background, and
+    // the freeze beats the 600ms. These two events are the last chance to
+    // write, and both fire while the DOM is still readable, so the offset is
+    // still the one on screen. `visibilitychange` is the phone's case (Home,
+    // another app), `pagehide` the tab being closed or navigated away.
+    const onHide = () => {
+      if (document.visibilityState === 'hidden') flush();
+    };
+    document.addEventListener('visibilitychange', onHide);
+    window.addEventListener('pagehide', flush);
+    return () => {
+      clearTimeout(t);
+      document.removeEventListener('visibilitychange', onHide);
+      window.removeEventListener('pagehide', flush);
+    };
   }, [mode, current, pageIndex, pageCount, id, preview]);
 
   /* ---- progress persistence (scrolling mode) ---- */
@@ -2507,19 +2522,26 @@ export default function Reader() {
     const scroller = mainRef.current;
     if (!scroller) return;
     let timer = 0;
+    const saveNow = () => api.saveProgress(id, current, offsetAtViewportTop(), 1).catch(() => {});
     const onScroll = () => {
       // In scroll mode, scrolling IS the page turn: the reader has moved the
       // text themselves, so the voice must stop dragging it back to the
       // sentence it is reading. Our own reveal-scroll is not that.
       if (Date.now() - autoScrollAtRef.current > 700) pauseFollow();
       window.clearTimeout(timer);
-      timer = window.setTimeout(() => {
-        api.saveProgress(id, current, offsetAtViewportTop(), 1).catch(() => {});
-      }, 800);
+      timer = window.setTimeout(saveNow, 800);
+    };
+    // Same last chance as paged mode: an 800ms debounce loses to a freeze.
+    const onHide = () => {
+      if (document.visibilityState === 'hidden') saveNow();
     };
     scroller.addEventListener('scroll', onScroll, { passive: true });
+    document.addEventListener('visibilitychange', onHide);
+    window.addEventListener('pagehide', saveNow);
     return () => {
       scroller.removeEventListener('scroll', onScroll);
+      document.removeEventListener('visibilitychange', onHide);
+      window.removeEventListener('pagehide', saveNow);
       window.clearTimeout(timer);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
