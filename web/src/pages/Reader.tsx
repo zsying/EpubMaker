@@ -3476,6 +3476,16 @@ export default function Reader() {
       return;
     }
     if (scheduleWordLookup(x, y)) return;
+    // The one rule the two modes do not share, and deliberately so. Paged mode
+    // has no scrolling, so a tap is always aimed and any tap may open the
+    // chrome. In scroll mode a tap is often the tail of a scroll, and a menu
+    // appearing over the paragraph you were reading reads as a bug — so only
+    // the middle third answers. Everything above (card, mark, word) is the same
+    // in both, which is why there is one router and not one per mode.
+    if (mode === 'scroll') {
+      const ratio = x / Math.max(1, window.innerWidth);
+      if (!(ratio > 1 / 3 && ratio < 2 / 3)) return;
+    }
     // Taps never turn pages on touch — a page turn is a horizontal swipe.
     // Everything that is not a word lookup toggles the chrome, which is also
     // how the edge menus come and go.
@@ -4312,8 +4322,16 @@ export default function Reader() {
     const el = contentRef.current;
     if (!el) return;
     const root = el;
+    // The release that dismisses a card is spent on the card: the click the
+    // browser synthesises right after it belongs to that dismissal, not to
+    // whatever word sits under the finger. Paged mode reaches the same
+    // conclusion inside `routeTap`, which still sees the card in its state;
+    // this effect is never re-registered when a card opens, so it asks the DOM
+    // instead of a variable that would be one card out of date.
+    let cardJustDismissed = false;
     function onMouseUp() {
       // Any new interaction in the text dismisses the previous dictionary card.
+      cardJustDismissed = !!document.querySelector('.dict-card');
       setLookupCard(null);
       syncSelectionFromDom();
     }
@@ -4354,14 +4372,15 @@ export default function Reader() {
       }
       const selection = window.getSelection();
       if (selection && !selection.isCollapsed && selection.toString().trim()) return;
-      // Touch division of labour, same as paged mode: a tap on a word looks it
-      // up; only a tap in the middle third of the screen toggles the chrome —
-      // the horizontal thirds do nothing in scroll mode (no pages to turn),
-      // and a tap anywhere summoning the menu read as a bug.
+      // Touch division of labour, same as paged mode — one router, two modes: a
+      // tap on a word looks it up; a tap anywhere else opens or closes the
+      // chrome. The one rule the modes do not share lives inside `routeTap`.
       if (touchPrimary) {
-        if (scheduleWordLookup(e.clientX, e.clientY)) return;
-        const r = e.clientX / Math.max(1, window.innerWidth);
-        if (r > 1 / 3 && r < 2 / 3) setChromeOpen((o) => !o);
+        if (cardJustDismissed) {
+          cardJustDismissed = false;
+          return;
+        }
+        routeTapRef.current(e.clientX, e.clientY);
         return;
       }
       scheduleWordLookup(e.clientX, e.clientY);

@@ -46,6 +46,8 @@
 | 图文页滑到一半页面弹回去，之后这次手势完全没反应 | 图片异步加载 → `setPageCount` → 手势 effect 重挂 → cleanup 把页面钉回原位、闭包里的 `active` 作废 | 手势 handler 一律读 ref（`turnGeomRef`/`nextRef`/`prevRef`/`turnRef`），effect 依赖只留 `[mode, current]`。门禁 `tap-hold.cjs` 的 H2 用受控图片复现 |
 | 收起键盘或旋转后正文不再重排，书页比窗口高出一截 | `readViewport().keyboard` 取 `isEditableFocused()`；Android 收起键盘**不清 `activeElement`**，于是"键盘弹着别重排"的守卫永久成立 | 宽度变了就一定是旋转/分屏，一律重排；纯高度变化才当作键盘，并且**跳过要记账**，`focusout` 时补一次测量。门禁 `tap-hold.cjs` 的 H3 |
 | 章节末尾追加的图片加载完了，页数却不涨 | `lastTextPage()` 认的是**最后一段文字**所在列，图片溢出到的空列不算页——这是防空白尾页的既有设计 | 测试里要让图片改变页数，把图放在文字**前面**；放到章末是测不出来的 |
+| 滚动模式下点一下关掉词卡，卡片原地又弹出新的（查的还是手指底下那个词） | scroll 的 `click` 监听是 `routeTap` 的手抄本，少了"关卡片那一下花在卡片上"这条；它的 effect 依赖里没有 `lookupCard`，监听器里那份状态永远比现实旧一张卡 | 点击统一交给 `routeTap`；关卡片的那次点按由 `mouseup` 当场问 DOM `.dict-card` 记账，`click` 见到标记就直接返回。门禁 `scroll-tap.cjs` 的 S5 |
+| 手机上切换到滚动模式后，点屏幕两侧半天开不出菜单 | 这是**刻意**的：滚动模式只有中间 1/3 开合工具条（滑动时点按常是尾巴，全屏弹菜单像 bug） | 别"修"成全屏可点；差异只允许存在于 `routeTap` 内部那一个谓词里 |
 
 ## 数据与解析
 
