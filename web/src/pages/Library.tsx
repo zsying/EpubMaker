@@ -20,6 +20,7 @@ import {
   shareEpubFile,
   Shelf,
 } from '../api';
+import { isTouchPrimary, prefersReducedMotion } from '../device';
 import { canResolveDropPaths, onDroppedFiles } from '../filedrop';
 import { currentShelfId as readShelfId, DEFAULT_SHELF_ID, rememberShelfId } from '../shelfState';
 import { toast, toastError } from '../toast';
@@ -142,22 +143,6 @@ const HOLD_CLICK_MS = 200;
 // session; above it the phone has been somewhere else, possibly in someone
 // else's hand.
 const LOCK_AFTER_MS = 5 * 60 * 1000;
-
-// Same rule as the reader: a device whose primary pointer cannot hover is a
-// touch device, and a touchscreen laptop with a mouse stays "desktop".
-function isTouchPrimary(): boolean {
-  if (typeof window === 'undefined' || !window.matchMedia) return false;
-  if (window.matchMedia('(any-pointer: fine)').matches) return false;
-  return (
-    window.matchMedia('(pointer: coarse)').matches || window.matchMedia('(hover: none)').matches
-  );
-}
-
-// The press animation is only worth its delay when the reader can see it.
-function prefersReducedMotion(): boolean {
-  if (typeof window === 'undefined' || !window.matchMedia) return false;
-  return window.matchMedia('(prefers-reduced-motion: reduce)').matches;
-}
 
 export default function Library() {
   // Which shelf this page is showing. Read from disk so the app comes back to

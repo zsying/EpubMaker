@@ -73,8 +73,10 @@
 
 10. **分页阅读器翻页不做动画**：章内翻页是一次 `setPageIndex` + `translate3d`，禁止 3D 翻页/卷曲/投影；
     一次翻页只允许一个活动图层，**绝不能复制整章 HTML**。章节切换保留 130ms 淡入淡出（盖住异步加载空窗）。
-11. **触摸设备没有 hover，每个靠悬停的入口都要有 tap 等价物**。`Reader.tsx` 的 `touchPrimary`
-    （`pointer: coarse` / `hover: none`，且 `any-pointer: fine` 为假）是唯一判定，别用
+11. **触摸设备没有 hover，每个靠悬停的入口都要有 tap 等价物**。`device.ts` 的 `isTouchPrimary()`
+    （`pointer: coarse` / `hover: none`，且 `any-pointer: fine` 为假）是唯一判定：阅读器的
+    `touchPrimary`、书架的卡片交互都 import 这一份，**不要在页面里另抄一份**——抄出来的第二份
+    总有一天只改一边，症状是同一个手势在一个页面能用、在另一个页面失灵。别用
     `maxTouchPoints > 0`——带触摸屏的笔记本会因此丢掉桌面行为。手机上的点击分工只有一条规则：
     **点按永不翻页，翻页只由横向 swipe 承担**。`routeTap()` 是唯一的点击路由器，顺序即优先级：
     词卡外点关闭 → 划线开弹层 → 落在词上查词 → 其余开合工具条。长按命中词是"选中"，

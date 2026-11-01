@@ -76,7 +76,7 @@ import {
   type ReadMode,
   type TurnSensitivity,
 } from '../readingPrefs';
-import { isTouchPrimary } from '../device';
+import { isTouchPrimary, prefersReducedMotion } from '../device';
 import { closeForNavigation, navigationDepth, useBackClose } from '../backNav';
 import FontPicker, { CUSTOM_FONT_FAMILY } from '../components/FontPicker';
 import AIPanel from '../components/AIPanel';
@@ -2658,7 +2658,7 @@ export default function Reader() {
     }
     if (peek?.cid === want.cid && peek.side === want.side) return;
     // Nothing to drag when nothing may move.
-    if (window.matchMedia?.('(prefers-reduced-motion: reduce)').matches) return;
+    if (prefersReducedMotion()) return;
     let dead = false;
     const show = (html: string) => {
       if (!dead) setPeek({ cid: want.cid, side: want.side, html });
@@ -3082,7 +3082,7 @@ export default function Reader() {
     if (dragTurnRef.current?.kind === 'chapter') return false;
     // Reduced motion is a request for no moving pictures, and a page sliding
     // under the thumb is exactly that.
-    if (window.matchMedia?.('(prefers-reduced-motion: reduce)').matches) return false;
+    if (prefersReducedMotion()) return false;
     // A fast reader flicks again before the last page has finished sliding. The
     // new touch catches the page where it is and drags on from there, instead
     // of fighting the slide or waiting it out.
