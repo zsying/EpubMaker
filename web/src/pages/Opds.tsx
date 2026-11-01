@@ -3,6 +3,7 @@ import type { ReactNode } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { api, OpdsEntry, OpdsFeed, OpdsLink, OpdsSource } from '../api';
 import { useBackClose } from '../backNav';
+import { currentShelfId } from '../shelfState';
 import { toast } from '../toast';
 import SubHeader from '../components/SubHeader';
 
@@ -335,7 +336,11 @@ export default function Opds() {
     if (!source) return;
     mark(key, 'get');
     try {
-      const res = await api.opdsImport(source, [{ downloads: work.downloads, name: work.name }]);
+      const res = await api.opdsImport(
+        source,
+        [{ downloads: work.downloads, name: work.name }],
+        currentShelfId(),
+      );
       const ok = res.books?.length ?? 0;
       const errors = res.errors ?? [];
       const dups = res.duplicates ?? [];

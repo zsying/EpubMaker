@@ -102,6 +102,21 @@
    （内联注音、往正文插入节点）都会让历史标注集体错位。浮层必须 `position: fixed`，
    任何进入文档流的元素都会改变 `contentHeight` → 页数变化 → 读者被莫名翻页。
 7. **生词是跨书资产**：`vocab.book_id/chapter_id` 只是指针，**不加外键**。书删了词还在。
+7b. **书架是一对多的容器，锁的边界在后端**（ADR-40）。`shelves` 表 + `books.shelf_id`，与
+   `books.tags`（多对多、纯字符串）**正交**：别拿标签当书架——标签挂不了密码、也表达不了唯一归属。
+   - **迁移只改一行 `shelf_id`**：书文件在 `<books>/<bookID>/`，与书架无关。别改成"按书架分目录
+     存放"，那会把一次 `UPDATE` 变成搬文件 + 断掉所有相对引用。
+   - **过滤在 SQL 层**：`ListBooks`、`GetBook`、`GetChapterRow`、`ListAllBookmarks`、
+     `ListAllAnnotations`、`ListTrash`。前端过滤只是化妆，一条 `/books/:id/read` 就能绕过。
+     锁状态只存在 `library` 包的内存里（`map[string]bool` + mutex），**不落库**——重启即全部上锁。
+   - 锁定书架**也不能写**（改名 / 设改密码 / 删除 / 迁入都要先解锁）。前端的 `locked` 可能是上一次
+     会话的，判断前先 `loadShelves()` 拿新鲜的（`pickShelf` / `chooseMoveTarget` 已经是 async）。
+   - 系统分享与 Wi-Fi 分享没有"当前书架"，一律落默认书架（`resolveImportShelf` 兜空 id / 未知 id
+     / 锁定 id）。
+   - 忘记密码**没有自助恢复**。逃生口是 `UPDATE shelves SET pw_hash='' WHERE id='…'`（写在这里给
+     技术支持，不放进界面）。
+   - `shelfCache` 必须按 `shelfId` 键控，否则切书架会先闪出上一个书架的书——那是泄密，不是闪一下。
+   - 门禁：`D:\tmp\epub-verify\shelves.cjs`（45 项）+ `app/internal/library/shelves_test.go`（9 个）。
 8. 所有 content 目录内的文件访问走 `storage.ContentPath()`（含路径穿越防护），别自己拼路径。
 9. 删除章节只从目录移除，正文文件保留（可能被别处引用）。
 10. **导入只认文件路径，不接受上传**。拖放由原生处理（`main.go` 的 `WebviewWindowOptions.EnableFileDrop`
@@ -212,7 +227,8 @@
 - **交互回归脚本在 `D:\tmp\epub-verify`（仓库外）**：`web/dist` 起 `vite preview --port 4173`，
   用系统 Edge（`channel: 'msedge'`，**必须 `--no-proxy-server`，地址用 `localhost` 而不是 127.0.0.1**）。
   `mobile.cjs` 是 390×844 触摸用例（tap / swipe / 长按选区），`verify.cjs` `esc.cjs` `drop.cjs`
-  `shelf.cjs` `vocab-schedule.cjs` 是桌面用例。**动 Reader.tsx 就要两边都跑一遍。**
+  `shelf.cjs` `vocab-schedule.cjs` 是桌面用例，`shelves.cjs` 是多书架（切换/密码/多选/迁移，
+  自带状态化 mock，45 项）；`pull-mark.cjs`、`listen-native.cjs` 见各自红线。**动 Reader.tsx 就要两边都跑一遍。**
 - 新增依赖克制：标准库 + Wails + modernc.org/sqlite。不要为 XML/WebDAV/EPUB 引第三方库。
 - **git commit 信息用英文**，Conventional Commits（`feat:` / `fix:` / `refactor:` / `docs:`）。
   一个逻辑改动一个 commit，不要攒着一起提交。

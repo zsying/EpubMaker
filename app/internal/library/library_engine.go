@@ -69,7 +69,9 @@ func RenderChapter(bookID, chapterID string) (*ChapterRender, error) {
 
 // ImportEpub parses an EPUB file on disk, stores its resources, and registers
 // the book (and its chapters/assets) in the database.
-func ImportEpub(filePath, originalName string) (*BookDTO, error) {
+func ImportEpub(filePath, originalName, shelfID string) (*BookDTO, error) {
+	// Where the book lands is decided once, before anything is written.
+	shelf := resolveImportShelf(shelfID)
 	data, err := os.ReadFile(filePath)
 	if err != nil {
 		return nil, err
@@ -152,7 +154,7 @@ func ImportEpub(filePath, originalName string) (*BookDTO, error) {
 			}
 		}
 		if e := insertBookStmt(d, bookID, title, parsed.Metadata.Author, parsed.Metadata.Language,
-			parsed.Metadata.Publisher, parsed.Metadata.Description, parsed.Metadata.Identifier, cover, originalName, ts, tocJSON, fileHash); e != nil {
+			parsed.Metadata.Publisher, parsed.Metadata.Description, parsed.Metadata.Identifier, cover, originalName, ts, tocJSON, fileHash, shelf); e != nil {
 			return e
 		}
 		chStmt, e := d.Prepare(`INSERT INTO chapters (id,book_id,idx,title,href,created_at,updated_at) VALUES (?,?,?,?,?,?,?)`)
@@ -197,12 +199,30 @@ func ImportEpub(filePath, originalName string) (*BookDTO, error) {
 	return GetBook(bookID)
 }
 
-func insertBookStmt(d *sql.DB, id, title, author, language, publisher, description, identifier string, cover sql.NullString, sourceName, ts, tocJSON, fileHash string) error {
+func insertBookStmt(d *sql.DB, id, title, author, language, publisher, description, identifier string, cover sql.NullString, sourceName, ts, tocJSON, fileHash, shelfID string) error {
 	_, err := d.Exec(
-		`INSERT INTO books (id,title,author,language,publisher,description,identifier,cover_href,source_name,created_at,updated_at,toc,tags,file_hash)
-		 VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-		id, title, author, language, publisher, description, identifier, cover, sourceName, ts, ts, tocJSON, "", fileHash)
+		`INSERT INTO books (id,title,author,language,publisher,description,identifier,cover_href,source_name,created_at,updated_at,toc,tags,file_hash,shelf_id)
+		 VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		id, title, author, language, publisher, description, identifier, cover, sourceName, ts, ts, tocJSON, "", fileHash, shelfID)
 	return err
+}
+
+// resolveImportShelf picks the shelf an import lands on. An empty id (a
+// background import: system share, Wi-Fi transfer — nobody is at a screen to
+// say which shelf), an unknown id and a locked shelf all fall back to the
+// default shelf: a mislaid book is recoverable, a dropped file is not.
+func resolveImportShelf(shelfID string) string {
+	if shelfID == "" || shelfLocked(shelfID) {
+		return DefaultShelfID
+	}
+	d, err := db.Open()
+	if err != nil {
+		return DefaultShelfID
+	}
+	if ok, _ := shelfExists(d, shelfID); !ok {
+		return DefaultShelfID
+	}
+	return shelfID
 }
 
 // findDuplicate reports whether an identical book is already on the shelf.
@@ -468,6 +488,13 @@ func SplitBook(bookID string, parts []SplitPart, deleteSource bool) ([]*BookDTO,
 	}
 
 	created := []string{}
+	// Split volumes are the same book, cut up: they stay on the shelf the source
+	// sits on, which is also what makes the split feel like an edit rather than
+	// like exporting two new books.
+	partShelf := row.ShelfID.String
+	if partShelf == "" {
+		partShelf = DefaultShelfID
+	}
 	for _, part := range parts {
 		picked := []ChapterDTO{}
 		for _, id := range part.ChapterIDs {
@@ -537,7 +564,7 @@ func SplitBook(bookID string, parts []SplitPart, deleteSource bool) ([]*BookDTO,
 				return e
 			}
 			if e := insertBookStmt(d, newID, title, author, row.Language, row.Publisher,
-				row.Description, "", cov, row.SourceName.String, ts, partTOCJSON, ""); e != nil {
+				row.Description, "", cov, row.SourceName.String, ts, partTOCJSON, "", partShelf); e != nil {
 				return e
 			}
 			chStmt, e := d.Prepare(`INSERT INTO chapters (id,book_id,idx,title,href,created_at,updated_at) VALUES (?,?,?,?,?,?,?)`)

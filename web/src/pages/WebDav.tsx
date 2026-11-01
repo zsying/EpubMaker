@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { KeyboardEvent } from 'react';
 import { api, WebDavConn, WebDavEntry } from '../api';
+import { currentShelfId } from '../shelfState';
 import { toast, toastError } from '../toast';
 import SubHeader from '../components/SubHeader';
 
@@ -285,7 +286,7 @@ export default function WebDav() {
     const items = list.map((e) => ({ path: e.path, name: e.name }));
     setImporting(true);
     try {
-      const res = await api.webdavImport(conn, items);
+      const res = await api.webdavImport(conn, items, currentShelfId());
       const ok = res.books?.length ?? 0;
       const errors = res.errors ?? [];
       setImportResult({ ok, errors });

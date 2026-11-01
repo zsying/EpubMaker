@@ -7407,3 +7407,304 @@ html[data-app-theme='midnight'] .turn-veil-band {
   color: var(--text);
   font-weight: 600;
 }
+
+/* =============================== shelves ===============================
+   A shelf is a container a book belongs to, and the page's own title now says
+   which one you are looking at. The switcher is a pill in the header rather
+   than a row of chips: a shelf may be locked, and switching to it may need a
+   password, which only a sheet can ask for. */
+
+.shelf-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  /* `100%` of the h1 is 9px *less* than the pill's own max-content, because the
+     negative left margin below counts in the parent's shrink-to-fit width. Left
+     at `100%` the pill hands that 9px to the ellipsis and a two-character shelf
+     name renders as "书…" on a 360px screen with 66px of empty space next to it
+     (measured on the phone, 2026-11-01). Give the nudge back. */
+  max-width: calc(100% + 9px);
+  min-width: 0;
+  /* Negative left margin keeps the text optically on the page's margin: the
+     padding is what makes the pill a target, not what makes it a title. */
+  margin-left: -9px;
+  padding: 3px 8px 3px 9px;
+  border: 1px solid transparent;
+  border-radius: 9px;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  cursor: pointer;
+  touch-action: manipulation;
+}
+
+.shelf-pill:hover,
+.shelf-pill:focus-visible {
+  background: var(--panel-2);
+  border-color: var(--border);
+}
+
+/* The name is the only part that may shrink. The count, the lock and the caret
+   keep their size, so a 12-character shelf name shortens to "苏联和越南…"
+   instead of pushing the header's icons off a 360px screen. */
+.shelf-pill-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.shelf-pill-count {
+  flex: none;
+  font-size: 12.5px;
+  font-weight: 500;
+  color: var(--text-3);
+}
+
+.shelf-pill-lock,
+.shelf-pill-caret {
+  flex: none;
+  color: var(--text-3);
+}
+
+/* Selection mode reuses the tag row (same place, same height), so entering it
+   does not move the grid. */
+.lib-selectbar {
+  align-items: center;
+}
+
+.lib-select-count {
+  flex: 0 0 auto;
+  padding-left: 2px;
+  font-size: 12.5px;
+  color: var(--text-2);
+}
+
+/* The verbs of a selection. Fixed to the bottom edge because they act on the
+   grid behind them, and the grid scrolls. */
+.lib-select-actions {
+  position: fixed;
+  left: 50%;
+  bottom: 0;
+  transform: translateX(-50%);
+  z-index: 30;
+  width: 100%;
+  max-width: 720px;
+  display: flex;
+  gap: 10px;
+  padding: 10px 20px calc(12px + env(safe-area-inset-bottom));
+  background: var(--panel);
+  border-top: 1px solid var(--border);
+}
+
+.lib-select-actions .btn {
+  flex: 1;
+  justify-content: center;
+}
+
+/* The check on a selected card. A tint alone disappears over a dark cover
+   photograph, so the mark is a shape with its own contrast. */
+.book-card {
+  position: relative;
+}
+
+.book-card.selected {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+.book-check {
+  position: absolute;
+  top: 8px;
+  left: 8px;
+  z-index: 2;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  font-size: 13px;
+  line-height: 1;
+  color: #fff;
+  background: rgba(15, 23, 42, 0.42);
+  border: 1.5px solid rgba(255, 255, 255, 0.92);
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.28);
+}
+
+.book-card.selected .book-check {
+  background: var(--accent);
+  border-color: var(--accent);
+}
+
+/* The locked shelf: the name and the size stay, the books do not. This is what
+   the password buys. */
+.shelf-locked {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  padding: 52px 24px;
+  text-align: center;
+  color: var(--text-3);
+}
+
+.shelf-locked-title {
+  margin: 8px 0 0;
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.shelf-locked-sub {
+  margin: 0 0 14px;
+  font-size: 13px;
+}
+
+/* ---- the switcher's rows ---- */
+
+.shelf-list {
+  max-height: 52vh;
+  overflow-y: auto;
+}
+
+.shelf-row {
+  display: flex;
+  align-items: center;
+  width: 100%;
+  padding: 0 8px 0 4px;
+}
+
+.shelf-row.on {
+  background: var(--accent-soft);
+}
+
+.shelf-row-main {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 1;
+  min-width: 0;
+  padding: 12px 8px;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.shelf-row-mark {
+  flex: none;
+  width: 14px;
+  font-size: 13px;
+  color: var(--accent);
+}
+
+.shelf-row-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 15px;
+}
+
+.shelf-row.on .shelf-row-name {
+  font-weight: 600;
+  color: var(--accent);
+}
+
+.shelf-row-lock {
+  flex: none;
+  font-size: 11px;
+}
+
+.shelf-row-count {
+  flex: none;
+  margin-left: auto;
+  padding-left: 8px;
+  font-size: 12.5px;
+  color: var(--text-3);
+}
+
+/* 40px square so the row's management menu is reachable with a thumb; the
+   sheet's own item rows are full-width, and this one is an aside. */
+.shelf-row-more {
+  flex: none;
+  width: 40px;
+  height: 40px;
+  border: 0;
+  border-radius: 50%;
+  background: none;
+  color: var(--text-3);
+  font-size: 18px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.shelf-row-more:hover {
+  background: var(--panel-2);
+}
+
+/* ---- create / rename / password ---- */
+
+.shelf-form {
+  padding: 6px 18px calc(14px + env(safe-area-inset-bottom));
+}
+
+.shelf-form .edit-actions {
+  margin-top: 14px;
+}
+
+.shelf-form-note {
+  margin: 10px 0 0;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--text-3);
+}
+
+.shelf-form-error {
+  margin: 8px 0 0;
+  font-size: 12.5px;
+  color: var(--danger);
+}
+
+.shelf-move-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.shelf-move-meta {
+  font-size: 12.5px;
+  color: var(--text-3);
+}
+
+@media (max-width: 640px) {
+  /* The shelf's title is the one header item that is allowed to shrink, since
+     its length is whatever the reader named the shelf. It still must not wrap:
+     a header that grows a line pushes the whole grid down. The other pages keep
+     `flex: 0 0 auto` — their titles are fixed words. */
+  .page.shell > .lib-head > h1.lib-title {
+    flex: 0 1 auto;
+    min-width: 0;
+  }
+
+  .shelf-pill {
+    font-size: 18px;
+  }
+
+  /* The selection bar sits above the tab bar, which is in flow at the bottom of
+     the app column and 56px tall (7px + 26px icon + 2px gap + ~15px label +
+     6px, plus the safe area). Same number as `.tabbar-item`'s own padding. */
+  .lib-select-actions {
+    bottom: calc(56px + env(safe-area-inset-bottom));
+    padding: 8px 14px calc(8px + env(safe-area-inset-bottom));
+  }
+}
+
+/* The unlock form is rendered inside the switcher and on its own; the class is
+   the host that gives it the sheet's gutters in both places. */
+.unlock-form {
+  padding: 0 18px calc(14px + env(safe-area-inset-bottom));
+}

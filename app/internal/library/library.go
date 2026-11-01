@@ -45,8 +45,12 @@ type BookDTO struct {
 	ChapterCount int      `json:"chapterCount"`
 	DeletedAt    *string  `json:"deletedAt"`
 	Tags         []string `json:"tags"`
-	CreatedAt    string   `json:"createdAt"`
-	UpdatedAt    string   `json:"updatedAt"`
+	// ShelfID is the shelf the book sits on. The shelf page already knows which
+	// one it is showing, but a cross-shelf search result carries it so the card
+	// can say where the book came from.
+	ShelfID   string `json:"shelfId"`
+	CreatedAt string `json:"createdAt"`
+	UpdatedAt string `json:"updatedAt"`
 }
 
 type ChapterDTO struct {
@@ -79,6 +83,8 @@ type BookRow struct {
 	// FileHash is the sha256 of the imported EPUB ("" for legacy rows);
 	// the dedupe key that stops the same file landing on the shelf twice.
 	FileHash sql.NullString
+	// ShelfID is the container the book lives in ("" only mid-migration).
+	ShelfID sql.NullString
 }
 
 type ChapterRow struct {
@@ -191,7 +197,8 @@ func scanBook(s scanner) (BookRow, error) {
 	var b BookRow
 	err := s.Scan(&b.ID, &b.Title, &b.Author, &b.Language, &b.Publisher,
 		&b.Description, &b.Identifier, &b.CoverHref, &b.SourceName,
-		&b.CreatedAt, &b.UpdatedAt, &b.DeletedAt, &b.TOC, &b.Tags, &b.FileHash)
+		&b.CreatedAt, &b.UpdatedAt, &b.DeletedAt, &b.TOC, &b.Tags, &b.FileHash,
+		&b.ShelfID)
 	return b, err
 }
 
@@ -273,6 +280,7 @@ func newBookDTO(r BookRow, chapterCount int, withCover bool) BookDTO {
 		ChapterCount: chapterCount,
 		DeletedAt:    nullStr(r.DeletedAt),
 		Tags:         parseTags(r.Tags),
+		ShelfID:      r.ShelfID.String,
 		CreatedAt:    r.CreatedAt,
 		UpdatedAt:    r.UpdatedAt,
 	}
@@ -323,27 +331,31 @@ func GetBookRow(id string) (*BookRow, error) {
 	return &b, nil
 }
 
-func ListBooks(keyword string) ([]BookDTO, error) {
+// ListBooks returns the books on one shelf. An empty shelfID means "every
+// shelf that is not locked", which is what the "在其他书架搜" escape hatch asks
+// for — the shelf itself is always named, because a locked shelf has to be
+// excluded by id rather than by a view that pretends to hold everything.
+func ListBooks(keyword, shelfID string) ([]BookDTO, error) {
 	d, err := db.Open()
 	if err != nil {
 		return nil, err
 	}
-	var rows *sql.Rows
+	where := `b.deleted_at IS NULL`
+	args := []any{}
 	if keyword != "" {
 		kw := "%" + keyword + "%"
-		rows, err = d.Query(
-			`SELECT b.* FROM books b
-			 LEFT JOIN reading_progress r ON r.book_id = b.id
-			 WHERE b.deleted_at IS NULL AND (b.title LIKE ? OR b.author LIKE ?)
-			 ORDER BY COALESCE(r.updated_at, b.updated_at) DESC`,
-			kw, kw)
-	} else {
-		rows, err = d.Query(
-			`SELECT b.* FROM books b
-			 LEFT JOIN reading_progress r ON r.book_id = b.id
-			 WHERE b.deleted_at IS NULL
-			 ORDER BY COALESCE(r.updated_at, b.updated_at) DESC`)
+		where += ` AND (b.title LIKE ? OR b.author LIKE ?)`
+		args = append(args, kw, kw)
 	}
+	frag, fargs := shelfFilterSQL(shelfID, "b.shelf_id")
+	where += frag
+	args = append(args, fargs...)
+
+	rows, err := d.Query(
+		`SELECT b.* FROM books b
+		 LEFT JOIN reading_progress r ON r.book_id = b.id
+		 WHERE `+where+`
+		 ORDER BY COALESCE(r.updated_at, b.updated_at) DESC`, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -407,6 +419,11 @@ func warmMissingThumbs(books []BookRow) {
 }
 
 func GetBook(id string) (*BookDTO, error) {
+	// A locked shelf's books are not openable, and the guard belongs here
+	// rather than in the shelf page: /books/:id/read is one typed URL away.
+	if bookShelfLocked(id) {
+		return nil, ErrShelfLocked
+	}
 	row, err := GetBookRow(id)
 	if err != nil {
 		return nil, err
@@ -469,6 +486,12 @@ func ListChapters(bookID string) ([]ChapterDTO, error) {
 }
 
 func GetChapterRow(bookID, chapterID string) (*ChapterRow, error) {
+	// The one choke point every content read passes through (RenderChapter,
+	// GetChapterSource, the chapter editor): a locked shelf's text is not
+	// reachable, however the reader got the book id.
+	if bookShelfLocked(bookID) {
+		return nil, ErrShelfLocked
+	}
 	d, err := db.Open()
 	if err != nil {
 		return nil, err
@@ -650,6 +673,11 @@ func ListTrash() ([]TrashItem, error) {
 		row, err := GetBookRow(id)
 		if err != nil {
 			return nil, err
+		}
+		// A locked shelf's books stay out of the trash list too: "deleted" must
+		// not become the way to read the titles the shelf is hiding.
+		if row != nil && shelfLocked(row.ShelfID.String) {
+			continue
 		}
 		if row != nil {
 			items = append(items, TrashItem{

@@ -119,7 +119,7 @@ type OpdsImportItem struct {
 // Same shape as WebdavImport, including the temp-file round trip: the importer
 // only accepts a path on disk, and keeping the transfer outside the import
 // transaction means a failed download cannot leave a half-built book behind.
-func (b *Backend) OpdsImport(source map[string]any, items []OpdsImportItem) (map[string]any, error) {
+func (b *Backend) OpdsImport(source map[string]any, items []OpdsImportItem, shelfID string) (map[string]any, error) {
 	s, err := opds.ParseSource(source)
 	if err != nil {
 		return nil, err
@@ -151,7 +151,7 @@ func (b *Backend) OpdsImport(source map[string]any, items []OpdsImportItem) (map
 			failures = append(failures, name+": "+e.Error())
 			continue
 		}
-		book, e := library.ImportEpub(tmp, name)
+		book, e := library.ImportEpub(tmp, name, shelfID)
 		_ = os.Remove(tmp)
 		if errors.Is(e, library.ErrDuplicate) {
 			// Same rule as ImportPaths: a book already on the shelf is not a

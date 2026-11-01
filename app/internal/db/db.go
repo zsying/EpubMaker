@@ -59,7 +59,24 @@ CREATE TABLE IF NOT EXISTS books (
   deleted_at TEXT,
   toc TEXT,
   tags TEXT,
-  file_hash TEXT
+  file_hash TEXT,
+  -- Which shelf the book sits on. Appended last so "SELECT *" keeps the same
+  -- column order on fresh and migrated databases alike. Deliberately no
+  -- foreign key: the migration writes '' before the default shelf exists, and
+  -- deleting a shelf moves its books back instead of cascading into them.
+  shelf_id TEXT NOT NULL DEFAULT ''
+);
+
+-- Shelves are containers, not tags: a book belongs to exactly one, and the
+-- password has to hang on the container rather than on a string. pw_hash is
+-- '' when the shelf is open; otherwise pbkdf2-sha256$<iter>$<salt>$<hash>.
+CREATE TABLE IF NOT EXISTS shelves (
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL DEFAULT '',
+  position INTEGER NOT NULL DEFAULT 0,
+  pw_hash TEXT NOT NULL DEFAULT '',
+  created_at TEXT NOT NULL DEFAULT '',
+  updated_at TEXT NOT NULL DEFAULT ''
 );
 
 CREATE TABLE IF NOT EXISTS chapters (
@@ -264,6 +281,19 @@ func migrate(d *sql.DB) error {
 	// Older rows keep '' and fall back to the epub identifier on matching.
 	_, _ = d.Exec(`ALTER TABLE books ADD COLUMN file_hash TEXT`)
 	_, _ = d.Exec(`UPDATE books SET file_hash = '' WHERE file_hash IS NULL`)
+	// Migration: one shelf per book. The column is added here rather than only
+	// in the schema above because older tables already exist, and the index has
+	// to follow the column — putting it in the schema block would make the whole
+	// Exec fail ("no such column") on every pre-shelf database.
+	_, _ = d.Exec(`ALTER TABLE books ADD COLUMN shelf_id TEXT NOT NULL DEFAULT ''`)
+	_, _ = d.Exec(`UPDATE books SET shelf_id = '' WHERE shelf_id IS NULL`)
+	// The default shelf is an ordinary shelf that cannot be deleted, not an
+	// "all books" view: a locked shelf could never appear in such a view.
+	_, _ = d.Exec(`INSERT OR IGNORE INTO shelves (id, name, position, created_at, updated_at)
+	               VALUES ('default', '书架', 0, ?, ?)`,
+		time.Now().UTC().Format(time.RFC3339), time.Now().UTC().Format(time.RFC3339))
+	_, _ = d.Exec(`UPDATE books SET shelf_id = 'default' WHERE shelf_id = ''`)
+	_, _ = d.Exec(`CREATE INDEX IF NOT EXISTS idx_books_shelf ON books(shelf_id)`)
 	// Backfill existing rows so the column is never NULL (Scan into sql.NullString
 	// also tolerates NULL, but an empty string keeps queries/JSON predictable).
 	_, _ = d.Exec(`UPDATE books SET toc = '' WHERE toc IS NULL`)

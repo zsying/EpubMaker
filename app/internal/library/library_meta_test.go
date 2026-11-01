@@ -230,7 +230,7 @@ func TestImportEpubDuplicate(t *testing.T) {
 
 	path := buildEpubFile(t, "Duplicate Target", "urn:uuid:test-dup-1")
 
-	first, err := ImportEpub(path, filepath.Base(path))
+	first, err := ImportEpub(path, filepath.Base(path), DefaultShelfID)
 	if err != nil {
 		t.Fatalf("first import: %v", err)
 	}
@@ -238,12 +238,12 @@ func TestImportEpubDuplicate(t *testing.T) {
 		t.Fatal("first import returned nil")
 	}
 
-	_, err = ImportEpub(path, filepath.Base(path))
+	_, err = ImportEpub(path, filepath.Base(path), DefaultShelfID)
 	if !errors.Is(err, ErrDuplicate) {
 		t.Fatalf("second import should be ErrDuplicate, got %v", err)
 	}
 
-	books, err := ListBooks("")
+	books, err := ListBooks("", DefaultShelfID)
 	if err != nil {
 		t.Fatalf("ListBooks: %v", err)
 	}
@@ -260,7 +260,7 @@ func TestImportEpubDuplicate(t *testing.T) {
 		time.Now().UTC().Format(time.RFC3339), first.ID); err != nil {
 		t.Fatalf("trash book: %v", err)
 	}
-	re, err := ImportEpub(path, filepath.Base(path))
+	re, err := ImportEpub(path, filepath.Base(path), DefaultShelfID)
 	if err != nil {
 		t.Fatalf("re-import after trash should succeed, got %v", err)
 	}

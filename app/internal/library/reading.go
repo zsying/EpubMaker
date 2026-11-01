@@ -339,13 +339,17 @@ func ListAllBookmarks() ([]BookmarkListItem, error) {
 	if err != nil {
 		return nil, err
 	}
+	// Bookmarks carry the book title, so a locked shelf has to be excluded here
+	// as well — otherwise the bookmark drawer lists exactly what the shelf is
+	// hiding.
+	frag, fargs := notLockedSQL("b.shelf_id")
 	rows, err := d.Query(
 		`SELECT bm.id, bm.book_id, b.title, bm.chapter_id, COALESCE(c.title, ''), bm.anchor, bm.label, bm.created_at
 		 FROM bookmarks bm
 		 JOIN books b ON b.id = bm.book_id
 		 LEFT JOIN chapters c ON c.id = bm.chapter_id
-		 WHERE b.deleted_at IS NULL
-		 ORDER BY bm.created_at DESC`)
+		 WHERE b.deleted_at IS NULL`+frag+`
+		 ORDER BY bm.created_at DESC`, fargs...)
 	if err != nil {
 		return nil, err
 	}
@@ -386,14 +390,15 @@ func ListAllAnnotations() ([]AnnotationListItem, error) {
 	if err != nil {
 		return nil, err
 	}
+	frag, fargs := notLockedSQL("b.shelf_id")
 	rows, err := d.Query(
 		`SELECT a.id, a.book_id, b.title, a.chapter_id, COALESCE(c.title, ''),
 		        a.start_offset, a.end_offset, a.text, a.color, a.note, a.page_index, a.created_at, a.updated_at
 		 FROM annotations a
 		 JOIN books b ON b.id = a.book_id
 		 LEFT JOIN chapters c ON c.id = a.chapter_id
-		 WHERE b.deleted_at IS NULL
-		 ORDER BY a.updated_at DESC`)
+		 WHERE b.deleted_at IS NULL`+frag+`
+		 ORDER BY a.updated_at DESC`, fargs...)
 	if err != nil {
 		return nil, err
 	}

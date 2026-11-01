@@ -353,6 +353,8 @@ export interface Book {
   chapterCount: number;
   /** User-managed tags; always an array (possibly empty). */
   tags: string[];
+  /** The shelf this book sits on. */
+  shelfId: string;
   deletedAt: string | null;
   createdAt: string;
   updatedAt: string;
@@ -363,6 +365,22 @@ export interface BookProgress {
   bookId: string;
   percent: number;
   updatedAt: string;
+}
+
+/**
+ * A shelf: the container a book lives on.
+ *
+ * `hasLock` is whether a password is set; `locked` is whether it is still owed
+ * in this session. A shelf with no password is never locked. The lock lives in
+ * the backend's memory, so quitting the app locks every shelf again.
+ */
+export interface Shelf {
+  id: string;
+  name: string;
+  position: number;
+  bookCount: number;
+  hasLock: boolean;
+  locked: boolean;
 }
 
 export interface Chapter {
@@ -799,14 +817,46 @@ export const api = {
   wifiShareStop: () => call<WifiShareStatus>('WifiShareStop'),
   wifiShareStatus: () => call<WifiShareStatus>('WifiShareStatus'),
 
-  listBooks: (keyword?: string) => call<Book[]>('ListBooks', keyword ?? ''),
+  listBooks: (keyword?: string, shelfId?: string) =>
+    call<Book[]>('ListBooks', keyword ?? '', shelfId ?? ''),
+
+  /* ----------------------------- shelves ----------------------------- */
+
+  listShelves: () => call<Shelf[]>('ListShelves'),
+
+  createShelf: (name: string) => call<Shelf>('CreateShelf', name),
+
+  renameShelf: (id: string, name: string) => call<Shelf>('RenameShelf', id, name),
+
+  /** Removes the shelf; its books move back to the default shelf (never deleted). */
+  deleteShelf: (id: string) => call<{ moved: number }>('DeleteShelf', id),
+
+  /** Batch move — one book or thirty, the same call. Returns how many moved. */
+  moveBooks: (bookIds: string[], shelfId: string) => call<number>('MoveBooks', bookIds, shelfId),
+
+  /** Sets, changes (oldPassword) or clears (newPassword '') a shelf password. */
+  setShelfLock: (id: string, oldPassword: string, newPassword: string) =>
+    call<Shelf>('SetShelfLock', id, oldPassword, newPassword),
+
+  /** A wrong password answers `ok:false` plus the backoff, it does not throw. */
+  unlockShelf: (id: string, password: string) =>
+    call<{ ok: boolean; retryAfterMs: number }>('UnlockShelf', id, password),
+
+  lockShelf: (id: string) => call<void>('LockShelf', id),
+
+  /** Puts every shelf back behind its password (the app went to the background). */
+  lockAllShelves: () => call<void>('LockAllShelves'),
 
   /** Opens the native EPUB multi-select dialog; returns [] when cancelled. */
   /** Imports EPUB files from local paths. Both the dialog and an OS file drop end
    * up here — a drop can only be turned into paths by the native side. Books
    * already on the shelf come back as `duplicates`, never as failures. */
-  importPaths: (paths: string[]) =>
-    call<{ books: Book[]; errors: string[]; duplicates?: string[] }>('ImportPaths', paths),
+  importPaths: (paths: string[], shelfId?: string) =>
+    call<{ books: Book[]; errors: string[]; duplicates?: string[] }>(
+      'ImportPaths',
+      paths,
+      shelfId ?? '',
+    ),
 
   getBook: (id: string) => call<Book>('GetBook', id),
 
@@ -935,8 +985,8 @@ export const api = {
   webdavList: (conn: WebDavConn, dirPath: string) =>
     call<WebDavEntry[]>('WebdavList', conn, dirPath),
 
-  webdavImport: (conn: WebDavConn, items: { path: string; name: string }[]) =>
-    call<{ books: Book[]; errors: string[] }>('WebdavImport', conn, items),
+  webdavImport: (conn: WebDavConn, items: { path: string; name: string }[], shelfId?: string) =>
+    call<{ books: Book[]; errors: string[] }>('WebdavImport', conn, items, shelfId ?? ''),
 
   /* ---------------- OPDS catalogs ---------------- */
 
@@ -957,8 +1007,17 @@ export const api = {
    * to fetch (PickEpub), so the edition-picking rules live in exactly one place.
    * `duplicates` is not a failure: the book was already on the shelf.
    */
-  opdsImport: (source: OpdsSource, items: { downloads?: OpdsLink[]; name: string }[]) =>
-    call<{ books: Book[]; errors: string[]; duplicates?: string[] }>('OpdsImport', source, items),
+  opdsImport: (
+    source: OpdsSource,
+    items: { downloads?: OpdsLink[]; name: string }[],
+    shelfId?: string,
+  ) =>
+    call<{ books: Book[]; errors: string[]; duplicates?: string[] }>(
+      'OpdsImport',
+      source,
+      items,
+      shelfId ?? '',
+    ),
 
   /* ---------------- reading: dictionary / vocabulary ---------------- */
 

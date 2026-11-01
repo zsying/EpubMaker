@@ -209,7 +209,7 @@ func wifiShareUpload(w http.ResponseWriter, r *http.Request) {
 			out["errors"] = append(out["errors"].([]string), name+": "+err.Error())
 			continue
 		}
-		book, err := library.ImportEpub(tmpPath, name)
+		book, err := library.ImportEpub(tmpPath, name, "")
 		os.Remove(tmpPath)
 		if errors.Is(err, library.ErrDuplicate) {
 			wifiShare.mu.Lock()

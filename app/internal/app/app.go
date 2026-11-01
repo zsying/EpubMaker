@@ -55,7 +55,7 @@ func (a *App) ImportPending() (int, []string) {
 			continue
 		}
 		name := filepath.Base(p)
-		if _, err := library.ImportEpub(p, name); err != nil {
+		if _, err := library.ImportEpub(p, name, ""); err != nil {
 			errs = append(errs, name+": "+err.Error())
 			continue
 		}

@@ -14,8 +14,28 @@ feature works exactly as before. Everything either feature sends and receives
 is recorded in a local diagnostic log, so a failure can be handed over instead
 of described.
 
+The library also stopped being one flat list. Books now live on shelves — several
+of them, switchable from the title, and a shelf can hold a password, so the
+books you would rather not leave on screen when someone picks the phone up are
+behind a lock rather than in plain sight. Moving books between shelves (in
+batches, too) only repoints a column: files, positions, bookmarks and notes stay
+where they are.
+
 ### Added
 
+- **Books live on shelves, and a shelf can keep a password** — the library was one flat list of
+  196 books with no way to put a wall between them. It now has shelves: create, rename, delete,
+  switch with one tap from the header (the page title became the current shelf's name), and move
+  books between them one at a time or a few dozen at once — long-press a book on the phone, or
+  选择 in the desktop header, then 移动到…. Moving only repoints `shelf_id`: the file, the reading
+  position, the bookmarks, the notes and the vocabulary pointers do not move, so a batch of two
+  hundred is as safe as one. A shelf can be given a password (PBKDF2-SHA256, 120k rounds, standard
+  library only) and a locked shelf is filtered **in SQL**, not in the UI: its books leave the grid,
+  the bookmark / annotation / trash lists and `GetBook`, so a leftover deep link is not a way in.
+  The lock is a curtain rather than a safe — the database is a plain file — and it lives in the
+  process, not on disk: restart and every shelf is locked again. Five wrong passwords start a
+  backoff (10s, doubling, capped at 15 minutes). Nothing recovers a forgotten password from inside
+  the app, on purpose: 一键清除 would mean the lock was never there. See ADR-40.
 - **拉一下页面，就给它贴标签（页面上的标记就是书签）** — pulling the page down draws a bookmark tab out of the
   sheet's top corner; let go past the arm point and the page is marked, pull it once more and the
   mark is gone. The tab is the page's own state, so a page bookmarked from the star or from the
