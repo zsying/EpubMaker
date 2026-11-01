@@ -505,6 +505,14 @@ where they are.
 
 ### Fixed
 
+- **A shelf's new password only took effect after a restart** — reported as "为书架设置完密码后，来回切换
+  书架也不起作用，需要退出系统再进入才生效". `SetShelfLock` marked the shelf unlocked so the password just
+  typed would not be asked again on the spot, but that mark lives in the *process*, not in the *visit*:
+  switching away and back found the shelf still open, and only a cold start (which drops the in-memory
+  mark) made the password real. Leaving a shelf now locks it again, and the switcher refreshes its rows
+  when it opens, so the 🔒 shows up the moment you leave rather than on the next launch. The lock sent on
+  the way out is remembered (`leaveLockRef`) and awaited before the next switch, so tapping away and
+  straight back cannot outrun it. See ADR-40.
 - **新建书架 in the batch-move sheet covered its own input box** — reported as "选择书籍后点新建书架，书籍
   名称的弹窗页面被遮盖，没法输入" and, from the other side, "新建书架时点输入框没有弹窗输入键盘". One
   cause: every bottom sheet is pinned to the same edge with the same `z-index`, so the one later in the DOM

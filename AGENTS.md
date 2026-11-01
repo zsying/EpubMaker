@@ -109,6 +109,9 @@
    - **过滤在 SQL 层**：`ListBooks`、`GetBook`、`GetChapterRow`、`ListAllBookmarks`、
      `ListAllAnnotations`、`ListTrash`。前端过滤只是化妆，一条 `/books/:id/read` 就能绕过。
      锁状态只存在 `library` 包的内存里（`map[string]bool` + mutex），**不落库**——重启即全部上锁。
+   - **解锁只对这一次访问有效**：`unlocked` 标记活在进程里，与"页面还在不在这个书架"无关。离开书架
+     （`applyShelf` 切走）必须 `LockShelf(旧 id)`，否则设完密码后切走再切回不需要密码，看起来像
+     "密码要重启才生效"。`leaveLockRef` 存着这次锁的 promise，`pickShelf` 切换前先 `await` 它。
    - 锁定书架**也不能写**（改名 / 设改密码 / 删除 / 迁入都要先解锁）。前端的 `locked` 可能是上一次
      会话的，判断前先 `loadShelves()` 拿新鲜的（`pickShelf` / `chooseMoveTarget` 已经是 async）。
    - 系统分享与 Wi-Fi 分享没有"当前书架"，一律落默认书架（`resolveImportShelf` 兜空 id / 未知 id
@@ -116,7 +119,7 @@
    - 忘记密码**没有自助恢复**。逃生口是 `UPDATE shelves SET pw_hash='' WHERE id='…'`（写在这里给
      技术支持，不放进界面）。
    - `shelfCache` 必须按 `shelfId` 键控，否则切书架会先闪出上一个书架的书——那是泄密，不是闪一下。
-   - 门禁：`D:\tmp\epub-verify\shelves.cjs`（51 项）+ `app/internal/library/shelves_test.go`（9 个）。
+   - 门禁：`D:\tmp\epub-verify\shelves.cjs`（53 项）+ `app/internal/library/shelves_test.go`（9 个）。
 7c. **一次只开一个底部弹层**（ADR-40 补充）。`.sheet-mask` 全是 `inset:0` + `align-items:flex-end` +
    同一个 `z-index`，所以 DOM 里靠后的那层收点击。叠两层的结果不是"上面盖住下面"，而是**下层抢走
    上层输入框的点击** —— 表现成"点输入框没有键盘"（`document.activeElement` 压根不是那个 `input`）。

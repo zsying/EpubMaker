@@ -538,8 +538,10 @@ func SetShelfLock(id, oldPassword, newPassword string) (*ShelfDTO, error) {
 	if _, err := d.Exec(`UPDATE shelves SET pw_hash = ?, updated_at = ? WHERE id = ?`, hash, nowIso(), id); err != nil {
 		return nil, err
 	}
-	// Setting the password is proof of knowing it: the shelf stays open for the
-	// rest of the session instead of immediately asking for what was just typed.
+	// Setting the password is proof of knowing it: this visit stays open instead
+	// of immediately asking for what was just typed. The page locks the shelf
+	// again as soon as it switches away from it, so the password is back on the
+	// way in — "unlocked" belongs to the visit, not to the process.
 	shelfLocks.Lock()
 	shelfLocks.unlocked[id] = true
 	delete(shelfLocks.fails, id)

@@ -271,6 +271,11 @@ export default function Library() {
   // comes back, not the one that was current when it was created.
   const shelfIdRef = useRef(shelfId);
   shelfIdRef.current = shelfId;
+  // The lock request for the shelf being left. Sent without waiting so a switch
+  // stays instant, but awaited before the next switch: otherwise a fast round
+  // trip can ask the backend about the shelf before it has been locked and be
+  // told it is still open.
+  const leaveLockRef = useRef<Promise<unknown>>(Promise.resolve());
 
   // tag -> book count, most used first (ties by name). Only tags that are
   // actually on books appear here; the chips row and the editor's reuse
@@ -716,6 +721,12 @@ export default function Library() {
   // were made on, so they are dropped with it.
   function applyShelf(id: string) {
     if (id === shelfIdRef.current) return;
+    // Leaving a shelf puts it back behind its password. Typing (or setting) the
+    // password is proof for *this visit*, not a switch that stays on for the
+    // rest of the process: the backend's "unlocked" mark outlives the page, so
+    // without this the shelf looked like it had no password at all until the
+    // app was killed and reopened.
+    leaveLockRef.current = api.lockShelf(shelfIdRef.current).catch(() => undefined);
     shelfIdRef.current = id;
     setShelfId(id);
     rememberShelfId(id);
@@ -736,6 +747,9 @@ export default function Library() {
   // and the alternative is opening a shelf that turns out to be empty because
   // it is locked.
   async function pickShelf(s: Shelf) {
+    // Wait for the shelf being left to be locked first: a tap-away and a tap
+    // back within a second must still find the password in place.
+    await leaveLockRef.current;
     const fresh = (await loadShelves()).find((x) => x.id === s.id) ?? s;
     if (fresh.locked) {
       setUnlockTarget({ shelf: fresh, then: 'open' });
@@ -1057,7 +1071,14 @@ export default function Library() {
             className="shelf-pill"
             title={currentShelf?.name ?? '书架'}
             aria-label={`当前书架：${currentShelf?.name ?? '书架'}，点击切换`}
-            onClick={() => setShelfSheet(true)}
+            // The rows are drawn from the last ListShelves, which can describe a
+            // lock that has moved on: leaving a shelf locks it, so the first
+            // look after a switch has to be refreshed or the row the password
+            // is protecting still looks open.
+            onClick={() => {
+              setShelfSheet(true);
+              void loadShelves();
+            }}
           >
             <span className="shelf-pill-name">{currentShelf?.name ?? '书架'}</span>
             {shelfLocked && (
