@@ -1554,6 +1554,15 @@ export default function Reader() {
     // were registered once against a null ref and never again, so a window
     // resize, a rotation or a viewport change never re-paginated the book.
     if (!stage) return;
+    // The flag belongs to THIS registration, not to the reader. It says "a
+    // measurement was skipped and is owed", and the `focusout` that pays it
+    // back is registered below, in the same breath — so a mark left behind by
+    // an effect that has already been torn down is a debt no one can collect
+    // any more. It is paid by accident often enough to look harmless (the next
+    // `update` clears it as soon as the field is gone), but "often enough" is
+    // not a rule: focus a field, switch to scroll mode, switch back, and the
+    // paged listener came back owing a measurement it had already been served.
+    keyboardSkipRef.current = false;
     const update = () => {
       const next = readViewport();
       // A soft keyboard shrinking the view must not re-paginate the chapter: the
