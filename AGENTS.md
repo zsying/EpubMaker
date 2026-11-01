@@ -93,7 +93,9 @@
     `.reader-paged .reader-stage { touch-action: pan-y }`，**不要**改成 React 的 onTouchMove，
     那是 passive 的）。**手势 handler 读 ref，不读闭包**：`pageIndex`/`pageCount`/邻居章节
     一律经 ref，effect 依赖里只该出现 `mode`——图片加载完 `setPageCount` 就会重挂 effect，
-    重挂会钉回页面并作废 `active`，正在滑的那一页"弹回去且手势失效"。
+    重挂会钉回页面并作废 `active`，正在滑的那一页"弹回去且手势失效"。漏掉这条时的样子：
+    `dragAvailable()` 一直读闭包里的 `pageIndex`，翻到章末再拖还以为自己在第一页，
+    "这一拖是翻页还是换章"整个判反（`pageturn-chapter` 9 条红，2026-11-01 改成 `pageIndexRef`）。
 12. **划词工具栏由"选区"驱动，不由"手势"驱动**。`mouseup` 和 `selectionchange`（140ms 防抖）
     都走 `syncSelectionFromDom()`：手机长按只产生选区、永远没有 `mouseup`，只监听 mouseup 等于
     触摸下划词失效。

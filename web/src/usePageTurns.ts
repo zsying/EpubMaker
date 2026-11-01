@@ -165,6 +165,13 @@ export function usePageTurns(args: {
   // placeBand runs from a listener that may predate the render that measured it.
   const viewWidthRef = useRef(args.viewWidth);
   viewWidthRef.current = args.viewWidth;
+  // Which page the reader is on now — read through a ref for the same reason as
+  // the geometry: this is called from a gesture listener that was registered on
+  // the chapter's first page, and pageIndex has moved several times since. It
+  // used to read the closure's value, so a drag made at the far end of a chapter
+  // still thought it was on the page where the listener had been registered.
+  const pageIndexRef = useRef(pageIndex);
+  pageIndexRef.current = pageIndex;
   // The peek covers the sheet until the new chapter is painted; the measure pass
   // that knows that is declared above this hook and cannot call into it, so it
   // calls through here.
@@ -268,7 +275,8 @@ export function usePageTurns(args: {
 
   function dragAvailable(dir: 1 | -1) {
     const { step, max } = turnGeomRef.current;
-    return dir > 0 ? pageIndex + step <= max : pageIndex - step >= 0;
+    const at = pageIndexRef.current;
+    return dir > 0 ? at + step <= max : at - step >= 0;
   }
 
   // Is there a page to turn to past this chapter's edge? Only when the

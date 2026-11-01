@@ -2037,8 +2037,12 @@ hook 只认坐标、几何和回调；凡是需要知道"这本书"的判断，�
 **已知代价。** 每次渲染多一次 `cb.current = args`（与既有 ref 镜像同构）；调试时要在两个文件之间
 跳。换来的是 `Reader.tsx` 少 600 行，手势能在一个文件里从头读到尾。
 
-**验收。** `pageturn-drag` 31/31、`turn-sensitivity` 28/28、`tap-hold` 6/6、`scroll-tap` 7/7、
-`progress-hide` 4/4、`mobile` 193/193、`verify` 19/19、`annotate-note` 21/21；`tsc` 与
-`prettier --check` 干净。`pageturn-chapter` 在重构前后同为 9 项红（本机 Edge 上 peek 不跟随
-拖拽，`404 vs 344`），其中"章节翻页中触摸不动页面"一条时红时绿——是既有问题，不是这次引入的，
-留待单独处理。
+**顺带修掉的。** 依赖收缩到 `[mode, chapterKey]`（ADR-43）之后，`dragAvailable()` 仍在读闭包里的
+`pageIndex`：注册发生在章首，翻到章末再拖，它还以为自己在第一页，"这一拖是翻页还是换章"整个判反。
+`pageturn-chapter` 那 9 条红（peek 不跟随拖拽、拖不动章节、落点不对、拖回时停在第 10 页）全部由它
+而来——而这条门禁在 ADR-43 之后一直没再跑过。改成 `pageIndexRef`，29/29。红线 11 里"手势 handler
+读 ref"这句话本来就是对的，只是代码有一处没做到。
+
+**验收。** `pageturn-chapter` 29/29、`pageturn-drag` 31/31、`turn-sensitivity` 28/28、
+`tap-hold` 6/6、`scroll-tap` 7/7、`progress-hide` 4/4、`mobile` 193/193、`verify` 19/19、
+`annotate-note` 21/21；`tsc` 与 `prettier --check` 干净。
