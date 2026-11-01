@@ -28,21 +28,29 @@ import (
 /* ----------------------------- types ----------------------------- */
 
 type BookDTO struct {
-	ID           string  `json:"id"`
-	Title        string  `json:"title"`
-	Author       string  `json:"author"`
-	Language     string  `json:"language"`
-	Publisher    string  `json:"publisher"`
-	Description  string  `json:"description"`
-	Identifier   string  `json:"identifier"`
-	CoverHref    *string `json:"coverHref"`
-	CoverURL     *string `json:"coverUrl"`
-	SourceName   *string `json:"sourceName"`
-	ChapterCount int     `json:"chapterCount"`
-	DeletedAt    *string `json:"deletedAt"`
+	ID          string  `json:"id"`
+	Title       string  `json:"title"`
+	Author      string  `json:"author"`
+	Language    string  `json:"language"`
+	Publisher   string  `json:"publisher"`
+	Description string  `json:"description"`
+	Identifier  string  `json:"identifier"`
+	CoverHref   *string `json:"coverHref"`
+	CoverURL    *string `json:"coverUrl"`
+	// ThumbURL is a ~20 KB JPEG of the cover, sized for the shelf's cards. The
+	// list answer carries this instead of CoverURL: a forty-book shelf used to
+	// ship 16 MB of base64 covers that no card could display at more than 170px.
+	ThumbURL     *string  `json:"thumbUrl"`
+	SourceName   *string  `json:"sourceName"`
+	ChapterCount int      `json:"chapterCount"`
+	DeletedAt    *string  `json:"deletedAt"`
 	Tags         []string `json:"tags"`
-	CreatedAt    string  `json:"createdAt"`
-	UpdatedAt    string  `json:"updatedAt"`
+	// ShelfID is the shelf the book sits on. The shelf page already knows which
+	// one it is showing, but a cross-shelf search result carries it so the card
+	// can say where the book came from.
+	ShelfID   string `json:"shelfId"`
+	CreatedAt string `json:"createdAt"`
+	UpdatedAt string `json:"updatedAt"`
 }
 
 type ChapterDTO struct {
@@ -75,6 +83,8 @@ type BookRow struct {
 	// FileHash is the sha256 of the imported EPUB ("" for legacy rows);
 	// the dedupe key that stops the same file landing on the shelf twice.
 	FileHash sql.NullString
+	// ShelfID is the container the book lives in ("" only mid-migration).
+	ShelfID sql.NullString
 }
 
 type ChapterRow struct {
@@ -118,13 +128,13 @@ type ChapterSource struct {
 
 // BookPatch / ChapterPatch / ChapterCreateOpts map the JSON request bodies.
 type BookPatch struct {
-	Title       *string `json:"title"`
-	Author      *string `json:"author"`
-	Language    *string `json:"language"`
-	Publisher   *string `json:"publisher"`
-	Description *string `json:"description"`
-	Identifier  *string `json:"identifier"`
-	CoverHref   *string `json:"coverHref"`
+	Title       *string   `json:"title"`
+	Author      *string   `json:"author"`
+	Language    *string   `json:"language"`
+	Publisher   *string   `json:"publisher"`
+	Description *string   `json:"description"`
+	Identifier  *string   `json:"identifier"`
+	CoverHref   *string   `json:"coverHref"`
 	Tags        *[]string `json:"tags"`
 }
 
@@ -187,7 +197,8 @@ func scanBook(s scanner) (BookRow, error) {
 	var b BookRow
 	err := s.Scan(&b.ID, &b.Title, &b.Author, &b.Language, &b.Publisher,
 		&b.Description, &b.Identifier, &b.CoverHref, &b.SourceName,
-		&b.CreatedAt, &b.UpdatedAt, &b.DeletedAt, &b.TOC, &b.Tags, &b.FileHash)
+		&b.CreatedAt, &b.UpdatedAt, &b.DeletedAt, &b.TOC, &b.Tags, &b.FileHash,
+		&b.ShelfID)
 	return b, err
 }
 
@@ -213,12 +224,45 @@ func DataURL(mediaType string, data []byte) string {
 	return "data:" + mediaType + ";base64," + base64.StdEncoding.EncodeToString(data)
 }
 
+// toBookDTO is the single-book answer (GetBook, UpdateBook, import, split):
+// the editor and the split preview draw the real cover, so both sizes are
+// filled in.
 func toBookDTO(r BookRow, chapterCount int) BookDTO {
-	var coverURL *string
+	return newBookDTO(r, chapterCount, true)
+}
+
+// toBookListDTO is the shelf answer. Cards draw the thumbnail; the full cover
+// is included only when no thumbnail could be made (an undecodable format such
+// as WEBP, or a book imported before thumbnails existed), so those books keep
+// their covers while everything else drops from ~400 KB to ~20 KB per card.
+func toBookListDTO(r BookRow, chapterCount int) BookDTO {
+	return newBookDTO(r, chapterCount, false)
+}
+
+func newBookDTO(r BookRow, chapterCount int, withCover bool) BookDTO {
+	var coverURL, thumbURL *string
 	if r.CoverHref.Valid && r.CoverHref.String != "" {
-		if buf, err := storage.ReadContent(r.ID, r.CoverHref.String); err == nil {
-			u := DataURL(mime.GuessMediaType(r.CoverHref.String), buf)
-			coverURL = &u
+		href := r.CoverHref.String
+		var b []byte
+		var ok bool
+		if withCover {
+			// One book on screen: build the preview if it is missing, the full
+			// cover is about to be read anyway.
+			b, ok = thumbFor(r.ID, href)
+		} else {
+			// Shelf: disk only. Missing previews are filled in by the background
+			// warmer, never inline — see warmMissingThumbs.
+			b, ok = readThumb(r.ID, href)
+		}
+		if ok {
+			u := DataURL(thumbMime, b)
+			thumbURL = &u
+		}
+		if withCover || thumbURL == nil {
+			if buf, err := storage.ReadContent(r.ID, href); err == nil {
+				u := DataURL(mime.GuessMediaType(href), buf)
+				coverURL = &u
+			}
 		}
 	}
 	return BookDTO{
@@ -231,10 +275,12 @@ func toBookDTO(r BookRow, chapterCount int) BookDTO {
 		Identifier:   r.Identifier,
 		CoverHref:    nullStr(r.CoverHref),
 		CoverURL:     coverURL,
+		ThumbURL:     thumbURL,
 		SourceName:   nullStr(r.SourceName),
 		ChapterCount: chapterCount,
 		DeletedAt:    nullStr(r.DeletedAt),
 		Tags:         parseTags(r.Tags),
+		ShelfID:      r.ShelfID.String,
 		CreatedAt:    r.CreatedAt,
 		UpdatedAt:    r.UpdatedAt,
 	}
@@ -285,27 +331,31 @@ func GetBookRow(id string) (*BookRow, error) {
 	return &b, nil
 }
 
-func ListBooks(keyword string) ([]BookDTO, error) {
+// ListBooks returns the books on one shelf. An empty shelfID means "every
+// shelf that is not locked", which is what the "在其他书架搜" escape hatch asks
+// for — the shelf itself is always named, because a locked shelf has to be
+// excluded by id rather than by a view that pretends to hold everything.
+func ListBooks(keyword, shelfID string) ([]BookDTO, error) {
 	d, err := db.Open()
 	if err != nil {
 		return nil, err
 	}
-	var rows *sql.Rows
+	where := `b.deleted_at IS NULL`
+	args := []any{}
 	if keyword != "" {
 		kw := "%" + keyword + "%"
-		rows, err = d.Query(
-			`SELECT b.* FROM books b
-			 LEFT JOIN reading_progress r ON r.book_id = b.id
-			 WHERE b.deleted_at IS NULL AND (b.title LIKE ? OR b.author LIKE ?)
-			 ORDER BY COALESCE(r.updated_at, b.updated_at) DESC`,
-			kw, kw)
-	} else {
-		rows, err = d.Query(
-			`SELECT b.* FROM books b
-			 LEFT JOIN reading_progress r ON r.book_id = b.id
-			 WHERE b.deleted_at IS NULL
-			 ORDER BY COALESCE(r.updated_at, b.updated_at) DESC`)
+		where += ` AND (b.title LIKE ? OR b.author LIKE ?)`
+		args = append(args, kw, kw)
 	}
+	frag, fargs := shelfFilterSQL(shelfID, "b.shelf_id")
+	where += frag
+	args = append(args, fargs...)
+
+	rows, err := d.Query(
+		`SELECT b.* FROM books b
+		 LEFT JOIN reading_progress r ON r.book_id = b.id
+		 WHERE `+where+`
+		 ORDER BY COALESCE(r.updated_at, b.updated_at) DESC`, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -340,12 +390,40 @@ func ListBooks(keyword string) ([]BookDTO, error) {
 
 	out := make([]BookDTO, 0, len(books))
 	for _, b := range books {
-		out = append(out, toBookDTO(b, counts[b.ID]))
+		out = append(out, toBookListDTO(b, counts[b.ID]))
 	}
+	// Books imported before thumbnails existed have no preview yet, and each one
+	// that falls back to its full cover keeps the list as heavy as it was. Building
+	// them here would make the first list slow instead of the shelf; a background
+	// pass makes the next visit small, without anyone waiting for it.
+	warmMissingThumbs(books)
 	return out, nil
 }
 
+// warmMissingThumbs builds shelf thumbnails for the whole library once per
+// process, off the request path.
+func warmMissingThumbs(books []BookRow) {
+	thumbWarm.Do(func() {
+		missing := make([]BookRow, 0, len(books))
+		for _, b := range books {
+			if b.CoverHref.Valid && b.CoverHref.String != "" {
+				missing = append(missing, b)
+			}
+		}
+		go func() {
+			for _, b := range missing {
+				warmThumb(b.ID, b.CoverHref.String)
+			}
+		}()
+	})
+}
+
 func GetBook(id string) (*BookDTO, error) {
+	// A locked shelf's books are not openable, and the guard belongs here
+	// rather than in the shelf page: /books/:id/read is one typed URL away.
+	if bookShelfLocked(id) {
+		return nil, ErrShelfLocked
+	}
 	row, err := GetBookRow(id)
 	if err != nil {
 		return nil, err
@@ -408,6 +486,12 @@ func ListChapters(bookID string) ([]ChapterDTO, error) {
 }
 
 func GetChapterRow(bookID, chapterID string) (*ChapterRow, error) {
+	// The one choke point every content read passes through (RenderChapter,
+	// GetChapterSource, the chapter editor): a locked shelf's text is not
+	// reachable, however the reader got the book id.
+	if bookShelfLocked(bookID) {
+		return nil, ErrShelfLocked
+	}
 	d, err := db.Open()
 	if err != nil {
 		return nil, err
@@ -589,6 +673,11 @@ func ListTrash() ([]TrashItem, error) {
 		row, err := GetBookRow(id)
 		if err != nil {
 			return nil, err
+		}
+		// A locked shelf's books stay out of the trash list too: "deleted" must
+		// not become the way to read the titles the shelf is hiding.
+		if row != nil && shelfLocked(row.ShelfID.String) {
+			continue
 		}
 		if row != nil {
 			items = append(items, TrashItem{

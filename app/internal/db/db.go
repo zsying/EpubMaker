@@ -5,8 +5,10 @@ package db
 
 import (
 	"database/sql"
+	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	_ "modernc.org/sqlite"
@@ -57,7 +59,24 @@ CREATE TABLE IF NOT EXISTS books (
   deleted_at TEXT,
   toc TEXT,
   tags TEXT,
-  file_hash TEXT
+  file_hash TEXT,
+  -- Which shelf the book sits on. Appended last so "SELECT *" keeps the same
+  -- column order on fresh and migrated databases alike. Deliberately no
+  -- foreign key: the migration writes '' before the default shelf exists, and
+  -- deleting a shelf moves its books back instead of cascading into them.
+  shelf_id TEXT NOT NULL DEFAULT ''
+);
+
+-- Shelves are containers, not tags: a book belongs to exactly one, and the
+-- password has to hang on the container rather than on a string. pw_hash is
+-- '' when the shelf is open; otherwise pbkdf2-sha256$<iter>$<salt>$<hash>.
+CREATE TABLE IF NOT EXISTS shelves (
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL DEFAULT '',
+  position INTEGER NOT NULL DEFAULT 0,
+  pw_hash TEXT NOT NULL DEFAULT '',
+  created_at TEXT NOT NULL DEFAULT '',
+  updated_at TEXT NOT NULL DEFAULT ''
 );
 
 CREATE TABLE IF NOT EXISTS chapters (
@@ -185,6 +204,59 @@ CREATE TABLE IF NOT EXISTS dict_online (
   source      TEXT NOT NULL DEFAULT '',
   fetched_at  TEXT NOT NULL DEFAULT ''
 );
+
+-- AI answers, cached per capability + input hash. The key is composed by the
+-- aicache package (kind + sha256 of the exact prompt input); response is the
+-- capability's own JSON result. An empty response is a tombstone: the
+-- provider answered "nothing to say", and the question is not asked again.
+-- Network and HTTP failures never reach this table — only valid answers do,
+-- so a flaky provider stays retryable and a changed key stays re-askable.
+CREATE TABLE IF NOT EXISTS ai_cache (
+  key        TEXT PRIMARY KEY,
+  kind       TEXT NOT NULL DEFAULT '',
+  response   TEXT NOT NULL DEFAULT '',
+  created_at TEXT NOT NULL DEFAULT ''
+);
+
+-- AI conversations: one transcript per explain / parse / summarize answer,
+-- plus any chat the reader started by hand. cache_key ties the transcript to
+-- the ai_cache row of the call that created it, so the same question answered
+-- twice records once. origin says where it came from (lookup / parse /
+-- summarize / manual); the reader sees it as a badge on the list page.
+CREATE TABLE IF NOT EXISTS ai_conversations (
+  id         TEXT PRIMARY KEY,
+  title      TEXT NOT NULL DEFAULT '',
+  origin     TEXT NOT NULL DEFAULT 'manual',
+  cache_key  TEXT NOT NULL DEFAULT '',
+  created_at TEXT NOT NULL DEFAULT '',
+  updated_at TEXT NOT NULL DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS idx_aichat_updated ON ai_conversations(updated_at);
+
+-- The transcript itself: the system prompt is stored as a message too, so the
+-- conversation page can show everything that actually went to the provider.
+CREATE TABLE IF NOT EXISTS ai_messages (
+  id              TEXT PRIMARY KEY,
+  conversation_id TEXT NOT NULL REFERENCES ai_conversations(id) ON DELETE CASCADE,
+  role            TEXT NOT NULL DEFAULT 'user',
+  content         TEXT NOT NULL DEFAULT '',
+  created_at      TEXT NOT NULL DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS idx_aimsg_conv ON ai_messages(conversation_id);
+
+-- System prompts the reader has saved in the LLM settings page and picks from
+-- when starting a hand-made conversation. The prompt a conversation actually
+-- used is stored as its first message (see ai_messages), so this table is a
+-- library, not a source of truth: editing or deleting a prompt never rewrites
+-- an existing transcript.
+CREATE TABLE IF NOT EXISTS ai_prompts (
+  id         TEXT PRIMARY KEY,
+  name       TEXT NOT NULL DEFAULT '',
+  content    TEXT NOT NULL DEFAULT '',
+  is_system  INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL DEFAULT '',
+  updated_at TEXT NOT NULL DEFAULT ''
+);
 `
 
 func migrate(d *sql.DB) error {
@@ -209,6 +281,19 @@ func migrate(d *sql.DB) error {
 	// Older rows keep '' and fall back to the epub identifier on matching.
 	_, _ = d.Exec(`ALTER TABLE books ADD COLUMN file_hash TEXT`)
 	_, _ = d.Exec(`UPDATE books SET file_hash = '' WHERE file_hash IS NULL`)
+	// Migration: one shelf per book. The column is added here rather than only
+	// in the schema above because older tables already exist, and the index has
+	// to follow the column — putting it in the schema block would make the whole
+	// Exec fail ("no such column") on every pre-shelf database.
+	_, _ = d.Exec(`ALTER TABLE books ADD COLUMN shelf_id TEXT NOT NULL DEFAULT ''`)
+	_, _ = d.Exec(`UPDATE books SET shelf_id = '' WHERE shelf_id IS NULL`)
+	// The default shelf is an ordinary shelf that cannot be deleted, not an
+	// "all books" view: a locked shelf could never appear in such a view.
+	_, _ = d.Exec(`INSERT OR IGNORE INTO shelves (id, name, position, created_at, updated_at)
+	               VALUES ('default', '书架', 0, ?, ?)`,
+		time.Now().UTC().Format(time.RFC3339), time.Now().UTC().Format(time.RFC3339))
+	_, _ = d.Exec(`UPDATE books SET shelf_id = 'default' WHERE shelf_id = ''`)
+	_, _ = d.Exec(`CREATE INDEX IF NOT EXISTS idx_books_shelf ON books(shelf_id)`)
 	// Backfill existing rows so the column is never NULL (Scan into sql.NullString
 	// also tolerates NULL, but an empty string keeps queries/JSON predictable).
 	_, _ = d.Exec(`UPDATE books SET toc = '' WHERE toc IS NULL`)
@@ -241,7 +326,106 @@ func migrate(d *sql.DB) error {
 	                SELECT term, lookups, first_at, last_at FROM vocab_seen`)
 	_, _ = d.Exec(`INSERT OR IGNORE INTO lookup_history (term, lookups, first_at, last_at)
 	                SELECT term, lookups, created_at, updated_at FROM vocab`)
-	return nil
+	// A bookmark is a spot in a chapter, so the same spot is one bookmark.
+	// Builds before this one let the bookmark drawer's 添加当前页 button insert the
+	// same page again on every press; keep the first copy of each spot, then put
+	// a unique index in place so no caller can do that again. The copies have to
+	// go first: creating the index over a database that already holds duplicates
+	// fails, and the schema block above runs before this point on every open.
+	_, _ = d.Exec(`DELETE FROM bookmarks WHERE rowid NOT IN (
+	                 SELECT MIN(rowid) FROM bookmarks GROUP BY book_id, chapter_id, anchor)`)
+	_, _ = d.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_bookmarks_page
+	               ON bookmarks(book_id, chapter_id, anchor)`)
+	// Migration: ai_prompts grew the is_system flag (seeded system prompts:
+	// 对话 / 查词 / 拆句 / 导读). Older databases get the column with every
+	// row a plain user prompt; aiprompt.seed() then fills the system rows in.
+	_, _ = d.Exec(`ALTER TABLE ai_prompts ADD COLUMN is_system INTEGER NOT NULL DEFAULT 0`)
+	_, _ = d.Exec(`UPDATE ai_prompts SET is_system = 0 WHERE is_system IS NULL`)
+	return retitleChaptersFromTOC(d)
+}
+
+// retitleChaptersFromTOC is a one-time data migration, guarded by
+// PRAGMA user_version so it runs once per database rather than on every open.
+//
+// Chapter titles were derived by looking the spine href up in a flat
+// href->title map keyed by the nav's href *including* its #fragment, which
+// never matches a document. A book whose nav anchors every section therefore
+// fell back to each file's own <title>: 邓小平时代 shipped 33 Chinese section
+// names and every chapter was called "Deng Xiaoping and the Transformation of
+// China (Chinese Edition)". The import now strips the fragment, but the titles
+// are written at import time — so existing shelves are re-derived here from the
+// nav JSON already stored in books.toc. No re-import, no progress lost.
+func retitleChaptersFromTOC(d *sql.DB) error {
+	var version int
+	if err := d.QueryRow(`PRAGMA user_version`).Scan(&version); err != nil {
+		return err
+	}
+	if version >= 1 {
+		return nil
+	}
+	rows, err := d.Query(`SELECT id, toc FROM books WHERE toc IS NOT NULL AND toc <> ''`)
+	if err != nil {
+		return err
+	}
+	type bookToc struct {
+		id  string
+		toc string
+	}
+	var books []bookToc
+	for rows.Next() {
+		var b bookToc
+		if err := rows.Scan(&b.id, &b.toc); err != nil {
+			rows.Close()
+			return err
+		}
+		books = append(books, b)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return err
+	}
+
+	type node struct {
+		Href     string `json:"href"`
+		Title    string `json:"title"`
+		Children []node `json:"children"`
+	}
+	for _, b := range books {
+		var list []node
+		if err := json.Unmarshal([]byte(b.toc), &list); err != nil {
+			continue // a toc we cannot read is a toc we leave alone
+		}
+		titles := map[string]string{}
+		var walk func([]node)
+		walk = func(ns []node) {
+			for _, n := range ns {
+				key := n.Href
+				if i := strings.IndexByte(key, '#'); i >= 0 {
+					key = key[:i]
+				}
+				if key != "" && n.Title != "" {
+					if _, seen := titles[key]; !seen {
+						titles[key] = n.Title // document order: first label wins
+					}
+				}
+				walk(n.Children)
+			}
+		}
+		walk(list)
+		if len(titles) == 0 {
+			continue
+		}
+		upd, err := d.Prepare(`UPDATE chapters SET title = ? WHERE book_id = ? AND href = ?`)
+		if err != nil {
+			return err
+		}
+		for href, title := range titles {
+			_, _ = upd.Exec(title, b.id, href)
+		}
+		upd.Close()
+	}
+	_, err = d.Exec(`PRAGMA user_version = 1`)
+	return err
 }
 
 // Close closes the shared database connection. Safe to call multiple times.

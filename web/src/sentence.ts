@@ -5,11 +5,25 @@
    single definition of "where in the chapter am I". */
 
 import DOMPurify from 'dompurify';
+import { stripInvisible } from './wordHit';
 
 /** How chapter markup is cleaned before the reader shows it — and before any
  *  text is measured off it, which is the same thing twice: the offsets only
- *  mean something if both sides see the same characters. */
-export const CHAPTER_PURIFY = { ADD_ATTR: ['target'], FORBID_TAGS: ['script', 'style', 'link'] };
+ *  mean something if both sides see the same characters.
+ *
+ *  `class` and `id` are stripped on purpose. The book's own stylesheet is never
+ *  loaded here, so a class can never style the content it came with — the only
+ *  thing it can do is collide with the app's classes. A txt-converted Chinese
+ *  EPUB wraps whole chapters in `<div class="main">`, which picks up the app
+ *  shell's `.main { overflow-y: auto }`; inside the multicol strip a scroll
+ *  container is monolithic — it never splits across columns — and the chapter
+ *  paginates to a single page while scroll mode looks fine. Ids collide the
+ *  same way (`#root`), and nothing here navigates by DOM id. */
+export const CHAPTER_PURIFY = {
+  ADD_ATTR: ['target'],
+  FORBID_TAGS: ['script', 'style', 'link'],
+  FORBID_ATTR: ['class', 'id'],
+};
 
 /** A detached chapter container: the markup the reader shows, parsed the way the
  *  reader parses it, and inert — a detached node never fetches an image.
@@ -43,6 +57,24 @@ function elementStart(root: Node, el: Element): number {
   let n: Node | null;
   while ((n = walker.nextNode())) {
     if (el.contains(n)) return seen;
+    seen += (n.textContent || '').length;
+  }
+  return seen;
+}
+
+/** The text offset an anchor mark stands at.
+ *
+ *  An anchor is usually an empty element (`<a data-anc="filepos109"></a>`), so
+ *  asking where its own text starts finds nothing — the position is the next
+ *  character *after* it. A wrapped anchor (`<a data-anc="x">标题</a>`) points at
+ *  its first character instead. Both cases are what a TOC jump needs. */
+export function anchorOffset(root: Node, el: Element): number {
+  const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+  let seen = 0;
+  let n: Node | null;
+  while ((n = walker.nextNode())) {
+    if (el.contains(n)) return seen;
+    if (el.compareDocumentPosition(n) & Node.DOCUMENT_POSITION_FOLLOWING) return seen;
     seen += (n.textContent || '').length;
   }
   return seen;
@@ -164,9 +196,26 @@ function blockBounds(root: HTMLElement, offset: number): { from: number; to: num
   return { from: 0, to: total };
 }
 
-// A paragraph-long sentence cannot bloat a notebook entry, so the walk is capped
-// on both sides.
-const SENTENCE_CAP = 220;
+/**
+ * How long an example sentence may get before it is windowed around the word.
+ *
+ * This is deliberately generous. The old cap (220 characters, counted on each
+ * side of the word) cut real sentences in half: "Lessons in Chemistry" opens
+ * with one 600-character semicolon-linked sentence, and a reader who looked a
+ * word up inside it got "...back before anyone knew there'd even" — not a
+ * sentence, not even a clause. Half a sentence explains nothing, so the walk
+ * now runs to the paragraph's own end and only a block with no sentence
+ * terminators at all (a poem, a wall of dialogue, a table) is windowed.
+ *
+ * 800 is a ceiling, not a target: it leaves room for the longest literary
+ * sentence met in practice (Dickens, or a 600-character opening like the one
+ * above) while still refusing to hand a chapter's worth of text to a prompt.
+ */
+const MAX_SENTENCE = 800;
+
+/** Whitespace as the sentence extractor counts it — including the ideographic
+ *  space, which is how CJK text represents a break. */
+const SPACE = /[\s\u3000]/;
 
 /**
  * The sentence surrounding [start,end) in the rendered chapter text. Used as the
@@ -183,26 +232,67 @@ export function sentenceAt(root: HTMLElement, start: number, end: number): strin
   const { from, to } = blockBounds(root, start);
   const isStop = (c: string) => c === '.' || c === '!' || c === '?';
   let s = Math.max(from, Math.min(start, to));
-  while (s > from && start - s < SENTENCE_CAP && !isStop(text[s - 1])) s--;
+  while (s > from && !isStop(text[s - 1])) s--;
   let e = Math.max(s, Math.min(end, to));
-  while (e < to && e - end < SENTENCE_CAP && !isStop(text[e])) e++;
-  return text
-    .slice(s, Math.min(e + 1, to))
-    .replace(/\s+/g, ' ')
-    .trim();
+  while (e < to && !isStop(text[e])) e++;
+  // `e` stops ON the terminator, so the slice has to include it.
+  let stop = Math.min(e + 1, to);
+
+  // A block can hold no terminator at all. Rather than hand back a fragment,
+  // keep the part around the word and say so with an ellipsis on the side that
+  // was cut — a sentence that begins mid-clause should look like one.
+  let cutStart = false;
+  let cutEnd = false;
+  if (stop - s > MAX_SENTENCE) {
+    const mid = Math.round((Math.max(s, start) + Math.min(stop, end)) / 2);
+    let ws = Math.max(s, mid - Math.round(MAX_SENTENCE / 2));
+    let we = Math.min(stop, ws + MAX_SENTENCE);
+    ws = Math.max(s, we - MAX_SENTENCE);
+    // Never cut a word in half: step out to the nearest space. Chinese has none
+    // inside a sentence, so the search is bounded and a cut between characters
+    // (which is normal there) is what happens when it runs out.
+    let guard = 40;
+    while (ws < we && guard-- > 0 && !SPACE.test(text[ws - 1])) ws++;
+    guard = 40;
+    while (we > ws && guard-- > 0 && !SPACE.test(text[we])) we--;
+    cutStart = ws > s;
+    cutEnd = we < stop;
+    s = ws;
+    stop = we;
+  }
+
+  // The sentence leaves the reader as TEXT (notebook row, AI prompt): drop the
+  // invisible marks the converter left inside words, so "ac\u00ADcused" is not
+  // stored as a word nothing can match. The offsets above are untouched — they
+  // count the characters that are in the document.
+  const body = text.slice(s, stop).replace(/\s+/g, ' ').trim();
+  return stripInvisible((cutStart ? '…' : '') + body + (cutEnd ? '…' : ''));
 }
 
 /**
+ * A context that ends with its own full stop — trailing quotes and brackets
+ * allowed, since a sentence of dialogue ends `…go."` rather than `…go.`. A row
+ * that does not is a row that was cut, and there is still a chapter to re-cut it
+ * from.
+ */
+const ENDS_CLEAN = /[.!?…]["'”’»)\]]*$/u;
+
+/**
  * Whether a stored context is obviously a fragment rather than the sentence it
- * claims to be: a bare word, a piece that starts with punctuation, or one that
- * begins mid-clause. Rows written before the extraction understood hard-wrapped
- * sources look like this, and can be re-cut from the chapter.
+ * claims to be: a bare word, a piece that starts with punctuation, one that
+ * begins mid-clause, or one that stops before its own full stop. Rows written
+ * before the extraction understood hard-wrapped sources (or its 220-character
+ * cap) look like this, and can be re-cut from the chapter.
  */
 export function looksLikeFragment(context: string, term: string): boolean {
   const s = (context || '').trim();
   if (!s) return true;
+  // Our own marker: a windowed sentence is already as complete as the extractor
+  // could make it, and re-cutting it produces the same string.
+  if (s.startsWith('…')) return false;
   if (s === term.trim()) return true;
   if (!/\s/.test(s)) return true;
   if (/^[^\p{L}\p{N}"'“‘(¡¿]/u.test(s)) return true;
-  return /^[a-z]/.test(s);
+  if (/^[a-z]/.test(s)) return true;
+  return !ENDS_CLEAN.test(s);
 }

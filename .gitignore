@@ -9,10 +9,11 @@ web/dist/
 
 **/*.exe
 
-# Wails 生成物（每次 wails dev/build 自动重建，不入库）
+# 桌面构建产物（build-windows.ps1 每次重建）
 app/build/bin/
+app/build/windows/info.rendered.json
+app/wails_windows_*.syso
 web/package.json.md5
-web/src/wailsjs/
 # 前端产物由 web/dist 复制到 app/frontend/dist 用于 go:embed；只保留 .gitkeep
 app/frontend/dist/*
 !app/frontend/dist/
@@ -21,7 +22,6 @@ app/frontend/dist/*
 # Android 构建产物。cmd/mobile/build/ 下的 Java 宿主与 Gradle 配置是源码，
 # 必须入库；APK、真机截图等生成物统一落在 app/build/mobile/。
 app/build/mobile/
-app/cmd/mobile/frontend/dist/
 app/cmd/mobile/build/android/gen/
 app/cmd/mobile/build/android/overlay.json
 app/cmd/mobile/build/android/build/

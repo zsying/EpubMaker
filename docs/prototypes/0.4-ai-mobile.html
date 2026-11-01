@@ -1,0 +1,543 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>0.4 手机端 AI 能力 · 交互原型（定稿）</title>
+<style>
+:root{
+  --bg:#f6f7f9; --panel:#ffffff; --panel-2:#fbfbfd;
+  --border:#e3e6ec; --border-strong:#d2d7e0;
+  --text:#1d2129; --text-2:#5a6272; --text-3:#8b93a3;
+  --accent:#2f6bff; --accent-soft:#eaf0ff; --accent-line:#c9d9ff;
+  --danger:#d93b3b; --danger-soft:#fdeaea;
+  --ok:#1a9c62; --ok-soft:#eaf7f0;
+  --fill:#eef1f6; --fill-2:#f2f4f8;
+  --radius:10px;
+  --shadow:0 1px 2px rgba(16,24,40,.04),0 4px 16px rgba(16,24,40,.06);
+  --font:-apple-system,BlinkMacSystemFont,'Segoe UI','PingFang SC','Hiragino Sans GB','Microsoft YaHei',sans-serif;
+  --font-serif:Georgia,'Songti SC','SimSun','Source Han Serif SC',serif;
+  --rd-bg:#f6f7f9; --rd-text:#22262e; --rd-sel:rgba(47,107,255,.22);
+  --chrome-bg:rgba(255,255,255,.97); --chrome-border:#e3e6ec; --chrome-muted:#8b93a3;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:var(--bg);color:var(--text);font-family:var(--font);font-size:14px;line-height:1.6;padding:32px 20px 64px}
+.doc{max-width:1120px;margin:0 auto}
+.doc-head h1{font-size:20px;font-weight:600;letter-spacing:.2px}
+.doc-head p{margin-top:6px;color:var(--text-2);font-size:13px;max-width:760px}
+.legend{margin-top:12px;display:flex;flex-wrap:wrap;gap:8px;align-items:center;background:var(--panel);border:1px solid var(--border);border-radius:var(--radius);padding:10px 14px;font-size:12px;color:var(--text-2)}
+.legend b{color:var(--text);font-weight:500}
+section{margin-top:28px;background:var(--panel);border:1px solid var(--border);border-radius:14px;padding:22px}
+.sec-head{display:flex;align-items:baseline;gap:10px;flex-wrap:wrap}
+.sec-head h2{font-size:15px;font-weight:600}
+.sec-head .tag{font-size:11px;color:var(--accent);background:var(--accent-soft);border-radius:999px;padding:2px 9px;font-weight:500}
+.sec-head .tag.gray{color:var(--text-2);background:var(--fill)}
+.sec-note{margin-top:6px;color:var(--text-2);font-size:12.5px;max-width:820px}
+.stage{margin-top:18px;display:flex;gap:28px;flex-wrap:wrap}
+.cell{display:flex;flex-direction:column;gap:8px}
+.cell .cap{font-size:12px;color:var(--text-2);max-width:376px}
+.cell .cap b{color:var(--text);font-weight:500}
+
+/* ---------------- phone ---------------- */
+.phone{width:360px;height:740px;border:8px solid #262a33;border-radius:36px;background:#fff;position:relative;overflow:hidden;flex:none;box-shadow:0 8px 28px rgba(16,24,40,.12)}
+.scr{height:100%;display:flex;flex-direction:column;position:relative;background:var(--rd-bg)}
+.chrome-top,.chrome-bottom{flex:none;height:44px;display:flex;align-items:center;gap:8px;padding:0 10px;background:var(--chrome-bg);border-bottom:1px solid var(--chrome-border);font-size:13px;color:var(--text)}
+.chrome-bottom{border-bottom:0;border-top:1px solid var(--chrome-border);gap:4px;justify-content:space-around;color:var(--chrome-muted);font-size:11px}
+.chrome-top .back{font-size:17px;color:var(--text-2)}
+.chrome-top .ttl{flex:1;text-align:center;font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.chrome-top .more{color:var(--text-2);font-size:15px}
+.page{flex:1;padding:22px 18px;font-family:var(--font-serif);font-size:15px;line-height:1.95;color:var(--rd-text);overflow:hidden}
+.page p+p{margin-top:14px}
+.rd-sel{background:var(--rd-sel);border-radius:2px;padding:1px 0}
+.vocab-hit{text-decoration:underline dotted;text-decoration-thickness:2px;text-decoration-offset:3px;text-decoration-color:#b8860b}
+
+/* ---------------- dict card ---------------- */
+.dict-card{position:absolute;left:50%;transform:translateX(-50%);top:250px;width:330px;max-height:64vh;overflow-y:auto;background:var(--panel);border:1px solid var(--border);border-radius:var(--radius);box-shadow:var(--shadow);padding:12px 14px;font-size:13px;line-height:1.6;z-index:40}
+.dict-close{position:absolute;top:6px;right:8px;width:20px;height:20px;border:0;background:transparent;color:var(--text-3);font-size:16px;line-height:1;cursor:pointer}
+.dict-head{display:flex;align-items:baseline;gap:8px;padding-right:18px}
+.dict-word{font-family:var(--font-serif);font-size:19px;font-weight:600}
+.dict-phon{color:var(--text-2);font-size:12px}
+.dict-speak{margin-left:auto;padding:2px 8px;border:1px solid var(--border-strong);border-radius:6px;background:var(--panel-2);color:var(--text-2);font-size:12px;cursor:pointer}
+.dict-trans{margin-top:8px;white-space:pre-line}
+.dict-base{margin-top:10px;padding-top:8px;border-top:1px dashed var(--border);color:var(--text-2)}
+.dict-base-label{margin-right:6px;color:var(--text-3);font-size:11px}
+.dict-base-trans{margin-top:2px;white-space:pre-line}
+.dict-foot{display:flex;align-items:center;gap:8px;margin-top:10px;padding-top:8px;border-top:1px solid var(--border);font-size:12px}
+.dict-foot .btn{margin-left:auto}
+.dict-saved{color:var(--ok)}
+
+/* ---------------- buttons ---------------- */
+.btn{display:inline-flex;align-items:center;justify-content:center;gap:6px;height:32px;padding:0 13px;border-radius:8px;border:1px solid var(--border-strong);background:var(--panel);color:var(--text);font-family:var(--font);font-size:13px;cursor:pointer}
+.btn.primary{background:var(--accent);border-color:var(--accent);color:#fff}
+.btn.ghost{border-color:transparent;background:transparent;color:var(--text-2)}
+.btn.sm{height:26px;padding:0 9px;font-size:12px;border-radius:6px}
+.btn.wide{flex:1}
+.ai-chip{display:inline-flex;align-items:center;gap:5px;height:28px;padding:0 11px;border-radius:999px;border:1px solid var(--accent-line);background:var(--accent-soft);color:var(--accent);font-family:var(--font);font-size:12px;font-weight:500;cursor:pointer}
+.ai-chip svg{flex:none}
+.ai-chip.wide{width:100%;justify-content:center;height:34px;border-radius:9px}
+.ai-chip.ghosty{background:transparent}
+.ai-chip .badge{font-size:10px;color:var(--text-3);font-weight:400;border-left:1px solid var(--accent-line);padding-left:6px}
+
+/* ---------------- AI result block ---------------- */
+.ai-slot{margin-top:10px}
+.ai-slot .ai-skel,.ai-slot .ai-res{display:none}
+.ai-slot[data-state="loading"] .ai-skel{display:block}
+.ai-slot[data-state="done"] .ai-res{display:block}
+.ai-skel{padding:10px 12px;background:var(--fill-2);border-radius:8px}
+.ai-skel i{display:block;height:11px;border-radius:5px;background:#e6eaf2;margin:7px 0;animation:breathe .7s ease-in-out infinite alternate}
+.ai-skel i:nth-child(2){width:88%}
+.ai-skel i:nth-child(3){width:60%}
+.ai-skel i.short{width:40%}
+@keyframes breathe{from{opacity:1}to{opacity:.45}}
+.ai-res{padding:10px 12px;background:#f7faff;border:1px solid #e3ebff;border-radius:8px;font-size:13px}
+.ai-label{font-size:12px;font-weight:500;color:var(--accent);margin-bottom:4px;display:flex;align-items:center;gap:5px}
+.ai-foot{margin-top:8px;font-size:11px;color:var(--text-3)}
+.senses{margin-top:8px;display:flex;flex-direction:column;gap:5px}
+.sense{font-size:12px;color:var(--text-2);background:var(--panel);border:1px solid var(--border);border-radius:6px;padding:5px 9px}
+.sense.on{color:var(--accent);border-color:var(--accent-line);background:var(--accent-soft);font-weight:500}
+.sense-note{font-weight:400;color:var(--text-2);margin-left:6px;font-size:11px}
+.parse div{padding:7px 0;border-bottom:1px dashed var(--border);font-size:13px}
+.parse div:last-child{border-bottom:0}
+.parse b{display:inline-block;min-width:64px;color:var(--accent);font-weight:500;font-size:12px}
+
+/* ---------------- selection toolbar ---------------- */
+.sel-toolbar{position:absolute;left:50%;transform:translate(-50%,-100%);top:76px;display:flex;gap:6px;padding:6px;background:var(--chrome-bg);border:1px solid var(--chrome-border);border-radius:8px;box-shadow:0 6px 18px rgba(0,0,0,.3);z-index:45}
+.sel-lookup{height:22px;padding:0 9px;border:0;border-radius:4px;background:var(--accent);color:#fff;font-family:var(--font);font-size:12px;white-space:nowrap;cursor:pointer}
+.sel-ai{height:22px;padding:0 9px;border:0;border-radius:4px;background:var(--accent-soft);color:var(--accent);font-family:var(--font);font-size:12px;font-weight:500;white-space:nowrap;cursor:pointer;display:inline-flex;align-items:center;gap:4px}
+
+/* ---------------- bottom sheet ---------------- */
+.sheet-mask{position:absolute;inset:0;background:rgba(15,20,30,.45);opacity:0;pointer-events:none;transition:opacity .18s;z-index:60}
+.sheet-mask.on{opacity:1;pointer-events:auto}
+.sheet{position:absolute;left:0;right:0;bottom:0;background:var(--panel);border-radius:16px 16px 0 0;transform:translateY(102%);transition:transform .22s ease;z-index:61;max-height:76%;display:flex;flex-direction:column;box-shadow:0 -6px 24px rgba(0,0,0,.14)}
+.sheet.on{transform:translateY(0)}
+.grabber{width:36px;height:4px;border-radius:2px;background:var(--border-strong);margin:8px auto 2px;flex:none}
+.sheet-head{flex:none;display:flex;align-items:center;padding:6px 16px 8px;font-size:15px;font-weight:500}
+.sheet-head .sheet-close{margin-left:auto;border:0;background:transparent;color:var(--text-3);font-size:17px;cursor:pointer}
+.sheet-body{flex:1;overflow-y:auto;padding:2px 16px 14px;font-size:13.5px}
+.sheet-body p+p{margin-top:8px}
+.sheet-foot{flex:none;padding:9px 16px calc(12px + env(safe-area-inset-bottom));border-top:1px solid var(--border);font-size:11px;color:var(--text-3)}
+.quote{font-family:var(--font-serif);font-size:13.5px;color:var(--text-2);background:var(--fill-2);border-left:2px solid var(--accent);border-radius:0 6px 6px 0;padding:7px 10px;margin-bottom:4px}
+.trans-cn{font-size:14.5px}
+
+/* ---------------- review page ---------------- */
+.scr-app{background:var(--bg)}
+.app-head{flex:none;height:46px;display:flex;align-items:center;gap:10px;padding:0 12px;background:var(--panel);border-bottom:1px solid var(--border);font-size:14px;font-weight:500}
+.app-head .prog{margin-left:auto;color:var(--text-3);font-size:12px;font-weight:400}
+.progbar{flex:none;height:3px;background:var(--fill)}
+.progbar i{display:block;height:100%;background:var(--accent)}
+.rev-body{flex:1;padding:18px 16px;display:flex;flex-direction:column;gap:14px;overflow-y:auto}
+.rev-card{background:var(--panel);border:1px solid var(--border);border-radius:12px;padding:18px 16px;text-align:center}
+.rev-word{font-family:var(--font-serif);font-size:24px;font-weight:600}
+.rev-word .dict-phon{font-weight:400}
+.rev-sent{margin-top:12px;font-family:var(--font-serif);font-size:14px;line-height:1.9;color:var(--text-2)}
+.rev-origin{margin-top:10px;font-size:11px;color:var(--text-3)}
+.rev-dock{flex:none;display:flex;gap:10px;padding:10px 12px calc(12px + env(safe-area-inset-bottom));background:var(--panel);border-top:1px solid var(--border)}
+.rev-dock .btn{height:44px;font-size:14px}
+
+/* ---------------- chapter open + dialog ---------------- */
+.chapter-open{display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;gap:6px}
+.ch-num{font-size:12px;color:var(--text-3);letter-spacing:2px}
+.ch-title{font-size:21px;font-weight:600}
+.mini-dialog{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%) scale(.96);width:300px;background:var(--panel);border-radius:14px;box-shadow:0 10px 36px rgba(16,24,40,.22);padding:18px 16px 14px;z-index:70;opacity:0;pointer-events:none;transition:opacity .16s,transform .16s}
+.mini-dialog.on{opacity:1;pointer-events:auto;transform:translate(-50%,-50%) scale(1)}
+.dlg-title{font-size:15px;font-weight:500;margin-bottom:6px}
+.mini-dialog p{font-size:12.5px;color:var(--text-2)}
+.mini-dialog p b{color:var(--text)}
+.dlg-btns{display:flex;gap:8px;justify-content:flex-end;margin-top:14px}
+
+/* ---------------- info cards / fragments ---------------- */
+.frags{margin-top:18px;display:flex;gap:16px;flex-wrap:wrap}
+.frag{background:var(--panel);border:1px solid var(--border);border-radius:12px;padding:14px;position:relative}
+.frag.wide{flex:1;min-width:300px}
+.frag h3{font-size:12.5px;font-weight:500;margin-bottom:8px;color:var(--text-2)}
+.frag p{font-size:12.5px;color:var(--text-2)}
+.frag .dict-card{position:static;transform:none;width:100%;max-height:none;box-shadow:none}
+.fail-box{padding:10px 12px;border:1px dashed var(--border-strong);border-radius:8px;font-size:12.5px;color:var(--text-2);display:flex;align-items:center;gap:8px}
+.fail-box .btn{margin-left:auto}
+.toast{position:absolute;left:50%;bottom:96px;transform:translate(-50%,8px);background:rgba(29,33,41,.92);color:#fff;font-size:12px;border-radius:999px;padding:7px 14px;opacity:0;transition:opacity .18s,transform .18s;pointer-events:none;z-index:80;white-space:nowrap}
+.toast.on{opacity:1;transform:translate(-50%,0)}
+
+/* ---------------- compare table ---------------- */
+table.cmp{margin-top:18px;width:100%;border-collapse:collapse;font-size:12.5px}
+table.cmp th,table.cmp td{border:1px solid var(--border);padding:8px 10px;text-align:left;vertical-align:top}
+table.cmp th{background:var(--fill-2);font-weight:500;color:var(--text-2)}
+table.cmp td:first-child{color:var(--text-2);white-space:nowrap}
+.win{color:var(--ok);font-weight:500}
+.lose{color:var(--text-3)}
+.decisions{margin-top:18px;display:grid;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));gap:10px}
+.decisions .q{background:var(--fill-2);border-radius:10px;padding:12px 14px;font-size:12.5px}
+.decisions .q b{display:block;font-weight:500;margin-bottom:4px}
+.decisions .q span{color:var(--text-2)}
+</style>
+</head>
+<body>
+<div class="doc">
+
+<header class="doc-head">
+  <h1>0.4 手机端 AI 能力 · 交互原型（定稿）</h1>
+  <p>原型用 app 真实设计令牌绘制（accent #2f6bff、dict-card 330px 宽、sel-toolbar 白底、底部面板 16px 圆角）。所有带 ✦ 的按钮都可以点：第一次点击走「骨架屏 → 结果」，第二次点击走缓存（瞬时出现，模拟离线可回看）。</p>
+  <div class="legend">
+    <span><b>AI 视觉语言：</b>✦ 火花图标 + 浅蓝底（accent-soft）按钮；每条 AI 结果自带「AI 生成 · 模型 · 缓存」脚注，与词典内容一眼可区分。</span>
+  </div>
+</header>
+
+<!-- ============ 1. 查词卡 ============ -->
+<section>
+  <div class="sec-head">
+    <h2>1 · 查词卡：上下文释义</h2>
+    <span class="tag">已定稿 · 方案 C 底部面板</span>
+    <span class="tag gray">P0</span>
+  </div>
+  <p class="sec-note">词卡保持轻量，AI 结果进底部面板——长内容（义项高亮、结构化输出）展得开，词卡不增高。点词卡里的「✦ AI」试试。</p>
+  <div class="stage">
+    <div class="cell">
+      <div class="phone">
+        <div class="scr">
+          <div class="chrome-top"><span class="back">‹</span><span class="ttl">The Weight of Silence · 第 3 章</span><span class="more">⋯</span></div>
+          <div class="page">
+            <p>The silence that settled over the table was not awkward, but <span class="rd-sel">weighted</span> — the kind of quiet that carries whole conversations nobody is ready to have.</p>
+            <p>She reached for the glass, and the water in it trembled, as if the room itself had become a scale.</p>
+          </div>
+          <div class="chrome-bottom"><span>目录</span><span>进度 32%</span><span>设置</span></div>
+          <div class="dict-card">
+            <button class="dict-close">×</button>
+            <div class="dict-head"><span class="dict-word">weighted</span><span class="dict-phon">/ˈweɪtɪd/</span><button class="dict-speak">发音</button></div>
+            <div class="dict-trans">adj. 沉重的；有分量的
+v. 使负重；加重（weight 的过去式和过去分词）</div>
+            <div class="dict-base"><span class="dict-base-label">原型</span><b>weight</b> <span class="dict-phon">/weɪt/</span><div class="dict-base-trans">n. 重量；负担；权重　v. 称重；使负重</div></div>
+            <div class="dict-foot">
+              <button class="ai-chip ghosty" data-open-sheet="sheetC">
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2l2.2 6.1L20 10l-5.8 1.9L12 18l-2.2-6.1L4 10l5.8-1.9z"/></svg>
+                AI
+              </button>
+              <span style="color:var(--text-3);font-size:12px">再查一次自动收录</span>
+              <button class="btn sm">加入生词本</button>
+            </div>
+          </div>
+          <div class="sheet-mask" data-mask></div>
+          <div class="sheet" id="sheetC">
+            <div class="grabber"></div>
+            <div class="sheet-head">weighted · 文中义<button class="sheet-close">×</button></div>
+            <div class="sheet-body">
+              <div class="ai-slot" id="slotC" data-state="idle">
+                <div class="ai-skel"><i></i><i></i><i></i><i class="short"></i></div>
+                <div class="ai-res">
+                  这里取「有分量的」。前文说沉默并不尴尬，而是像压着重量——装的是一场没说出口的对话，是抽象的重量，不是物理重量。
+                  <div class="senses">
+                    <div class="sense on">adj. 有分量的<span class="sense-note">← 本句取此义</span></div>
+                    <div class="sense">adj. 沉重的</div>
+                    <div class="sense">v. 使负重（过去分词）</div>
+                  </div>
+                  <div class="ai-foot">AI 生成 · DeepSeek-chat · 已缓存，离线可看</div>
+                </div>
+              </div>
+            </div>
+            <div class="sheet-foot">结果按「词 + 原句」缓存；同一个词同一句不重复请求</div>
+          </div>
+        </div>
+      </div>
+      <div class="cap"><b>词卡 → 底部面板</b> — 同一个面板组件复用于划词解析与章首导读，单点成本摊薄</div>
+    </div>
+  </div>
+
+  <table class="cmp">
+    <tr><th style="width:110px"></th><th>方案 A · 词卡内嵌（未选）</th><th>方案 C · 底部面板（选定）</th></tr>
+    <tr><td>操作步数</td><td class="win">1 次点击</td><td>2 次（点按钮 + 看面板，可滑动关闭）</td></tr>
+    <tr><td>词卡负担</td><td>结果让词卡变长，卡内滚动</td><td class="win">保持轻量，和现在一样高</td></tr>
+    <tr><td>长内容适配</td><td class="lose">义项高亮、结构化拆解在卡里排不开</td><td class="win">面板 76% 高，结构化展示（如高亮选中的义项）</td></tr>
+    <tr><td>手势风险</td><td class="win">无新增</td><td>模态需排除 swipe 翻页（红线 5f，抽屉已有先例）</td></tr>
+    <tr><td>实现成本</td><td class="win">只改 dict-card 内部</td><td>新增面板组件（三个 surface 都要用，可复用）</td></tr>
+  </table>
+</section>
+
+<!-- ============ 2. 划词工具 ============ -->
+<section>
+  <div class="sec-head">
+    <h2>2 · 划词工具栏：句子解析</h2>
+    <span class="tag gray">P1 整句翻译 + 长难句</span>
+  </div>
+  <p class="sec-note">选区工具栏在「查词」后追加一个「✦ AI」按钮——译文与拆句合并为一个视图，一次请求、一个滚动看完，不拆 tab。点工具栏上的「✦ AI」试试。</p>
+  <div class="stage">
+    <div class="cell">
+      <div class="phone">
+        <div class="scr">
+          <div class="chrome-top"><span class="back">‹</span><span class="ttl">The Weight of Silence · 第 3 章</span><span class="more">⋯</span></div>
+          <div class="page">
+            <p><span class="rd-sel">She had the kind of face that launched not ships but silences.</span></p>
+            <p>He set down the cup without a sound and looked at her the way one looks at a closed door.</p>
+            <p>Outside, the harbor kept its own counsel, lights blinking at nothing in particular.</p>
+          </div>
+          <div class="chrome-bottom"><span>目录</span><span>进度 32%</span><span>设置</span></div>
+          <div class="sel-toolbar">
+            <button class="sel-lookup">查词</button>
+            <button class="sel-ai" data-open-sheet="sheetT">
+              <svg width="11" height="11" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2l2.2 6.1L20 10l-5.8 1.9L12 18l-2.2-6.1L4 10l5.8-1.9z"/></svg>
+              AI
+            </button>
+          </div>
+          <div class="sheet-mask" data-mask></div>
+          <div class="sheet" id="sheetT">
+            <div class="grabber"></div>
+            <div class="sheet-head">句子解析<button class="sheet-close">×</button></div>
+            <div class="sheet-body">
+              <div class="ai-slot" id="slotT" data-state="idle">
+                <div class="ai-skel"><i></i><i></i><i></i><i class="short"></i></div>
+                <div class="ai-res">
+                  <div class="quote">She had the kind of face that launched not ships but silences.</div>
+                  <div class="ai-label">✦ 译文</div>
+                  <p class="trans-cn">她长着那样一张脸——启航的不是舰队，而是一片沉默。</p>
+                  <div class="ai-label" style="margin-top:10px">✦ 拆解</div>
+                  <div class="parse">
+                    <div><b>主干</b>She had the kind of face</div>
+                    <div><b>定语从句</b>that launched not ships but silences —— 修饰 face，一直延伸到句末</div>
+                    <div><b>修辞</b>not A but B 对照：ships（典故：海伦）→ silences（反讽），重心在后</div>
+                    <div><b>节律</b>face / ships / silences 三个 -s 音收尾，一口气降下来</div>
+                  </div>
+                  <div class="ai-foot">AI 生成 · DeepSeek-chat · 已缓存</div>
+                </div>
+              </div>
+            </div>
+            <div class="sheet-foot">缓存键 = 句子文本；译文与拆句共用一次请求</div>
+          </div>
+        </div>
+      </div>
+      <div class="cap"><b>选区 → 同一个底部面板</b> — 工具栏不新增浮层规范；合并视图信息密度高于 tab 切换</div>
+    </div>
+  </div>
+</section>
+
+<!-- ============ 3. 复习页 AI：押后 ============ -->
+<section>
+  <div class="sec-head">
+    <h2>3 · 复习页 AI：原句填空已押后</h2>
+    <span class="tag gray">v0.5 候选</span>
+  </div>
+  <p class="sec-note">初版设计是 mask 生词本里已存的原文句让用户填空。定稿时否决——例句本就印在复习卡上（带下划线标记），遮一个字再填回去只是重复回忆同一句话。重启方向如下，验证有效后再进版本。</p>
+  <div class="frags">
+    <div class="frag wide">
+      <h3>为什么押后</h3>
+      <p>复习卡已经同时展示了词、释义和原句；填空考的是「照着句子找回那个字」，不是回忆词义，边际价值接近零。真要做「用原句练习」，应该是跨章找到这个词<strong>在其他位置</strong>的真实出现——那才是新句子。</p>
+    </div>
+    <div class="frag wide">
+      <h3>重启时的方向（优先级从高到低）</h3>
+      <p><strong>① 跨章检索真实句</strong>：在该书其他章节里找这个词的真实出现，零生成成本、真实语料；<strong>② AI 新例句</strong>：按书中风格造一句新例句，脱离已见句但保留这本书的语境；<strong>③ 先检索、不够再生成</strong>。三者都保留「句子来自这本书」的性质，这是现有例句资产的核心价值。</p>
+    </div>
+  </div>
+</section>
+
+<!-- ============ 4. 章首导读 ============ -->
+<section>
+  <div class="sec-head">
+    <h2>4 · 章首：AI 导读</h2>
+    <span class="tag gray">P1 章节导读</span>
+  </div>
+  <p class="sec-note">唯一会把整章正文发出去的功项，所以每次发送前都明示（字数 + 服务商），不提供「记住选择」。点「✦ AI 导读」走一遍完整流程。</p>
+  <div class="stage">
+    <div class="cell">
+      <div class="phone">
+        <div class="scr">
+          <div class="chrome-top"><span class="back">‹</span><span class="ttl">The Weight of Silence</span><span class="more">⋯</span></div>
+          <div class="page chapter-open">
+            <div class="ch-num">第 3 章</div>
+            <h2 class="ch-title">The Weight of Silence</h2>
+            <div style="height:14px"></div>
+            <button class="ai-chip ghosty" data-dialog>
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2l2.2 6.1L20 10l-5.8 1.9L12 18l-2.2-6.1L4 10l5.8-1.9z"/></svg>
+              AI 导读
+            </button>
+          </div>
+          <div class="chrome-bottom"><span>目录</span><span>进度 32%</span><span>设置</span></div>
+          <div class="mini-dialog" id="dlg4">
+            <div class="dlg-title">生成 AI 导读？</div>
+            <p>本章正文约 4,200 字将发送至 <b>DeepSeek</b> 用于生成导读。结果只存本机，可离线回看。</p>
+            <div class="dlg-btns">
+              <button class="btn sm ghost" data-cancel>取消</button>
+              <button class="btn sm primary" data-gen>生成导读</button>
+            </div>
+          </div>
+          <div class="sheet-mask" data-mask></div>
+          <div class="sheet" id="sheet4">
+            <div class="grabber"></div>
+            <div class="sheet-head">第 3 章 · 导读<button class="sheet-close">×</button></div>
+            <div class="sheet-body">
+              <div class="ai-slot" id="slot4" data-state="idle">
+                <div class="ai-skel"><i></i><i></i><i></i><i class="short"></i></div>
+                <div class="ai-res">
+                  <div class="ai-label">✦ 本章要点</div>
+                  <div class="parse">
+                    <div>沉默是双方共同的选择，但只有 Marc 意识到它的重量</div>
+                    <div>Nora 倒水时水面发颤，是本章唯一的和解动作</div>
+                    <div>weighted 在本章首次出现，是贯穿后三章的核心意象</div>
+                    <div>结尾的门锁声暗示谈判失败，与第 1 章的开门声呼应</div>
+                  </div>
+                  <div class="ai-label" style="margin-top:10px">✦ 关键术语</div>
+                  <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:2px">
+                    <span class="sense on" style="width:auto">weighted</span>
+                    <span class="sense" style="width:auto">restitution</span>
+                    <span class="sense" style="width:auto">筹码</span>
+                  </div>
+                  <div class="ai-foot">AI 生成 · DeepSeek-chat · 基于约 4,200 字正文 · 已缓存</div>
+                </div>
+              </div>
+            </div>
+            <div class="sheet-foot">按章缓存；书的内容变了会重新生成</div>
+          </div>
+        </div>
+      </div>
+      <div class="cap"><b>章首 → 每次确认 → 面板</b> — 显式触发 + 发送前明示（红线 2a + 隐私边界）</div>
+    </div>
+  </div>
+</section>
+
+<!-- ============ 5. 异常态 ============ -->
+<section>
+  <div class="sec-head">
+    <h2>5 · 异常与边界态</h2>
+    <span class="tag gray">没有 key / 生成中 / 失败 / 缓存</span>
+  </div>
+  <p class="sec-note">AI 是可选层：没配 key、断网、超时都不应该挡住阅读本身。</p>
+  <div class="frags">
+
+    <div class="frag">
+      <h3>未配置（无 key）</h3>
+      <div class="dict-card">
+        <div class="dict-head"><span class="dict-word">weighted</span><span class="dict-phon">/ˈweɪtɪd/</span></div>
+        <div class="dict-foot" style="border-top:0;padding-top:2px">
+          <button class="ai-chip" data-toast="去「我的 → AI 设置」配置服务商后可用">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2l2.2 6.1L20 10l-5.8 1.9L12 18l-2.2-6.1L4 10l5.8-1.9z"/></svg>
+            AI<span class="badge">未配置</span>
+          </button>
+        </div>
+      </div>
+      <p style="margin-top:10px;font-size:11.5px;color:var(--text-3)">入口仍在，点击引导去设置；其余功能完全正常。</p>
+    </div>
+
+    <div class="frag">
+      <h3>生成中</h3>
+      <div class="dict-card">
+        <div class="dict-head"><span class="dict-word">weighted</span><span class="dict-phon">/ˈweɪtɪd/</span></div>
+        <div class="ai-slot" data-state="loading">
+          <div class="ai-skel"><i></i><i></i><i class="short"></i></div>
+        </div>
+      </div>
+      <p style="margin-top:10px;font-size:11.5px;color:var(--text-3)">骨架屏，典型 1–3s；超时上限 15s，不阻塞任何操作。</p>
+    </div>
+
+    <div class="frag">
+      <h3>失败可重试</h3>
+      <div class="dict-card">
+        <div class="dict-head"><span class="dict-word">weighted</span><span class="dict-phon">/ˈweɪtɪd/</span></div>
+        <div class="ai-slot" id="slotF" data-state="idle">
+          <div class="fail-box">生成失败 · 连接超时<button class="btn sm" data-ai-trigger="slotF">重试</button></div>
+          <div class="ai-skel"><i></i><i class="short"></i></div>
+          <div class="ai-res">这里取「有分量的」……<div class="ai-foot">AI 生成 · 重试成功 · 已缓存</div></div>
+        </div>
+      </div>
+      <p style="margin-top:10px;font-size:11.5px;color:var(--text-3)">失败不写墓碑（与联网补全一致），下次还能重来。点「重试」看效果。</p>
+    </div>
+
+    <div class="frag">
+      <h3>缓存命中</h3>
+      <div class="dict-card">
+        <div class="dict-head"><span class="dict-word">weighted</span><span class="dict-phon">/ˈweɪtɪd/</span></div>
+        <div class="ai-slot" data-state="done">
+          <div class="ai-res">这里取「有分量的」……<div class="ai-foot">AI 生成 · 缓存 · 飞行模式可看</div></div>
+        </div>
+      </div>
+      <p style="margin-top:10px;font-size:11.5px;color:var(--text-3)">同一个词同一句：第二次点击零延迟、零流量。</p>
+    </div>
+
+  </div>
+</section>
+
+<!-- ============ 定稿清单 ============ -->
+<section>
+  <div class="sec-head"><h2>设计定稿</h2></div>
+  <div class="decisions">
+    <div class="q"><b>① 入口形态</b><span>C 底部面板；词卡保持轻量，长内容进面板，组件三处复用</span></div>
+    <div class="q"><b>② 按钮与视图</b><span>统一「✦ AI」；翻译与拆句合并为一个视图，不拆 tab</span></div>
+    <div class="q"><b>③ 隐私确认</b><span>导读每次发送前都问（字数 + 服务商），不提供「记住」</span></div>
+    <div class="q"><b>④ 原句填空</b><span>押后至 v0.5：例句已在卡上，填空是重复回忆；重启方向为跨章检索 / AI 新例句</span></div>
+  </div>
+</section>
+
+</div>
+
+<script>
+(function(){
+  var $$=function(s,r){return Array.prototype.slice.call((r||document).querySelectorAll(s))}
+
+  // generic AI slot: idle -> loading(900ms) -> done; done stays done (cache)
+  $$('[data-ai-trigger]').forEach(function(btn){
+    btn.addEventListener('click',function(){
+      var slot=document.getElementById(btn.getAttribute('data-ai-trigger'))
+      if(!slot||slot.getAttribute('data-state')!=='idle')return
+      slot.setAttribute('data-state','loading')
+      setTimeout(function(){slot.setAttribute('data-state','done')},900)
+    })
+  })
+
+  // bottom sheet open/close
+  function openSheet(scr,sheet){
+    var mask=scr.querySelector('[data-mask]')
+    if(mask)mask.classList.add('on')
+    sheet.classList.add('on')
+    // any idle slot inside starts generating
+    $$('.ai-slot[data-state="idle"]',sheet).forEach(function(slot){
+      slot.setAttribute('data-state','loading')
+      setTimeout(function(){slot.setAttribute('data-state','done')},900)
+    })
+  }
+  function closeSheet(scr){
+    scr.querySelector('[data-mask]').classList.remove('on')
+    $$('.sheet',scr).forEach(function(s){s.classList.remove('on')})
+  }
+  $$('[data-open-sheet]').forEach(function(btn){
+    btn.addEventListener('click',function(){
+      var scr=btn.closest('.scr')
+      var sheet=document.getElementById(btn.getAttribute('data-open-sheet'))
+      openSheet(scr,sheet)
+    })
+  })
+  $$('[data-mask]').forEach(function(mask){
+    mask.addEventListener('click',function(){closeSheet(mask.closest('.scr'))})
+  })
+  $$('.sheet-close').forEach(function(btn){
+    btn.addEventListener('click',function(){closeSheet(btn.closest('.scr'))})
+  })
+
+  // privacy dialog -> sheet
+  $$('[data-dialog]').forEach(function(btn){
+    btn.addEventListener('click',function(){
+      btn.closest('.scr').querySelector('.mini-dialog').classList.add('on')
+    })
+  })
+  $$('[data-cancel]').forEach(function(btn){
+    btn.addEventListener('click',function(){
+      btn.closest('.mini-dialog').classList.remove('on')
+    })
+  })
+  $$('[data-gen]').forEach(function(btn){
+    btn.addEventListener('click',function(){
+      var scr=btn.closest('.scr')
+      btn.closest('.mini-dialog').classList.remove('on')
+      openSheet(scr,scr.querySelector('.sheet'))
+    })
+  })
+
+  // toast
+  $$('[data-toast]').forEach(function(btn){
+    btn.addEventListener('click',function(){
+      var host=btn.closest('.scr')||btn.closest('.frag')
+      var t=document.createElement('div')
+      t.className='toast'
+      t.textContent=btn.getAttribute('data-toast')
+      ;(host||document.body).appendChild(t)
+      requestAnimationFrame(function(){t.classList.add('on')})
+      setTimeout(function(){t.classList.remove('on');setTimeout(function(){t.remove()},250)},1600)
+    })
+  })
+})();
+</script>
+</body>
+</html>

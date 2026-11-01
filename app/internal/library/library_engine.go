@@ -58,6 +58,10 @@ func RenderChapter(bookID, chapterID string) (*ChapterRender, error) {
 		}
 		return DataURL(mime.GuessMediaType(target), buf)
 	})
+	// Anchors survive purification as data-anc; see html.IdsToAnchors. Without
+	// this, every TOC entry that points inside a document (rather than at its
+	// first page) lands on the top of that document.
+	out = html.IdsToAnchors(out)
 	return &ChapterRender{Title: ch.Title, HTML: out}, nil
 }
 
@@ -65,7 +69,9 @@ func RenderChapter(bookID, chapterID string) (*ChapterRender, error) {
 
 // ImportEpub parses an EPUB file on disk, stores its resources, and registers
 // the book (and its chapters/assets) in the database.
-func ImportEpub(filePath, originalName string) (*BookDTO, error) {
+func ImportEpub(filePath, originalName, shelfID string) (*BookDTO, error) {
+	// Where the book lands is decided once, before anything is written.
+	shelf := resolveImportShelf(shelfID)
 	data, err := os.ReadFile(filePath)
 	if err != nil {
 		return nil, err
@@ -76,11 +82,11 @@ func ImportEpub(filePath, originalName string) (*BookDTO, error) {
 	}
 
 	// Dedupe before any resource is written: the same file (or, for books from
-	// before hashing existed, the same epub identifier) must not land on the
-	// shelf twice.
+	// before hashing existed, the same epub identifier AND title) must not land
+	// on the shelf twice.
 	sum := sha256.Sum256(data)
 	fileHash := hex.EncodeToString(sum[:])
-	if dupTitle, found, err := findDuplicate(fileHash, parsed.Metadata.Identifier); err != nil {
+	if dupTitle, found, err := findDuplicate(fileHash, parsed.Metadata.Identifier, parsed.Metadata.Title); err != nil {
 		return nil, err
 	} else if found {
 		return nil, fmt.Errorf("%w:%s", ErrDuplicate, dupTitle)
@@ -148,7 +154,7 @@ func ImportEpub(filePath, originalName string) (*BookDTO, error) {
 			}
 		}
 		if e := insertBookStmt(d, bookID, title, parsed.Metadata.Author, parsed.Metadata.Language,
-			parsed.Metadata.Publisher, parsed.Metadata.Description, parsed.Metadata.Identifier, cover, originalName, ts, tocJSON, fileHash); e != nil {
+			parsed.Metadata.Publisher, parsed.Metadata.Description, parsed.Metadata.Identifier, cover, originalName, ts, tocJSON, fileHash, shelf); e != nil {
 			return e
 		}
 		chStmt, e := d.Prepare(`INSERT INTO chapters (id,book_id,idx,title,href,created_at,updated_at) VALUES (?,?,?,?,?,?,?)`)
@@ -184,39 +190,93 @@ func ImportEpub(filePath, originalName string) (*BookDTO, error) {
 		return nil, err
 	}
 
+	// Build the shelf preview now, while the import is still what the reader is
+	// waiting on: done later, the first visit to the shelf would pay for it.
+	if cover.Valid {
+		warmThumb(bookID, cover.String)
+	}
+
 	return GetBook(bookID)
 }
 
-func insertBookStmt(d *sql.DB, id, title, author, language, publisher, description, identifier string, cover sql.NullString, sourceName, ts, tocJSON, fileHash string) error {
+func insertBookStmt(d *sql.DB, id, title, author, language, publisher, description, identifier string, cover sql.NullString, sourceName, ts, tocJSON, fileHash, shelfID string) error {
 	_, err := d.Exec(
-		`INSERT INTO books (id,title,author,language,publisher,description,identifier,cover_href,source_name,created_at,updated_at,toc,tags,file_hash)
-		 VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-		id, title, author, language, publisher, description, identifier, cover, sourceName, ts, ts, tocJSON, "", fileHash)
+		`INSERT INTO books (id,title,author,language,publisher,description,identifier,cover_href,source_name,created_at,updated_at,toc,tags,file_hash,shelf_id)
+		 VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		id, title, author, language, publisher, description, identifier, cover, sourceName, ts, ts, tocJSON, "", fileHash, shelfID)
 	return err
+}
+
+// resolveImportShelf picks the shelf an import lands on. An empty id (a
+// background import: system share, Wi-Fi transfer — nobody is at a screen to
+// say which shelf), an unknown id and a locked shelf all fall back to the
+// default shelf: a mislaid book is recoverable, a dropped file is not.
+func resolveImportShelf(shelfID string) string {
+	if shelfID == "" || shelfLocked(shelfID) {
+		return DefaultShelfID
+	}
+	d, err := db.Open()
+	if err != nil {
+		return DefaultShelfID
+	}
+	if ok, _ := shelfExists(d, shelfID); !ok {
+		return DefaultShelfID
+	}
+	return shelfID
 }
 
 // findDuplicate reports whether an identical book is already on the shelf.
 // Two keys match: the exact file (sha256), or — for books imported before
-// hashing existed — the epub's dc:identifier. Trashed copies don't count:
-// re-importing while a book sits in the trash gives a fresh copy.
-func findDuplicate(fileHash, identifier string) (string, bool, error) {
+// hashing existed — the epub's dc:identifier, but only when the title matches
+// too. The title guard is not paranoia: z-library epubs have been observed
+// reusing one urn:uuid across unrelated books (a Kissinger set and a 150-book
+// erotica bundle shipped the same identifier), and the identifier alone then
+// vetoes a book the reader never had. Trashed copies don't count: re-importing
+// while a book sits in the trash gives a fresh copy.
+func findDuplicate(fileHash, identifier, title string) (string, bool, error) {
 	d, err := db.Open()
 	if err != nil {
 		return "", false, err
 	}
-	var title string
+	var dupTitle string
 	err = d.QueryRow(
-		`SELECT title FROM books
-		 WHERE deleted_at IS NULL AND (file_hash = ? OR (length(?) > 0 AND identifier = ?))
-		 LIMIT 1`,
-		fileHash, identifier, identifier).Scan(&title)
-	if err == sql.ErrNoRows {
+		`SELECT title FROM books WHERE deleted_at IS NULL AND file_hash = ? LIMIT 1`,
+		fileHash).Scan(&dupTitle)
+	if err == nil {
+		return dupTitle, true, nil
+	}
+	if err != sql.ErrNoRows {
+		return "", false, err
+	}
+	if identifier == "" {
 		return "", false, nil
 	}
+	rows, err := d.Query(
+		`SELECT title FROM books WHERE deleted_at IS NULL AND identifier = ?`, identifier)
 	if err != nil {
 		return "", false, err
 	}
-	return title, true, nil
+	defer rows.Close()
+	for rows.Next() {
+		var t string
+		if err := rows.Scan(&t); err != nil {
+			return "", false, err
+		}
+		if sameTitle(t, title) {
+			return t, true, nil
+		}
+	}
+	return "", false, rows.Err()
+}
+
+// sameTitle compares two metadata titles loosely: case and whitespace are
+// noise between different rips of the same book, not evidence of a different
+// one. A genuinely different book almost never shares both identifier and
+// title with the candidate — and when it does, one extra shelf copy is the
+// cheap wrong answer compared with silently refusing a wanted book.
+func sameTitle(a, b string) bool {
+	return strings.Join(strings.Fields(strings.ToLower(a)), " ") ==
+		strings.Join(strings.Fields(strings.ToLower(b)), " ")
 }
 
 func copyFile(src, dst string) error {
@@ -372,6 +432,9 @@ func UploadCover(bookID, name string, buf []byte) (*UploadedCover, error) {
 	if err := storage.WriteContent(bookID, href, buf); err != nil {
 		return nil, err
 	}
+	// A fresh cover invalidates the old preview: warmThumb writes the new one
+	// under the new href, and the stale thumbnail stays with the old file.
+	warmThumb(bookID, href)
 	d, err := db.Open()
 	if err != nil {
 		return nil, err
@@ -425,6 +488,13 @@ func SplitBook(bookID string, parts []SplitPart, deleteSource bool) ([]*BookDTO,
 	}
 
 	created := []string{}
+	// Split volumes are the same book, cut up: they stay on the shelf the source
+	// sits on, which is also what makes the split feel like an edit rather than
+	// like exporting two new books.
+	partShelf := row.ShelfID.String
+	if partShelf == "" {
+		partShelf = DefaultShelfID
+	}
 	for _, part := range parts {
 		picked := []ChapterDTO{}
 		for _, id := range part.ChapterIDs {
@@ -494,7 +564,7 @@ func SplitBook(bookID string, parts []SplitPart, deleteSource bool) ([]*BookDTO,
 				return e
 			}
 			if e := insertBookStmt(d, newID, title, author, row.Language, row.Publisher,
-				row.Description, "", cov, row.SourceName.String, ts, partTOCJSON, ""); e != nil {
+				row.Description, "", cov, row.SourceName.String, ts, partTOCJSON, "", partShelf); e != nil {
 				return e
 			}
 			chStmt, e := d.Prepare(`INSERT INTO chapters (id,book_id,idx,title,href,created_at,updated_at) VALUES (?,?,?,?,?,?,?)`)

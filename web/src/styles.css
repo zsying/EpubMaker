@@ -8,10 +8,15 @@
   --text-2: #5a6272;
   --text-3: #8b93a3;
   --accent: #2f6bff;
-  --accent-soft: #eaf0ff;
+  --accent-soft: #dce7ff;
   --danger: #d93b3b;
   --danger-soft: #fdeaea;
   --ok: #1a9c62;
+  --ok-soft: #e6f5ee;
+  /* "not set up yet" — used by the「我的」rows for 未安装 / 未配置. Warm on
+     purpose: it must read as attention, not as failure. */
+  --warn: #b4741a;
+  --warn-soft: #fdf1dc;
   --radius: 10px;
   --toc-dock-w: 268px;
   --shadow: 0 1px 2px rgba(16, 24, 40, 0.04), 0 4px 16px rgba(16, 24, 40, 0.06);
@@ -41,6 +46,10 @@
   --rd-muted: #5a6272;
   --rd-border: #e3e6ec;
   --rd-sel: rgba(47, 107, 255, 0.22);
+  /* 听书: the band behind the sentence being spoken. Translucent so the
+     glyphs read through it, warm so it is never mistaken for a selection
+     (--rd-sel is the blue selection tint). */
+  --rd-listen: rgba(255, 186, 60, 0.32);
 
   /* Reader chrome bars follow the theme too (this was the complaint: a paper
      page under jet-black bars). Opaque-ish so Android WebView never has to
@@ -72,7 +81,7 @@ html[data-app-theme='sepia'] {
   --text-2: #6b5f4b;
   --text-3: #988a6f;
   --accent: #a3662b;
-  --accent-soft: #f3e5cd;
+  --accent-soft: #e9d5b0;
   --fill: #ece2cc;
   --fill-2: #efe6d3;
   --mark-line: #a8742a;
@@ -86,6 +95,7 @@ html[data-app-theme='sepia'] {
   --rd-muted: #8a7c62;
   --rd-border: rgba(0, 0, 0, 0.09);
   --rd-sel: rgba(163, 102, 43, 0.26);
+  --rd-listen: rgba(198, 140, 60, 0.34);
   --chrome-bg: rgba(249, 244, 232, 0.97);
   --chrome-fg: #3a3226;
   --chrome-muted: #988a6f;
@@ -107,7 +117,7 @@ html[data-app-theme='green'] {
   --text-2: #48604f;
   --text-3: #6d8574;
   --accent: #2e7d4f;
-  --accent-soft: #c8e6cd;
+  --accent-soft: #aed7b8;
   --fill: #c2dcc5;
   --fill-2: #c8e2ca;
   --mark-line: #2f7d4b;
@@ -121,6 +131,7 @@ html[data-app-theme='green'] {
   --rd-muted: #52705c;
   --rd-border: rgba(0, 0, 0, 0.09);
   --rd-sel: rgba(46, 125, 79, 0.3);
+  --rd-listen: rgba(70, 150, 95, 0.3);
   --chrome-bg: rgba(220, 239, 220, 0.97);
   --chrome-fg: #22362a;
   --chrome-muted: #6d8574;
@@ -142,7 +153,13 @@ html[data-app-theme='dark'] {
   --text-2: #9aa3ad;
   --text-3: #6f7883;
   --accent: #5b8bff;
-  --accent-soft: #232c3f;
+  --accent-soft: #27334b;
+  --warn: #d3a353;
+  --warn-soft: #33291a;
+  --ok: #4fbf8b;
+  --ok-soft: #16281f;
+  --danger: #ef6b6b;
+  --danger-soft: #2e1b1b;
   --fill: #262a32;
   --fill-2: #22262d;
   --mark-line: #c8a44f;
@@ -156,6 +173,7 @@ html[data-app-theme='dark'] {
   --rd-muted: #6b7480;
   --rd-border: rgba(255, 255, 255, 0.08);
   --rd-sel: rgba(91, 139, 255, 0.35);
+  --rd-listen: rgba(112, 158, 255, 0.26);
   --chrome-bg: rgba(28, 31, 37, 0.97);
   --chrome-fg: #e8eaed;
   --chrome-muted: #aab1bd;
@@ -177,7 +195,13 @@ html[data-app-theme='midnight'] {
   --text-2: #8b99b0;
   --text-3: #61708a;
   --accent: #6f9bff;
-  --accent-soft: #1f2a42;
+  --accent-soft: #25365a;
+  --warn: #d9ae5e;
+  --warn-soft: #2f2718;
+  --ok: #57c393;
+  --ok-soft: #172822;
+  --danger: #f07171;
+  --danger-soft: #2c1c20;
   --fill: #202b40;
   --fill-2: #1c2638;
   --mark-line: #c8a44f;
@@ -191,6 +215,7 @@ html[data-app-theme='midnight'] {
   --rd-muted: #64748f;
   --rd-border: rgba(140, 170, 220, 0.12);
   --rd-sel: rgba(111, 155, 255, 0.35);
+  --rd-listen: rgba(120, 165, 255, 0.28);
   --chrome-bg: rgba(24, 32, 49, 0.97);
   --chrome-fg: #dde5f0;
   --chrome-muted: #8b99b0;
@@ -213,6 +238,15 @@ html[data-app-theme='midnight'] {
    its own :active feedback everywhere, so the browser's is pure noise. */
 html {
   -webkit-tap-highlight-color: transparent;
+  /* Until the browser can rule out a double-tap zoom it holds the click back
+     for ~300 ms, and that wait lands on the *first* thing a reader feels after
+     touching a tab or a button. Measured on the phone: touching 书架 on the tab
+     bar produced touchend at 457 ms and click at 749 ms — 292 ms of doing
+     nothing before the app could even start. `manipulation` keeps scrolling and
+     pinch zoom and drops the wait; the reader's drag surfaces still override it
+     with their own touch-action (pan-y for page turns, none for the selection
+     handles). */
+  touch-action: manipulation;
 }
 
 html,
@@ -515,13 +549,42 @@ a {
   flex-wrap: wrap;
 }
 
-/* 书架：标题/搜索/导入固定在上，只有书籍列表（含下方存储信息）滚动 */
+/* ------------------------------- 一级页骨架 -------------------------------
+   书架 / 生词本 / AI / 我的 share one skeleton (2026-10-28): a fixed title bar,
+   an optional fixed action row, and a body that scrolls between them. The shelf
+   had this shape first — it is what「我的」and「生词本」were missing, and it is
+   why switching tabs used to move the top of the page: 生词本 lost its title
+   the moment you scrolled, 我的 was never fixed at all, and the shelf's own
+   chip row scrolled away even though the header above it did not.
+
+   The rows are OUTSIDE the scroller rather than `position: sticky` inside it:
+   sticky has to be told where the row above ends, and that number changes when
+   the header wraps (a search box opening, a count pill growing) — two numbers
+   that drift apart leave a gap the content shows through. In a column, each
+   row's height is whatever it is and the scroller starts exactly where the
+   last one ends. */
+.page.shell {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  padding-top: 20px;
+  padding-bottom: 0;
+  overflow: hidden;
+}
+.page.shell > .lib-head,
+.page.shell > .lib-tags {
+  flex: none;
+}
+/* `.library` stays: the drop outline below is keyed to it. */
 .page.library {
   height: 100%;
   display: flex;
   flex-direction: column;
+  min-height: 0;
   padding-top: 20px;
   padding-bottom: 0;
+  overflow: hidden;
 }
 .page.library .lib-head {
   flex: none;
@@ -544,6 +607,15 @@ a {
   font-size: 20px;
   margin: 0;
   font-weight: 650;
+}
+
+/* One search box for the three tabs, sized once. `.input`'s own padding gives
+   33px of height, and the notebook's separate `height: 32px` was enough to make
+   its header — and therefore its chip row, and therefore its whole list — 1px
+   higher than the shelf's. Same width, same height, same row everywhere. */
+.lib-search-input {
+  width: 220px;
+  height: 32px;
 }
 
 .dropzone {
@@ -692,6 +764,83 @@ a {
   font-variant-numeric: tabular-nums;
 }
 
+/* ---- shelf tag chips ---- */
+
+/* ---- the fixed chip row, shared by all three tabs ----
+
+   书架's tags, 生词本's statuses and AI 对话's origins are one control: 全部
+   plus one chip per class, single-select, session-only. They live in `.lib-tags`
+   / `.lib-tag-chip` and nowhere else — the notebook used to grow its own
+   `.vocab-filters` out of `.btn.sm` rectangles (26px tall, 6px radius, no
+   padding above), which put its second row 2px higher than the shelf's and
+   made the same gesture look like a different widget on the next tab.
+   (The `lib-` prefix is history: it was the shelf's row first.)
+
+   The row is fixed under the header (see `.page.shell`), and it bleeds into
+   `.page`'s gutter so a long list scrolls to the screen edge instead of being
+   clipped at the padding line. */
+.lib-tags {
+  display: flex;
+  gap: 6px;
+  margin: 0 -20px;
+  padding: 2px 20px 10px;
+  overflow-x: auto;
+  scrollbar-width: none;
+  flex: 0 0 auto;
+}
+.lib-tags::-webkit-scrollbar {
+  display: none;
+}
+
+.lib-tag-chip {
+  flex: 0 0 auto;
+  padding: 4px 12px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--text-2);
+  font-size: 12.5px;
+  line-height: 1.4;
+  cursor: pointer;
+  touch-action: manipulation;
+}
+.lib-tag-chip.on {
+  background: var(--accent, #4b7bec);
+  border-color: var(--accent, #4b7bec);
+  color: #fff;
+  font-weight: 600;
+}
+
+/* Tag chips on a card body: quiet pills, at most two + a +n counter. */
+.book-tags {
+  display: flex;
+  gap: 4px;
+  margin-top: 4px;
+  min-width: 0;
+  overflow: hidden;
+}
+.book-tag {
+  flex: 0 1 auto;
+  max-width: 88px;
+  padding: 1px 7px;
+  border-radius: 999px;
+  background: var(--accent-soft, #eaf0ff);
+  color: var(--accent, #4b7bec);
+  font-size: 10.5px;
+  line-height: 1.6;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.book-tag.hit {
+  font-weight: 700;
+}
+.book-tag.more {
+  background: transparent;
+  color: var(--text-3);
+  padding-right: 2px;
+}
+
 .book-actions {
   display: flex;
   gap: 5px;
@@ -734,6 +883,50 @@ a {
 
 .toc-head .toc-locate {
   margin-left: auto;
+}
+
+/* 目录 / 文件 switch. The nav is the book's own outline, the file view is the
+   spine; they answer different questions, so the control sits at the head of
+   the list rather than in a menu. */
+.toc-seg {
+  display: inline-flex;
+  flex: 0 0 auto;
+  gap: 2px;
+  padding: 2px;
+  border-radius: 7px;
+  background: var(--fill-2);
+}
+
+.toc-seg > button {
+  border: 0;
+  background: none;
+  padding: 2px 8px;
+  border-radius: 5px;
+  color: var(--text-3);
+  font-family: inherit;
+  font-size: 11.5px;
+  font-weight: 650;
+  letter-spacing: 0;
+  line-height: 1.5;
+  text-transform: none;
+  cursor: pointer;
+}
+
+.toc-seg > button:hover {
+  color: var(--text);
+}
+
+.toc-seg > button.on {
+  background: var(--panel);
+  color: var(--text);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.14);
+}
+
+/* The count the switch belongs to: 33 节 / 18 章. */
+.toc-n {
+  flex: 0 0 auto;
+  text-transform: none;
+  font-variant-numeric: tabular-nums;
 }
 
 /* "Locate current chapter" icon in the TOC header. */
@@ -1078,6 +1271,80 @@ a {
   right: 20px;
 }
 
+/* ---------- the page's own tag (pull the page down to mark it) ----------
+   A bookmark used to be visible only in the chrome, which meant the page you
+   had marked looked exactly like the ones you had not. This is the tag itself:
+   it hangs from the sheet's outer top corner, inside the page margin (34px on a
+   phone, and 22px wide), so it never covers a line of text at rest.
+
+   Two things write it and they do not overlap: `.on` (React, the bookmark row)
+   decides the resting height, and the pull gesture writes `height` inline while
+   a finger is on it. Releasing deletes that inline height, which hands the
+   ribbon back to CSS — so "settles to hanging" and "slides back into the book"
+   are the same one-line write. */
+.page-tag-wrap {
+  position: absolute;
+  top: 0;
+  right: 26px;
+  width: 22px;
+  height: 100%;
+  z-index: 4;
+  pointer-events: none;
+}
+/* A two-page spread: the current page is the left sheet, so its outer corner
+   is the left one. */
+.page-tag-wrap.left {
+  left: 26px;
+  right: auto;
+}
+.page-tag {
+  width: 100%;
+  height: 0;
+  background: var(--accent);
+  /* The ribbon's tail, cut rather than drawn: it scales with whatever the
+     height happens to be, so one shape serves both the hanging tag and the
+     long one under the finger. */
+  clip-path: polygon(0 0, 100% 0, 100% 100%, 50% 74%, 0 100%);
+  box-shadow: 0 2px 10px rgba(16, 24, 40, 0.18);
+  transition: height 210ms cubic-bezier(0.22, 0.61, 0.36, 1);
+}
+.page-tag-wrap.on .page-tag {
+  height: 28px;
+}
+/* Under the finger it must not ease: it is being drawn out, not settling. */
+.page-tag-wrap[data-drag='true'] .page-tag {
+  transition: none;
+}
+/* Armed = letting go acts. Removing reuses the app's danger colour, so the
+   gesture says which of the two things it is about to do before it does it. */
+.page-tag-wrap[data-armed='true'].on .page-tag {
+  background: var(--danger);
+}
+.page-tag-label {
+  position: absolute;
+  top: 14px;
+  right: calc(100% + 10px);
+  white-space: nowrap;
+  padding: 5px 10px;
+  border-radius: 999px;
+  font-size: 12px;
+  line-height: 1;
+  color: #fff;
+  background: var(--accent);
+  opacity: 0;
+  transform: translateY(-4px);
+  transition:
+    opacity 120ms ease,
+    transform 160ms ease;
+}
+.page-tag-wrap[data-armed='true'] .page-tag-label {
+  opacity: 1;
+  transform: none;
+}
+.page-tag-wrap[data-armed='true'].on .page-tag-label {
+  background: var(--danger);
+}
+
 .reader-spread {
   position: relative;
   will-change: opacity;
@@ -1091,6 +1358,152 @@ a {
   opacity: 0;
 }
 
+/* ---- page turn (within a chapter) ----
+   Two composited transforms, nothing else: the column strip slides by exactly
+   one (or two) page widths, and a shadow band sweeps across the sheet in the
+   same direction. Neither touches layout or the clip box, so the text cannot
+   wobble, re-wrap or shift its margins mid-turn — the only things that move are
+   the pixels.
+
+   The transition lives on `.turning`, NOT on `.reader-columns` itself: the same
+   strip is re-transformed on every measure/restore, and an always-on transition
+   would make the text fly in from page 1 after a resize or a mode switch. */
+.reader-spread.turning .reader-columns {
+  transition: transform 210ms cubic-bezier(0.22, 0.61, 0.36, 1);
+}
+
+/* A gesture turn is the same motion with the easing taken out: while the finger
+   is down the page is where the thumb put it (`turn-drag`), and only the
+   release slides it home (`turn-settle`). */
+.reader-spread.turn-settle .reader-drag {
+  transition: transform 210ms cubic-bezier(0.22, 0.61, 0.36, 1);
+}
+
+/* The page number belongs to the sheet, and the sheet is a fixed slot: in a
+   spread it jumps corners the instant the page changes, while the text is still
+   sliding. A quick fade hands it over with the page instead of ahead of it. A
+   dragged page takes its number with it for the same reason. */
+.reader-spread .page-sheet .page-num {
+  transition: opacity 140ms ease;
+}
+.reader-spread.turning .page-sheet .page-num,
+.reader-spread.turn-drag .page-sheet .page-num,
+.reader-spread.turn-settle .page-sheet .page-num {
+  opacity: 0;
+  transition: opacity 90ms ease;
+}
+
+/* The tag belongs to the page being left, so it steps aside with the number. */
+.reader-spread.turning .page-tag-wrap,
+.reader-spread.turn-drag .page-tag-wrap,
+.reader-spread.turn-settle .page-tag-wrap {
+  opacity: 0;
+  transition: opacity 90ms ease;
+}
+
+.turn-veil {
+  position: absolute;
+  left: 0;
+  top: 0;
+  /* Above the fold/spine and the covered page edges (z-index 7), which sit on
+     top of the clip the text lives in. */
+  z-index: 8;
+  overflow: hidden;
+  pointer-events: none;
+}
+
+/* The band is a soft shadow: no edges, peak around 15% black on paper. It
+   starts and ends fully outside the sheet, so nothing pops in or out. Narrow
+   on purpose — a wide wash reads as the screen dimming, a narrow one as the
+   edge of a page passing. */
+.turn-veil-band {
+  position: absolute;
+  top: -2%;
+  bottom: -2%;
+  left: 0;
+  width: 34%;
+  will-change: transform;
+  background: linear-gradient(
+    90deg,
+    rgba(34, 26, 12, 0) 0%,
+    rgba(34, 26, 12, 0.05) 14%,
+    rgba(34, 26, 12, 0.13) 52%,
+    rgba(34, 26, 12, 0.16) 74%,
+    rgba(34, 26, 12, 0) 100%
+  );
+}
+/* Off the right edge is 294% of a 34%-wide band's own width (100/0.34), off the
+   left edge is -100%. */
+.turn-veil.sweep.fwd .turn-veil-band {
+  animation: turn-band-fwd 250ms cubic-bezier(0.33, 0.12, 0.28, 1) both;
+}
+.turn-veil.sweep.back .turn-veil-band {
+  animation: turn-band-back 250ms cubic-bezier(0.33, 0.12, 0.28, 1) both;
+}
+/* A gesture turn drives the band by hand (placeBand): its position IS the drag
+   progress, so the shadow sits where the pulled page's edge is instead of
+   flying on its own schedule. This is only the first-frame fallback — the
+   element is placed in the commit that mounts it. */
+.turn-veil.drag .turn-veil-band,
+.turn-veil.settle .turn-veil-band {
+  animation: none;
+  transform: translate3d(294%, 0, 0);
+}
+.turn-veil.settle .turn-veil-band {
+  transition: transform 210ms cubic-bezier(0.22, 0.61, 0.36, 1);
+}
+@keyframes turn-band-fwd {
+  from {
+    transform: translate3d(294%, 0, 0);
+  }
+  to {
+    transform: translate3d(-100%, 0, 0);
+  }
+}
+@keyframes turn-band-back {
+  from {
+    transform: translate3d(-100%, 0, 0);
+  }
+  to {
+    transform: translate3d(294%, 0, 0);
+  }
+}
+
+/* On a dark page a shadow is invisible; the same band has to be much denser to
+   read as one at all. */
+html[data-app-theme='dark'] .turn-veil-band,
+html[data-app-theme='midnight'] .turn-veil-band {
+  background: linear-gradient(
+    90deg,
+    rgba(0, 0, 0, 0) 0%,
+    rgba(0, 0, 0, 0.26) 26%,
+    rgba(0, 0, 0, 0.4) 58%,
+    rgba(0, 0, 0, 0.48) 74%,
+    rgba(0, 0, 0, 0) 100%
+  );
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .reader-spread.turning .reader-columns,
+  .reader-spread.turn-settle .reader-drag,
+  .reader-spread.turn-settle .turn-peek,
+  .turn-veil.settle .turn-veil-band {
+    transition: none;
+  }
+  .reader-spread .page-sheet .page-num,
+  .reader-spread.turning .page-sheet .page-num,
+  .reader-spread.turn-drag .page-sheet .page-num,
+  .reader-spread.turn-settle .page-sheet .page-num {
+    transition: none;
+  }
+  .turn-veil {
+    display: none;
+  }
+  .turn-peek {
+    display: none;
+  }
+}
+
 /* Foreground clip that exactly matches the visible sheet(s). The page-sheet
    shadows live on sibling elements behind it, so they are not clipped, while
    the text column is strictly masked to the current 1 or 2 pages. */
@@ -1099,6 +1512,50 @@ a {
   left: 0;
   top: 0;
   overflow: hidden;
+}
+
+/* The drag layer: a gesture turn moves this, while the strip inside keeps the
+   transform the reader gives it. Promoted for good — a transform written on an
+   unpromoted element would re-raster the whole chapter every frame of the
+   drag. */
+.reader-drag {
+  position: absolute;
+  left: 0;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  will-change: transform;
+}
+
+/* The neighbouring chapter's page, waiting one spread away. It lives inside the
+   clip, so at rest it is simply not on screen; a chapter turn drags it in the
+   same way a within-chapter turn drags the next column in. Promoted for the same
+   reason as the drag layer — it carries a whole chapter, and a transform on an
+   unpromoted element would re-raster it on every frame. */
+.turn-peek {
+  position: absolute;
+  left: 0;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  will-change: transform;
+  /* A whole chapter, thousands of pixels wide, parked one spread off-screen.
+     Its strip therefore reaches back into the viewport — a page of the chapter
+     the reader just left, sitting under the live page on the leftward side. The
+     clip is what makes the parked position mean "not on screen": without it the
+     strip is only hidden by the compositor's layer bounds, which the phone's
+     WebView drops for the first frame of a freshly promoted layer, and that
+     frame is a flash of the previous chapter (ADR-18). */
+  overflow: hidden;
+  /* A picture of the next page, not a second reader: no taps, no selection, no
+     long-press dictionary, nothing for the finger to catch on. */
+  pointer-events: none;
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-touch-callout: none;
+}
+.reader-spread.turn-settle .turn-peek {
+  transition: transform 210ms cubic-bezier(0.22, 0.61, 0.36, 1);
 }
 
 .page-sheet {
@@ -1239,12 +1696,16 @@ a {
   box-shadow: 3px 12px 24px rgba(0, 0, 0, 0.22);
 }
 
-.reader-columns {
+.reader-columns,
+.turn-peek-columns {
   position: absolute;
   column-fill: auto;
   background: transparent;
   color: var(--rd-text);
   overflow: hidden;
+}
+
+.reader-columns {
   will-change: transform;
 }
 
@@ -1254,6 +1715,18 @@ a {
   line-height: 1.95;
   word-wrap: break-word;
   min-height: 100%;
+}
+/* Book markup must not opt out of fragmentation. Inside the multicol strip a
+   scroll container (any overflow other than visible) or an absolutely-positioned
+   box is monolithic: it never splits across columns, so a chapter wrapped in
+   one collapses to a single page while scroll mode shows every line. Book
+   classes are stripped at sanitize time (see CHAPTER_PURIFY), but inline
+   styles still arrive — and a !important here beats them. Nothing the app
+   injects into the content (highlight marks) needs either property. */
+.reader-content,
+.reader-content * {
+  overflow: visible !important;
+  position: static !important;
 }
 .reader-paged .reader-content img,
 .reader-paged .reader-content svg {
@@ -1655,6 +2128,22 @@ a {
   cursor: default;
 }
 
+/* 批注 sits between the two verbs and the colours: the same pill as 查词 but
+   outlined, because marking the page is the act and writing about it is the
+   optional half. */
+.sel-note {
+  height: 22px;
+  padding: 0 9px;
+  border: 1px solid var(--accent);
+  border-radius: 4px;
+  background: transparent;
+  color: var(--accent);
+  font-family: var(--font);
+  font-size: 12px;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
 /* Dictionary card: a fixed overlay above the page. It must never join the page
    flow — paginated mode measures content height, so an in-flow card would
    change the page count and move the reader. */
@@ -1751,10 +2240,42 @@ a {
   padding-right: 18px;
   color: var(--text-2);
 }
+.dict-miss-title b {
+  color: var(--text);
+  font-size: 15px;
+  font-weight: 600;
+}
 .dict-miss-hint {
   margin-top: 4px;
   font-size: 12px;
   color: var(--text-3);
+}
+/* A word the dictionary does not have is the one case where the model is the
+   only answer, so its entry here is a full-width button — not the small ✦ chip
+   the card uses when the word was found. */
+.ai-fallback {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  margin-top: 10px;
+  padding: 9px 11px;
+  border: none;
+  border-radius: 9px;
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-size: 13px;
+  font-weight: 600;
+  text-align: left;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+.ai-fallback:active {
+  filter: brightness(0.96);
+}
+.ai-fallback-star {
+  font-size: 14px;
+  line-height: 1;
 }
 .swatch {
   width: 22px;
@@ -1794,15 +2315,44 @@ a {
   gap: 6px;
   margin-bottom: 8px;
 }
+/* The marked sentence echoed back into the popover. On a phone the popover sits
+   over the line it belongs to and the keyboard covers the rest, so a note
+   written without it is a note about nothing. Two lines, then ellipsis: this is
+   context for what is being written, not a second reading surface. */
+.ann-quote {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  margin-bottom: 8px;
+  padding-left: 7px;
+  border-left: 2px solid var(--border-strong);
+  color: var(--text-3);
+  font-size: 12px;
+  line-height: 1.5;
+}
 .ann-note {
   width: 100%;
   min-height: 56px;
   resize: vertical;
+  /* Transparent, not a colour: the field sits inside the popover, so it has to
+     take the panel's own background in both themes. Left to the browser it
+     painted a white slab in the middle of a dark popover. */
+  background: transparent;
+  color: var(--text);
   border: 1px solid var(--border);
   border-radius: 6px;
   padding: 6px 8px;
   font-family: inherit;
   font-size: 13px;
+}
+.ann-note:focus {
+  /* The WebView draws its own orange focus ring around a focused field, which
+     looked like a warning. Replaced with the app's accent — the field is still
+     visibly focused, it just stops shouting. */
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px var(--accent-soft);
 }
 .ann-pop-actions {
   display: flex;
@@ -1903,7 +2453,10 @@ a {
   color: var(--text-2);
   line-height: 1.55;
   display: -webkit-box;
-  -webkit-line-clamp: 3;
+  /* Five lines, not three: three cut the ordinary sentence — not just the long
+     one — and an example clipped mid-clause is no example at all. The sheet
+     behind the row still shows it whole when five lines are not enough. */
+  -webkit-line-clamp: 5;
   -webkit-box-orient: vertical;
   overflow: hidden;
 }
@@ -2512,6 +3065,69 @@ a {
   font-weight: 550;
 }
 
+/* Filter + order, one row above the listing. The filter grows into whatever
+   space is left; on a phone the two controls share two rows rather than let
+   the sort chip shrink below a readable width. */
+.wd-tools {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.wd-filter {
+  flex: 1 1 200px;
+  min-width: 0;
+}
+
+.wd-sortseg {
+  display: inline-flex;
+  align-items: stretch;
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  background: var(--panel);
+  overflow: hidden;
+  flex: none;
+}
+
+.wd-sortseg button {
+  height: 30px;
+  padding: 0 10px;
+  border: 0;
+  background: transparent;
+  color: var(--text-3);
+  font-size: 12.5px;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.wd-sortseg button:hover {
+  background: var(--fill-2);
+  color: var(--text);
+}
+
+.wd-sortseg button.on {
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.wd-sortseg .wd-dirtoggle {
+  width: 34px;
+  padding: 0;
+  border-left: 1px solid var(--border);
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+}
+
+.wd-count {
+  margin-left: auto;
+  font-size: 12px;
+  color: var(--text-3);
+  font-variant-numeric: tabular-nums;
+}
+
 .wd-bulk {
   display: flex;
   align-items: center;
@@ -2538,22 +3154,45 @@ a {
   gap: 12px;
   padding: 9px 14px;
   border-bottom: 1px solid var(--border);
+  /* A row is pressable: a directory opens, a file's name opens out. */
+  cursor: pointer;
 }
 
 .wd-row:last-child {
   border-bottom: 0;
 }
 
-.wd-row.dir {
-  cursor: pointer;
-}
-
-.wd-row.dir:hover {
+.wd-row:hover {
   background: var(--fill-2);
 }
 
-.wd-row.sel {
+.wd-row.sel,
+.wd-row.sel:hover {
   background: var(--accent-soft);
+}
+
+/* Name opened out: the whole file name, wrapped, nothing clipped. The badge,
+   the date and the buttons stay on the first line — the row grows downward. */
+.wd-row.open {
+  align-items: flex-start;
+}
+
+.wd-row.open .wd-name {
+  white-space: normal;
+  overflow: visible;
+  text-overflow: clip;
+  /* File names have no spaces to break at, and a long one must still fit. */
+  overflow-wrap: anywhere;
+  /* Tighter than the body's 1.6 so a wrapped name reads as one block rather
+     than as several rows stacked. */
+  line-height: 1.45;
+  user-select: text;
+}
+
+.wd-row.open .wd-badge,
+.wd-row.open .wd-meta {
+  /* Optical alignment with the first line of the 19.6px line box. */
+  margin-top: 1px;
 }
 
 .wd-badge {
@@ -2592,6 +3231,13 @@ a {
   color: var(--text);
 }
 
+/* The name is a button for files (see .wd-row.open), so it must take focus. */
+.wd-name[role='button']:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+
 .wd-meta {
   flex: none;
   font-size: 12px;
@@ -2601,6 +3247,12 @@ a {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+/* Two renderings of the same timestamp: the long one for a desktop column,
+   the short one for the phone (see the 640px block below). */
+.wd-meta .wd-date-mini {
+  display: none;
 }
 
 .wd-actions {
@@ -2617,9 +3269,317 @@ a {
   cursor: pointer;
 }
 
+/* ---------------------- OPDS catalog browser ---------------------- */
+
+.opds-search {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.opds-search .input {
+  flex: 1;
+  min-width: 0;
+}
+
+/* Source picker rows (built-in + saved catalogs). */
+.opds-src {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 14px 16px;
+  border-bottom: 1px solid var(--border);
+  cursor: pointer;
+}
+
+.opds-src:last-child {
+  border-bottom: 0;
+}
+
+.opds-src:hover {
+  background: var(--fill-2);
+}
+
+.opds-src-main {
+  flex: 1;
+  min-width: 0;
+}
+
+.opds-src-name {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.opds-src-desc {
+  font-size: 12px;
+  color: var(--text-3);
+  margin-top: 3px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* The address a reader might want to copy into another app; monospace because
+   it is read character by character. Two lines, not one: the interesting part
+   of a catalog URL is usually at the end (`?query=l.zh`), and a single-line
+   ellipsis hides exactly that. */
+.opds-src-url {
+  font-family: var(--mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  font-size: 11px;
+  color: var(--text-3);
+  opacity: 0.8;
+  margin-top: 4px;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  overflow: hidden;
+  overflow-wrap: anywhere;
+}
+
+.opds-hints {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.opds-hints-lead {
+  font-size: 12px;
+  color: var(--text-3);
+}
+
+.opds-hint {
+  padding: 3px 9px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--text-2);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+/* 上一级 exists for the desktop only: on a phone the bar already carries the
+   arrow, and two ways back in one header reads as a layout mistake. Same
+   specificity, later rule wins inside the query. */
+.opds-up.btn {
+  display: none;
+}
+
+@media (min-width: 641px) {
+  .opds-up.btn {
+    display: inline-flex;
+  }
+}
+
+.opds-hint:hover {
+  background: var(--fill-2);
+  color: var(--text);
+}
+
+.opds-chev {
+  flex: none;
+  color: var(--text-3);
+  font-size: 18px;
+  line-height: 1;
+}
+
+/* Entry list: cover + two lines of text + actions. */
+.opds-list {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  overflow: hidden;
+}
+
+.opds-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 12px 14px;
+  border-bottom: 1px solid var(--border);
+}
+
+/* The row is the control (a book imports, a folder opens), so it has to feel
+   like one: a pointer, and a press state that arrives with the tap rather than
+   with the download. */
+.opds-row.is-link {
+  cursor: pointer;
+}
+
+.opds-row.is-link:active {
+  background: var(--fill-2);
+}
+
+/* A row whose target has to be looked at before the tap can be honoured (is it
+   a book or a folder?) is one round trip away from doing something. */
+/* A row that is working says so through its own mark (⋯ / 下载中…), so the row
+   itself only recedes a little — dimming the whole row with opacity would grey
+   out the very text that reports progress. */
+.opds-row.is-busy .opds-title {
+  color: var(--text-2);
+}
+
+.opds-row.is-busy .opds-cover {
+  opacity: 0.55;
+}
+
+@media (hover: hover) {
+  .opds-row.is-link:hover {
+    background: var(--fill-2);
+  }
+}
+
+.opds-row:last-child {
+  border-bottom: 0;
+}
+
+.opds-cover {
+  flex: none;
+  width: 56px;
+  height: 76px;
+  border-radius: 6px;
+  overflow: hidden;
+  background: var(--fill);
+}
+
+.opds-cover img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.opds-info {
+  flex: 1;
+  min-width: 0;
+}
+
+.opds-title {
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 1.4;
+  color: var(--text);
+  /* Two lines is the most a catalog title needs, and this keeps a long
+     subtitle from pushing the blurb and the buttons out of the row. */
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.opds-sub {
+  font-size: 12px;
+  color: var(--text-3);
+  margin-top: 3px;
+}
+
+.opds-summary {
+  font-size: 12.5px;
+  color: var(--text-2);
+  line-height: 1.6;
+  margin-top: 4px;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.opds-act {
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  align-items: stretch;
+}
+
+/* A folder's only trailing mark is the chevron: it says "there is more this
+   way" without pretending to be a second way in. */
+.opds-act .opds-chev {
+  align-self: center;
+  margin-top: 8px;
+}
+
+@media (max-width: 640px) {
+  .opds-summary {
+    -webkit-line-clamp: 2;
+  }
+}
+
+/* Download confirmation. It has to sit above the list but stay readable on a
+   phone, so it is a card at the bottom, not a centred dialog: thumbs are at the
+   bottom, and the answer is usually "yes". */
+.opds-ask-mask {
+  position: fixed;
+  inset: 0;
+  z-index: 70;
+  background: rgb(0 0 0 / 38%);
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  padding: 16px;
+}
+
+.opds-ask {
+  width: 100%;
+  max-width: 420px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  padding: 18px 18px 14px;
+  box-shadow: 0 18px 48px rgb(0 0 0 / 22%);
+}
+
+.opds-ask-name {
+  font-size: 15px;
+  font-weight: 600;
+  line-height: 1.4;
+  color: var(--text);
+  /* Two lines, then ellipsis: a 60-character Sanskrit title must not push the
+     buttons off the card. */
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.opds-ask-sub {
+  margin-top: 6px;
+  font-size: 13px;
+  color: var(--text-2);
+}
+
+.opds-ask-acts {
+  margin-top: 16px;
+  display: flex;
+  gap: 10px;
+}
+
+.opds-ask-acts .btn {
+  flex: 1;
+}
+
 @media (max-width: 640px) {
   .wd-meta {
     display: none;
+  }
+  /* Ordering by 修改日期 is unreadable with the column hidden, so a list sorted
+     that way brings it back as MM-DD (a two-digit year only when it is not
+     this year) and lets the size step aside — the name keeps its room. */
+  .wd-list.dates .wd-meta {
+    display: inline-flex;
+    align-items: baseline;
+    max-width: 66px;
+    font-size: 11.5px;
+  }
+  .wd-list.dates .wd-meta .wd-size,
+  .wd-list.dates .wd-meta .wd-dot,
+  .wd-list.dates .wd-meta .wd-date-long {
+    display: none;
+  }
+  .wd-list.dates .wd-meta .wd-date-mini {
+    display: inline;
   }
 }
 
@@ -2658,16 +3618,13 @@ a {
 
 /* ------------------------------ vocabulary notebook ------------------------------ */
 
-.vocab-search {
-  width: 220px;
-  height: 32px;
-}
+/* The notebook's search box is `.lib-search-input`, sized once for all three
+   tabs (see `.lib-head` above). `.vocab-search` survives only as a hook for the
+   device scripts — it carries no styles of its own, and giving it its own
+   height is what used to make this page's header 1px shorter than the others. */
 
-.vocab-filters {
-  display: flex;
-  gap: 6px;
-  margin-bottom: 14px;
-}
+/* The status chips are `.lib-tags` / `.lib-tag-chip` (shared with 书架 and AI
+   对话) — there is deliberately no notebook-specific filter row to style. */
 
 /* The offer to fetch the missing glosses. Deliberately a quiet strip rather
    than a card: it is a chore the reader may ignore, not content. */
@@ -2780,6 +3737,157 @@ a {
   text-overflow: ellipsis;
 }
 
+/* ------------------------------ word sheet ------------------------------ */
+
+/* The card a row opens into. A bottom sheet, like every other detail surface in
+   the app: it covers what the reader is not looking at, leaves the list behind
+   it, and one hardware back puts them back where they were. The body scrolls
+   instead of the sheet, so a 600-character sentence never pushes the two
+   actions off the bottom edge. */
+.vocab-sheet {
+  display: flex;
+  flex-direction: column;
+  max-height: 86vh;
+  padding: 4px 0 calc(10px + env(safe-area-inset-bottom));
+}
+
+.vocab-sheet-head {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 12px 18px 4px;
+  /* A long headword wraps rather than pushing the close button off screen. */
+  flex-wrap: wrap;
+  min-width: 0;
+}
+
+.vocab-sheet-word {
+  font-size: 22px;
+  font-weight: 700;
+  letter-spacing: 0.2px;
+  overflow-wrap: anywhere;
+  min-width: 0;
+}
+
+/* Its own class, not the AI panel's: the two are different layers, and a shared
+   name made "the close button" ambiguous to anything looking for one. */
+.vocab-sheet-close {
+  flex: none;
+  align-self: center;
+  width: 30px;
+  height: 30px;
+  border: none;
+  border-radius: 50%;
+  background: var(--panel-2);
+  color: var(--text-2);
+  font-size: 13px;
+  cursor: pointer;
+  padding: 0;
+  line-height: 1;
+}
+
+.vocab-sheet-close:active {
+  background: var(--fill);
+}
+
+.vocab-sheet-body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 0 18px 8px;
+}
+
+.vocab-sheet-trans {
+  font-size: 15px;
+  line-height: 1.6;
+  color: var(--text);
+  white-space: pre-line;
+}
+
+.vocab-sheet-quote {
+  margin-top: 14px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: var(--panel-2);
+}
+
+.vocab-sheet-label {
+  font-size: 11.5px;
+  font-weight: 650;
+  letter-spacing: 0.4px;
+  color: var(--text-3);
+  margin-bottom: 6px;
+}
+
+.vocab-sheet-quote p {
+  margin: 0;
+  font-size: 14.5px;
+  line-height: 1.8;
+  color: var(--text);
+  /* The quote is what the sheet exists for: no clamp, however long the sentence
+     turned out to be. The old row cut it at three lines, which is where "the
+     sentence was truncated" came from. */
+  overflow-wrap: anywhere;
+  -webkit-user-select: text;
+  user-select: text;
+}
+
+.vocab-sheet-meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 12px;
+  font-size: 12px;
+  color: var(--text-3);
+  min-width: 0;
+}
+
+.vocab-sheet-origin {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.vocab-sheet-learn {
+  flex: 0 0 auto;
+}
+
+.vocab-sheet-counts {
+  margin-top: 4px;
+  font-size: 12px;
+  color: var(--text-3);
+}
+
+/* The two ways out of the sheet, as text: an underline on hover, nothing at rest.
+   They are footnotes to the card, not its call to action. */
+.vocab-sheet-links {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 18px;
+  padding: 4px 18px 14px;
+}
+.vocab-sheet-link {
+  margin: 0;
+  padding: 6px 0;
+  border: 0;
+  background: none;
+  color: var(--accent);
+  font-size: 14px;
+  font-weight: 600;
+  /* Thumb-sized without looking like a button: the hit area is the padding. */
+  min-height: 32px;
+}
+.vocab-sheet-link:hover {
+  text-decoration: underline;
+}
+.vocab-sheet-note {
+  color: var(--text-3);
+  font-size: 13px;
+}
+
 /* ------------------------------ lookup history ------------------------------ */
 
 .hist-toolbar {
@@ -2792,12 +3900,19 @@ a {
   height: 34px;
 }
 
-/* The history row is not a link — there is nowhere to jump to — so it borrows
-   the notebook card's look without its button affordance. */
-.note-card-body {
+/* A history row is a card you can open now (it has a word card behind it), so it
+   uses the notebook's main button rather than a plain div. */
+.hist-body {
   flex: 1;
   min-width: 0;
   padding: 10px 12px;
+  border: 0;
+  background: transparent;
+  color: var(--text);
+  font-family: inherit;
+  text-align: left;
+  cursor: pointer;
+  border-radius: 8px;
 }
 
 .hist-meta {
@@ -2814,14 +3929,11 @@ a {
   min-width: 0;
 }
 
-/* The add button belongs at the end of the line, but it is what pushes the row
-   wide, so it wraps instead of shrinking the word. */
-.hist-meta .btn {
-  margin-left: auto;
-  flex: none;
-}
-
-.hist-in {
+/* Whether the word is already in the notebook — a fact about the row, stated at
+   the end of its line. Adding happens in the card, where it is one tap instead
+   of one tap in the way of opening the row. */
+.hist-in,
+.hist-out {
   margin-left: auto;
   font-size: 12px;
   color: var(--text-3);
@@ -2904,6 +4016,31 @@ a {
   line-height: 1.7;
   text-align: center;
   max-width: 440px;
+}
+
+/* The AI gloss sits on the answer side of the card, under the sentence it is
+   about. It is the same block the word sheet shows (`.dict-ai`), but the card
+   is a centred column of labels while this is prose about the sentence: it goes
+   left-aligned and takes the card's width, not the word's. */
+.review-card .dict-ai {
+  width: 100%;
+  max-width: 440px;
+  margin-top: 16px;
+  text-align: left;
+}
+
+/* The way to ask, for a word nobody has asked about yet. A quiet link under the
+   answer rather than a dock button: grading stays the only thumb-sized action
+   on this page, and the ✦ must not compete with it. */
+.review-ai-ask {
+  margin-top: 12px;
+  border: 0;
+  background: transparent;
+  padding: 4px 8px;
+  color: var(--accent);
+  font: inherit;
+  font-size: 12.5px;
+  cursor: pointer;
 }
 
 .review-dock {
@@ -3077,88 +4214,309 @@ a {
    Bottom tabs + reworked shelf. Everything below is off on the desktop: the
    defaults hide the new affordances, and one media query switches them in. */
 
+.phone-only,
 .tabbar,
+.head-icon,
 .lib-search-toggle,
 .lib-sort-toggle,
 .lib-plus-toggle {
   display: none;
 }
 
-/* The「我的」tab: low-frequency destinations collected into one list. */
-.me-list {
-  margin: 12px 14px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
+/* ---------------------------------- 「我的」 ----------------------------------
+   Four intent groups instead of one flat list (2026-10-28). The hierarchy is
+   carried by two row sizes, not by order: `.tall` (36px coloured tile, two
+   lines) for what is used weekly, the standard row (32px grey tile) for the
+   rest. The right side of every row is a live value — a count, a connection,
+   a model name — so the page answers "what is the state" without a tap. */
+
+.me-page {
+  /* A settings-style column reads badly at 1180px: keep it phone-width even
+     on the desktop, where /me is reachable only by URL. */
+  max-width: 640px;
+  margin: 0 auto;
+}
+
+/* The subtitle under the title: the page is local, and saying so once is more
+   useful than a row of its own. */
+.me-head-note {
+  font-size: 11.5px;
+  color: var(--text-3);
+}
+
+.me-grp {
+  margin-top: 14px;
+}
+.me-grp-title {
+  padding-left: 3px;
+  margin-bottom: 5px;
+  font-size: 11.5px;
+  letter-spacing: 0.6px;
+  color: var(--text-3);
+}
+.me-card {
   background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 12px;
   overflow: hidden;
 }
 
+/* Rows are both <Link> and <button>: one rule for the geometry, so the
+   dictionary row and the page rows line up to the pixel. */
 .me-row {
   display: flex;
   align-items: center;
-  gap: 10px;
-  padding: 14px 16px;
+  gap: 11px;
+  width: 100%;
+  padding: 9px 12px;
+  border: none;
   border-bottom: 1px solid var(--border);
+  background: none;
+  font-family: inherit;
+  text-align: left;
   text-decoration: none;
   color: var(--text);
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
 }
-
 .me-row:last-child {
   border-bottom: none;
 }
-
 .me-row:active {
   background: var(--panel-2);
+}
+.me-row:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+.me-row.tall {
+  padding: 10px 12px;
 }
 
 .me-row-text {
   flex: 1;
+  min-width: 0;
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: 1px;
 }
-
-.me-row-title {
-  font-size: 15px;
+.me-rt {
+  font-size: 14.5px;
+  font-weight: 500;
+  line-height: 1.35;
 }
-
-.me-row-desc {
-  font-size: 12px;
+.me-rs {
+  font-size: 11.5px;
+  line-height: 1.4;
   color: var(--text-3);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
-.me-row svg {
-  color: var(--text-3);
+.me-tile {
   flex: none;
-}
-
-.me-dict {
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  gap: 10px;
-  margin: 0 14px;
-  padding: 12px 16px;
-  font-size: 13px;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  border-radius: 9px;
+  background: var(--fill);
   color: var(--text-2);
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  background: var(--panel);
+}
+/* Only the two weekly rows get colour; the rest stay neutral so the colour
+   itself means "this is the common path". Both use `accent`, and nothing here
+   may borrow `--warn`: that palette means "not set up yet" (未安装 / 未配置, see
+   the badge below), so a warn-tinted tile sits next to a green 已安装 badge and
+   says two opposite things at once — and on the green theme its cream
+   background is the one warm patch on the screen. */
+.me-row.tall .me-tile {
+  width: 36px;
+  height: 36px;
+  border-radius: 11px;
+}
+.me-tile.accent {
+  background: var(--accent-soft);
+  color: var(--accent);
 }
 
-/* The dictionary row is now a real button (tap to import); a <button> carries
-   UA styles a <div> never had. */
-button.me-dict {
-  width: calc(100% - 28px);
+.me-val {
+  flex: none;
+  max-width: 42%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12.5px;
+  color: var(--text-3);
+  font-variant-numeric: tabular-nums;
+}
+.me-val.warn {
+  color: var(--danger);
+}
+.me-badge {
+  flex: none;
+  padding: 1px 6px;
+  border-radius: 5px;
+  font-size: 10.5px;
+  font-weight: 500;
+  background: var(--fill);
+  color: var(--text-2);
+}
+.me-badge.ok {
+  background: var(--ok-soft);
+  color: var(--ok);
+}
+.me-badge.warn {
+  background: var(--warn-soft);
+  color: var(--warn);
+}
+.me-chev {
+  flex: none;
+  color: #b9c0cc;
+}
+
+/* 关于 lives in the footer: it is not a destination of the same rank as the
+   rows above, and giving it a row made seven things look equally important. */
+.me-foot {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 14px 12px 0;
+}
+.me-foot-line {
+  flex: 1;
+  height: 1px;
+  background: var(--border);
+}
+.me-foot-link {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11.5px;
+  color: var(--text-3);
+  text-decoration: none;
+}
+.me-foot-link svg {
+  color: var(--text-3);
+}
+
+/* ------------------------- 查词词库 sheet (三级) ------------------------- */
+.dict-sheet {
+  max-height: 84vh;
+  overflow-y: auto;
+  padding: 10px 12px calc(12px + env(safe-area-inset-bottom));
+}
+.dict-sheet .sheet-title {
+  padding: 2px 2px 10px;
+}
+.dict-state {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  margin: 2px 0 12px;
+  padding: 11px 12px;
+  border-radius: 10px;
+  background: var(--fill);
+}
+.dict-state.ok {
+  background: var(--ok-soft);
+}
+.dict-state-dot {
+  flex: none;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--warn);
+}
+.dict-state.ok .dict-state-dot {
+  background: var(--ok);
+}
+.dict-state-text b {
+  display: block;
+  font-size: 13px;
+  font-weight: 600;
+}
+.dict-state-text small {
+  display: block;
+  font-size: 11px;
+  line-height: 1.45;
+  color: var(--text-2);
+  opacity: 0.85;
+}
+.dict-label {
+  padding: 0 2px 5px;
+  font-size: 11px;
+  letter-spacing: 0.5px;
+  color: var(--text-3);
+}
+.dict-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  margin-bottom: 8px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--panel);
   font-family: inherit;
   text-align: left;
+  color: var(--text);
   cursor: pointer;
-  -webkit-tap-highlight-color: transparent;
-  transition: opacity 0.14s ease;
 }
-button.me-dict:disabled {
+.dict-item:active {
+  background: var(--panel-2);
+}
+.dict-item:disabled {
   opacity: 0.6;
   cursor: default;
+}
+.dict-item-icon {
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border-radius: 7px;
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+.dict-item-icon.plain {
+  background: var(--fill);
+  color: var(--text-2);
+}
+.dict-item-text {
+  flex: 1;
+  min-width: 0;
+}
+.dict-item-text b {
+  display: block;
+  font-size: 13.5px;
+  font-weight: 500;
+}
+.dict-item-text small {
+  display: block;
+  font-size: 11px;
+  line-height: 1.4;
+  color: var(--text-3);
+}
+.dict-item-meta {
+  flex: none;
+  font-size: 11.5px;
+  color: var(--text-3);
+}
+.dict-cancel {
+  width: 100%;
+  height: 40px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--panel-2);
+  font-family: inherit;
+  font-size: 14px;
+  color: var(--text-2);
+  cursor: pointer;
 }
 
 /* 关于 page: identity block + the system paths that used to trail the shelf. */
@@ -3594,6 +4952,14 @@ button.me-dict:disabled {
   padding: 9px 10px;
 }
 
+/* Reuse suggestions under the tags input: tap to append, no retyping. */
+.edit-tags-used {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 2px;
+}
+
 .edit-cover-row {
   display: flex;
   align-items: center;
@@ -3667,8 +5033,34 @@ button.me-dict:disabled {
     -webkit-tap-highlight-color: transparent;
   }
 
+  /* The selected tab is marked by a pill behind the glyph, not by colour alone.
+     On the low-saturation themes the accent and the idle grey sit ~27 ΔE apart
+     (green is the worst), which is not enough to read at a glance — the shape
+     carries the answer even when the hue does not. Weight and stroke width do
+     the same job for the label and the icon. */
+  .tabbar-ico {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 44px;
+    height: 26px;
+    border-radius: 13px;
+    transition: background-color 0.15s ease;
+  }
+
   .tabbar-item.active {
     color: var(--accent);
+    font-weight: 600;
+  }
+
+  .tabbar-item.active .tabbar-ico {
+    background: var(--accent-soft);
+  }
+
+  /* `stroke-width` is a presentation attribute on the paths; a CSS rule beats
+     it, so one declaration thickens every glyph without touching the markup. */
+  .tabbar-item.active svg :is(path, circle, line, rect) {
+    stroke-width: 1.9;
   }
 
   /* Shelf header: the low-frequency links move to「我的」, the import button
@@ -3681,6 +5073,7 @@ button.me-dict:disabled {
   /* Icon buttons: .btn's 13px horizontal padding would leave ~12px of content
      box inside a 38px circle and flex-shrink the svg to 10px — the squinty
      search icon this block replaces. */
+  .head-icon,
   .lib-search-toggle,
   .lib-sort-toggle,
   .lib-plus-toggle {
@@ -3694,10 +5087,65 @@ button.me-dict:disabled {
     flex: none;
   }
 
+  .head-icon:active,
   .lib-sort-toggle:active,
   .lib-plus-toggle:active,
   .lib-search-toggle:active {
     background: var(--panel-2);
+  }
+
+  /* One line, always. A header that wraps moves every row below it down, so a
+     fixed bar that can grow is not fixed at all — the title, the count and the
+     icons share the row and the count ellipsises first. `.search-open` is the
+     one exception: the input is meant to take a line of its own. */
+  .page.shell > .lib-head {
+    gap: 8px;
+    /* One value for both states. It used to be 12px only while collapsed, so
+       opening the search moved the list down by 8px more than the header grew
+       — a scroller that shrinks by a different amount than the bar above it
+       grows eventually puts the last row under the tab bar. */
+    margin-bottom: 12px;
+  }
+  .page.shell > .lib-head:not(.search-open) {
+    flex-wrap: nowrap;
+  }
+  /* A search box is the last item of the header on a phone, wherever it sits in
+     the DOM. The shelf already had it last; the notebook keeps it before the
+     buttons (right for the desktop row, where it reads left of them), so
+     without this the input claimed a whole row and pushed 搜索 / 查词历史 / 复习
+     onto a third — three rows of fixed chrome above the list. */
+  .page.shell > .lib-head > .input {
+    order: 10;
+  }
+  /* The notebook's 复习 button already carries the due count, so the pill on a
+     phone only has to say how many words there are — repeating 到期 next to
+     the button was also what pushed the title over the edge. */
+  .page.shell > .lib-head > .tag.phone-only {
+    max-width: 46vw;
+  }
+  /* The title never shrinks and never wraps. It is the one item in the row
+     whose wrapping doubles the height of a bar that is supposed to be fixed:
+     on a 360px phone 生词本 + the count + three controls came to 357px, so the
+     h1 absorbed the last few pixels and broke into 生词 / 本. Whatever has to
+     give, it is not the title. */
+  .page.shell > .lib-head > h1 {
+    flex: 0 0 auto;
+    white-space: nowrap;
+  }
+  /* So the count is what gives, and it gives by ellipsis rather than by
+     pushing anything out of the row. */
+  .page.shell > .lib-head > .tag {
+    flex: 0 1 auto;
+    min-width: 0;
+    max-width: 40vw;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  /* Pairs with `.desk-only`: a control or count that only one of the two
+     layouts has room for. */
+  .phone-only {
+    display: inline-flex;
   }
 
   /* A long-press on a cover must open the book sheet, not start a text
@@ -3740,26 +5188,8 @@ button.me-dict:disabled {
     display: none;
   }
 
-  /* Filter buttons become a swipeable chip row. */
-  .vocab-filters {
-    flex-wrap: nowrap;
-    overflow-x: auto;
-    gap: 8px;
-    padding-bottom: 4px;
-  }
-
-  .vocab-filters .btn {
-    flex: 0 0 auto;
-    white-space: nowrap;
-  }
-
-  /* A 220px search box plus its buttons cannot share a phone-width row: the
-     search takes a line of its own and the buttons sit under it, instead of
-     leaving one button stranded on a third row. */
-  .vocab-search {
-    flex: 1 1 100%;
-    width: 100%;
-  }
+  /* The chip row already bleeds into the page gutter at every width (see
+     `.lib-tags`), so there is nothing notebook-specific left to adjust here. */
 
   /* Review pass: the dock leaves the page flow and pins itself to the bottom
      edge. The page reserves the space it covers so the card is never hidden
@@ -3810,6 +5240,13 @@ button.me-dict:disabled {
 .sheet-item.sort-on {
   color: var(--accent);
   font-weight: 600;
+}
+
+/* Small section label between the sort keys and the 顺序/倒序 row. */
+.sheet-dir-label {
+  padding: 10px 16px 4px;
+  font-size: 12px;
+  color: var(--text-3);
 }
 
 /* ------------------------------ mobile reader chrome ------------------------------
@@ -3907,12 +5344,36 @@ button.me-dict:disabled {
   background: var(--chrome-thumb);
   box-shadow: 0 1px 4px rgba(0, 0, 0, 0.4);
 }
-.m-slider-pct {
-  text-align: center;
+/* Page footer: page number left, whole-book progress right. Two ends of one
+   row rather than one centred line — the centre of a phone screen is where
+   neither thumb rests, and it left the percentage as the only thing saying
+   "how far through the book am I" with nothing to anchor it. */
+.m-foot {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 0 2px;
   font-size: 11px;
   line-height: 1.2;
   color: var(--chrome-muted);
+  font-variant-numeric: tabular-nums;
   user-select: none;
+}
+.m-foot-page {
+  /* Empty before the first layout pass; keep the row's height stable so the
+     slider does not jump when the page count arrives. */
+  min-height: 13px;
+}
+.m-foot-pct {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 3px;
+  color: var(--chrome-fg);
+}
+.m-foot-pct-lb {
+  font-size: 10px;
+  opacity: 0.6;
 }
 .m-tabs {
   display: flex;
@@ -3991,19 +5452,26 @@ button.me-dict:disabled {
   line-height: 1;
   color: var(--text);
 }
+/* Never let a segment shrink. Left to the flex algorithm it loses width to the
+   label beside it, and CJK breaks between any two characters, so "系统"/"在线"
+   quietly turned into two stacked glyphs ("系" over "统") at 360 px. The label
+   is the side that can wrap, so it takes the squeeze instead. */
 .rd-seg {
   display: flex;
+  flex: 0 0 auto;
   background: var(--panel-2);
   border-radius: 9px;
   padding: 3px;
 }
 .rd-seg button {
+  flex: 0 0 auto;
   border: none;
   background: transparent;
   padding: 7px 20px;
   border-radius: 7px;
   font-size: 13px;
   font-family: var(--font);
+  white-space: nowrap;
   color: var(--text-2);
   cursor: pointer;
 }
@@ -4012,6 +5480,12 @@ button.me-dict:disabled {
   color: var(--text);
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.14);
   font-weight: 600;
+}
+/* Three labels ("灵敏 标准 稳重") next to a label at 360 px: the default 20 px
+   of horizontal padding per button adds up to a segment wider than the space
+   left of it, and the row would either wrap or squeeze the label to nothing. */
+.rd-seg.tight button {
+  padding: 7px 12px;
 }
 .rd-themes {
   display: flex;
@@ -4142,6 +5616,12 @@ button.me-dict:disabled {
     padding: 0 14px;
     font-size: 13px;
   }
+  /* Same finger-sized target as 查词 — a 22px pill is a miss on a phone. */
+  .sel-note {
+    height: 30px;
+    padding: 0 12px;
+    font-size: 13px;
+  }
   .sel-toolbar .swatch {
     width: 28px;
     height: 28px;
@@ -4267,18 +5747,641 @@ button.me-dict:disabled {
   opacity: 0.7;
 }
 
-/* the Me→设置 page reuses the sheet rows in page flow */
-.settings-body {
+/* ------------------------------- 设置（0.4 重排） -------------------------------
+   One structure for every row: a label with a one-line explanation on the
+   left, the current value / control on the right. What needs a preview stays
+   inline (theme swatches, the paged-scroll segment, switches); what needs
+   browsing or typing sinks one level (font list, AI, log list). */
+
+.settings-page {
+  max-width: 640px;
+  margin: 0 auto;
+  padding-bottom: 40px;
+}
+
+.st-grp {
+  margin-top: 14px;
+}
+.st-grp-title {
+  padding-left: 3px;
+  margin-bottom: 5px;
+  font-size: 11.5px;
+  letter-spacing: 0.6px;
+  color: var(--text-3);
+}
+.st-card {
   background: var(--panel);
   border: 1px solid var(--border);
   border-radius: 12px;
   overflow: hidden;
 }
-.settings-hint {
+.st-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  padding: 11px 14px;
+  /* Rows are <div>, <a> and <button>: the button's UA face (grey fill,
+     shrink-to-fit width, centred text) would break the row alignment. */
+  border: none;
+  border-bottom: 1px solid var(--border);
+  background: none;
+  font-family: inherit;
+  font-size: 14px;
+  text-align: left;
+  text-decoration: none;
+  color: var(--text);
+}
+.st-row:last-child {
+  border-bottom: none;
+}
+.st-row.tap {
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+.st-row.tap:active {
+  background: var(--panel-2);
+}
+.st-lb {
+  flex: 1;
+  min-width: 0;
+  font-size: 14px;
+}
+.st-lb small {
+  display: block;
+  margin-top: 1px;
+  font-size: 11px;
+  line-height: 1.45;
+  color: var(--text-3);
+}
+.st-tile {
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 8px;
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+.st-val {
+  flex: none;
+  max-width: 40%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12.5px;
+  color: var(--text-3);
+}
+.st-badge {
+  flex: none;
+  padding: 1px 6px;
+  border-radius: 5px;
+  font-size: 10.5px;
+  font-weight: 500;
+  background: var(--fill);
+  color: var(--text-2);
+}
+.st-badge.warn {
+  background: var(--warn-soft);
+  color: var(--warn);
+}
+.st-chev {
+  flex: none;
+  color: #b9c0cc;
+}
+
+/* 字号 stepper: the same 13–26 range the reader's Aa panel clamps to. */
+.st-step {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  overflow: hidden;
+  background: var(--panel);
+}
+.st-step button {
+  width: 32px;
+  height: 28px;
+  border: none;
+  background: transparent;
+  font-family: inherit;
+  font-size: 13px;
+  color: var(--text);
+  cursor: pointer;
+}
+.st-step button:active {
+  background: var(--fill);
+}
+.st-step-val {
+  min-width: 34px;
+  line-height: 28px;
+  text-align: center;
+  font-size: 12.5px;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-2);
+  border-left: 1px solid var(--border);
+  border-right: 1px solid var(--border);
+}
+
+/* Theme swatches are mini pages, not dots: the paper colour alone says
+   nothing about how a page will read, the ink colour is half the choice. */
+.st-themes {
+  display: flex;
+  gap: 8px;
+  padding: 12px 12px 6px;
+}
+.st-th {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 5px;
+  padding: 0;
+  border: none;
+  background: none;
+  font-family: inherit;
+  font-size: 11px;
+  color: var(--text-2);
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+.st-th-page {
+  position: relative;
+  width: 100%;
+  height: 44px;
+  border-radius: 7px;
+  border: 1px solid rgba(0, 0, 0, 0.12);
+  background: var(--th-paper);
+  overflow: hidden;
+}
+.st-th-page::before {
+  content: '';
+  position: absolute;
+  left: 6px;
+  right: 6px;
+  top: 8px;
+  height: 2px;
+  border-radius: 2px;
+  background: var(--th-ink);
+  opacity: 0.85;
+}
+.st-th-page::after {
+  content: '';
+  position: absolute;
+  left: 6px;
+  right: 12px;
+  top: 14px;
+  height: 15px;
+  background: linear-gradient(
+    var(--th-ink) 0 2px,
+    transparent 2px 5px,
+    var(--th-ink) 5px 7px,
+    transparent 7px 10px,
+    var(--th-ink) 10px 12px,
+    transparent 12px
+  );
+  opacity: 0.42;
+}
+.st-th.on .st-th-page {
+  box-shadow: 0 0 0 2px var(--accent);
+}
+.st-th.on {
+  color: var(--accent);
+  font-weight: 600;
+}
+.st-th[data-theme='light'] {
+  --th-paper: #ffffff;
+  --th-ink: #22262e;
+}
+.st-th[data-theme='sepia'] {
+  --th-paper: #f9f3e4;
+  --th-ink: #4a4030;
+}
+.st-th[data-theme='green'] {
+  --th-paper: #d9ecd9;
+  --th-ink: #24352a;
+}
+.st-th[data-theme='dark'] {
+  --th-paper: #16181d;
+  --th-ink: #a8b0ba;
+}
+.st-th[data-theme='midnight'] {
+  --th-paper: #151c2b;
+  --th-ink: #9fb0c8;
+}
+.st-themes-note {
+  padding: 0 12px 10px;
+  font-size: 11px;
+  color: var(--text-3);
+}
+.st-hint {
   margin-top: 12px;
+  padding: 0 3px;
+  font-size: 11.5px;
+  line-height: 1.7;
+  color: var(--text-3);
+}
+
+/* The font catalogue is a list, so it lives in a sheet instead of pushing the
+   settings page tall on every visit. */
+.font-sheet {
+  max-height: 80vh;
+  overflow-y: auto;
+  padding: 10px 12px calc(12px + env(safe-area-inset-bottom));
+}
+.font-sheet .sheet-title {
+  padding: 2px 2px 10px;
+}
+.font-sheet-body .rd-fonts {
+  justify-content: flex-start;
+}
+.font-sheet .sheet-item.cancel {
+  margin-top: 8px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--panel-2);
+  padding: 10px;
+  font-size: 14px;
+}
+
+/* ------------------------------- AI 设置分区 ------------------------------- */
+.ai-set {
+  padding: 16px;
+}
+.ai-set-desc {
+  margin: 0 0 14px;
   font-size: 12px;
+  line-height: 1.7;
+  color: var(--text-2);
+}
+.ai-set .field:last-of-type {
+  margin-bottom: 4px;
+}
+.ai-key-wrap {
+  position: relative;
+}
+.ai-key-toggle {
+  position: absolute;
+  right: 4px;
+  top: 4px;
+}
+.ai-set-actions {
+  display: flex;
+  gap: 10px;
+  margin-top: 12px;
+}
+.ai-set-test {
+  margin-top: 10px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  font-size: 12.5px;
+  line-height: 1.6;
+  word-break: break-all;
+}
+.ai-set-test.ok {
+  color: var(--ok);
+  background: var(--ok-soft);
+}
+.ai-set-test.fail {
+  color: var(--danger);
+  background: var(--danger-soft);
+}
+.ai-set-error {
+  margin-bottom: 12px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  font-size: 12.5px;
+  color: var(--danger);
+  background: var(--danger-soft);
+}
+.ai-set-note {
+  margin: 12px 0 0;
+  font-size: 11.5px;
+  line-height: 1.7;
   color: var(--text-2);
   opacity: 0.75;
+}
+
+/* --------------------------- AI 底部面板（C 方案） --------------------------- */
+/* Above the word card (62) and the selection toolbar (60), below the privacy
+   dialog (90): the dialog decides whether the panel opens at all. */
+.ai-mask {
+  z-index: 70;
+}
+.ai-sheet {
+  width: 100%;
+  max-width: 480px;
+  height: 76%;
+  background: var(--panel);
+  border-radius: 16px 16px 0 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-touch-callout: none;
+}
+.ai-sheet-grip {
+  width: 36px;
+  height: 4px;
+  border-radius: 2px;
+  background: var(--border-strong);
+  margin: 8px auto 0;
+  flex: none;
+}
+.ai-sheet-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 14px 8px 18px;
+  flex: none;
+}
+.ai-sheet-title {
+  flex: 1;
+  min-width: 0;
+  font-size: 14.5px;
+  font-weight: 650;
+  color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.ai-sheet-close {
+  flex: none;
+  width: 30px;
+  height: 30px;
+  border: none;
+  border-radius: 50%;
+  background: var(--panel-2);
+  color: var(--text-2);
+  font-size: 13px;
+  cursor: pointer;
+  padding: 0;
+  line-height: 1;
+}
+.ai-sheet-close:active {
+  background: var(--fill);
+}
+.ai-sheet-body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 6px 18px calc(18px + env(safe-area-inset-bottom));
+  -webkit-overflow-scrolling: touch;
+}
+
+/* panel states */
+.ai-loading {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 28px 4px;
+  font-size: 13.5px;
+  color: var(--text-2);
+}
+.ai-spinner {
+  width: 16px;
+  height: 16px;
+  flex: none;
+  border: 2px solid var(--border-strong);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: ai-spin 0.8s linear infinite;
+}
+@keyframes ai-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+.ai-error {
+  padding: 24px 4px;
+}
+.ai-error-msg {
+  margin: 0 0 14px;
+  font-size: 13.5px;
+  line-height: 1.7;
+  color: var(--text-2);
+}
+.ai-error-actions {
+  display: flex;
+  gap: 10px;
+}
+
+/* panel content */
+.ai-cache-badge {
+  display: inline-block;
+  margin-bottom: 10px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-size: 11px;
+  font-weight: 600;
+}
+.ai-label {
+  margin: 14px 0 6px;
+  font-size: 12px;
+  font-weight: 650;
+  color: var(--text-3);
+}
+.ai-sentence {
+  font-size: 15px;
+  line-height: 1.75;
+  color: var(--text);
+}
+/* A long sentence is quoted, not reprinted: past four lines it folds, so the
+   answer the reader tapped for still starts on the first screen. The full text
+   is one tap away and is always intact in the notebook's word sheet. */
+.ai-sentence.is-folded {
+  display: -webkit-box;
+  -webkit-line-clamp: 4;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.ai-sentence-more {
+  margin: 0 0 6px;
+  padding: 2px 0;
+  border: 0;
+  background: none;
+  color: var(--accent);
+  font-size: 12px;
+  font-weight: 600;
+  text-align: left;
+}
+.ai-hl {
+  color: var(--accent);
+  font-weight: 700;
+}
+/* The word's meaning in this sentence — the payload of the gloss, so it carries
+   the weight the translation used to. */
+.ai-explain {
+  margin: 0;
+  font-size: 15.5px;
+  font-weight: 650;
+  line-height: 1.7;
+  color: var(--text);
+}
+/* Part of speech: real information, too small to compete with the meaning. */
+.ai-pos {
+  margin-left: 8px;
+  padding: 1px 7px;
+  border-radius: 999px;
+  background: var(--panel-2);
+  color: var(--text-3);
+  font-size: 11px;
+  font-weight: 600;
+  vertical-align: 1px;
+}
+.ai-note {
+  margin-top: 14px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: var(--panel-2);
+  font-size: 13.5px;
+  line-height: 1.7;
+  color: var(--text);
+}
+.ai-trans {
+  margin-top: 12px;
+  font-size: 15.5px;
+  font-weight: 650;
+  line-height: 1.7;
+  color: var(--text);
+}
+.ai-seg {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 2px 10px;
+  padding: 8px 0;
+  border-bottom: 1px solid var(--border);
+  font-size: 13.5px;
+}
+.ai-seg:last-child {
+  border-bottom: none;
+}
+.ai-seg-text {
+  color: var(--text);
+  font-weight: 600;
+}
+.ai-seg-role {
+  color: var(--accent);
+  font-size: 11.5px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+.ai-seg-gloss {
+  grid-column: 1 / -1;
+  color: var(--text-2);
+  font-size: 12.5px;
+}
+.ai-notes ul,
+.ai-points ul {
+  margin: 0;
+  padding-left: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+.ai-notes li,
+.ai-points li {
+  font-size: 13.5px;
+  line-height: 1.7;
+  color: var(--text);
+}
+.ai-summary {
+  font-size: 14.5px;
+  line-height: 1.85;
+  color: var(--text);
+}
+.ai-trunc {
+  margin-bottom: 10px;
+  padding: 7px 10px;
+  border-radius: 8px;
+  background: var(--panel-2);
+  font-size: 12px;
+  color: var(--text-2);
+}
+.ai-term-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.ai-term {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 6px;
+  padding: 5px 10px;
+  border-radius: 999px;
+  background: var(--accent-soft);
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--accent);
+}
+.ai-term em {
+  font-style: normal;
+  font-weight: 400;
+  font-size: 11.5px;
+  color: var(--text-2);
+}
+
+/* the ✦ AI entry button, on the word card and the selection toolbar */
+.ai-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 6px 12px;
+  border: none;
+  border-radius: 999px;
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-size: 12.5px;
+  font-weight: 650;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+.ai-chip:active {
+  filter: brightness(0.96);
+}
+.ai-chip .badge {
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: rgba(15, 23, 42, 0.12);
+  font-size: 10.5px;
+  font-weight: 600;
+}
+
+/* The chapter guide sits in the top bars (0.4). The class is both the colour
+   hook and the stable handle the acceptance suites click — the entry moved out
+   of the text area because a floating chip over the first page looked like a
+   page element, not a chapter action. */
+.ai-guide-btn {
+  color: var(--accent);
+}
+
+/* the per-send privacy confirmation for the chapter guide */
+.ai-confirm {
+  width: min(360px, 100%);
+}
+.ai-confirm .modal-body {
+  padding: 18px 20px;
+  font-size: 13.5px;
+  line-height: 1.75;
+  color: var(--text);
+}
+.ai-confirm .modal-body p {
+  margin: 0 0 8px;
+}
+.ai-confirm .modal-body p:last-child {
+  margin-bottom: 0;
+}
+.ai-confirm-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  padding: 0 20px calc(16px + env(safe-area-inset-bottom));
 }
 
 /* ---------------------------- sub page headers ---------------------------- */
@@ -4287,6 +6390,16 @@ button.me-dict:disabled {
   align-items: center;
   gap: 10px;
   margin-bottom: 14px;
+}
+/* A catalog page title can be a whole book title ("Pride and Prejudice by Jane
+   Austen"). Letting it wrap turns the sticky header into five lines on a 360px
+   phone and squeezes the tag and the buttons out of the bar; the entry row
+   below carries the full title anyway, so one ellipsised line is enough. */
+.sub-head h1 {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .sub-back {
   display: none;
@@ -4332,9 +6445,1266 @@ button.me-dict:disabled {
     text-overflow: ellipsis;
     white-space: nowrap;
   }
-  .settings-body {
-    border-left: none;
-    border-right: none;
-    border-radius: 0;
+  /* The title already squeezed it to a stub; a three-character ellipsis in a
+     pill reads as a broken layout, not as a hint. */
+  .sub-tag-narrow-hide {
+    display: none;
   }
+}
+
+/* --------------------------- diagnostics (0.4) ---------------------------
+   The switch lives on the settings page, the entries on their own page. The
+   log is deliberately plain — it is read while something is broken, so
+   nothing may depend on hover, animation, or a second tap to reveal. */
+
+.logs-page {
+  padding-bottom: 48px;
+}
+.logs-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 14px 16px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+.logs-row-text {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.logs-row-text b {
+  font-size: 14px;
+}
+.logs-row-text small {
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--text-3);
+}
+.logs-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin: 10px 2px 0;
+  font-size: 12px;
+  color: var(--text-3);
+}
+.logs-dot {
+  opacity: 0.5;
+}
+.logs-path {
+  width: 100%;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 11px;
+  line-height: 1.5;
+  word-break: break-all;
+  opacity: 0.85;
+}
+.logs-cap {
+  width: 100%;
+  font-size: 11px;
+  line-height: 1.5;
+  opacity: 0.6;
+}
+.logs-filters {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-top: 12px;
+}
+.logs-chip {
+  padding: 5px 12px;
+  border-radius: 999px;
+  border: 1px solid var(--border-strong);
+  background: var(--panel);
+  color: var(--text-2);
+  font-size: 12.5px;
+  cursor: pointer;
+}
+.logs-chip.on {
+  background: var(--accent-soft);
+  border-color: var(--accent);
+  color: var(--accent);
+  font-weight: 600;
+}
+.logs-gap {
+  flex: 1;
+}
+.logs-actions {
+  display: flex;
+  gap: 10px;
+  margin-top: 12px;
+}
+.logs-empty,
+.logs-error {
+  margin-top: 16px;
+  padding: 18px 16px;
+  border-radius: var(--radius);
+  background: var(--panel-2);
+  border: 1px dashed var(--border-strong);
+  color: var(--text-3);
+  font-size: 13px;
+  text-align: center;
+}
+.logs-error {
+  border-style: solid;
+  border-color: var(--danger);
+  color: var(--danger);
+  background: var(--danger-soft);
+}
+.logs-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 14px;
+}
+.log-item {
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-left: 3px solid transparent;
+}
+.log-item.lv-warn {
+  border-left-color: var(--mark-line);
+}
+.log-item.lv-error {
+  border-left-color: var(--danger);
+}
+.log-head {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 6px;
+  font-size: 12.5px;
+  line-height: 1.55;
+}
+.log-time {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 11px;
+  color: var(--text-3);
+}
+.log-cat {
+  padding: 0 6px;
+  border-radius: 4px;
+  background: var(--fill);
+  color: var(--text-2);
+  font-size: 11px;
+}
+.log-cat.cat-ai {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+.log-kind {
+  font-size: 11px;
+  color: var(--text-3);
+}
+.log-msg {
+  color: var(--text);
+  flex: 1;
+  min-width: 0;
+  word-break: break-word;
+}
+.log-item.lv-error .log-msg {
+  color: var(--danger);
+}
+.log-data {
+  margin-top: 4px;
+}
+.log-data summary {
+  cursor: pointer;
+  font-size: 11.5px;
+  color: var(--text-3);
+  list-style: none;
+}
+.log-data summary::-webkit-details-marker {
+  display: none;
+}
+.log-data summary::before {
+  content: '▸ ';
+}
+.log-data[open] summary::before {
+  content: '▾ ';
+}
+.log-data pre {
+  margin: 6px 0 0;
+  padding: 8px 10px;
+  border-radius: 6px;
+  background: var(--fill);
+  font-size: 11.5px;
+  line-height: 1.6;
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 260px;
+  overflow: auto;
+}
+
+/* The error boundary's page. It has to be reachable with one thumb and say
+   what happened, because it replaces a screen that showed nothing at all. */
+.crash {
+  max-width: 520px;
+  margin: 64px auto;
+  padding: 0 20px;
+  text-align: center;
+}
+.crash h2 {
+  margin: 0 0 10px;
+  font-size: 18px;
+  color: var(--text);
+}
+.crash p {
+  font-size: 13.5px;
+  line-height: 1.7;
+  color: var(--text-2);
+}
+.crash-msg {
+  margin: 14px 0;
+  padding: 12px;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  background: var(--panel-2);
+  text-align: left;
+  font-size: 12px;
+  line-height: 1.6;
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 180px;
+  overflow: auto;
+}
+.crash-actions {
+  display: flex;
+  gap: 10px;
+  justify-content: center;
+  margin: 16px 0;
+}
+.crash-hint {
+  font-size: 12px;
+  color: var(--text-3);
+}
+.ai-error-hint {
+  margin: 12px 0 0;
+  font-size: 11.5px;
+  line-height: 1.6;
+  color: var(--text-3);
+}
+
+/* ------------------------- AI conversations page (/ai) ------------------------- */
+
+/* The room is exactly one viewport tall: the transcript scrolls inside it and
+   the composer sits on the bottom edge. A composer that scrolls with the
+   transcript drifts out of reach after two answers, and on a phone it ends up
+   behind the keyboard — the input box is the one control that must never move. */
+.ai-room {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+  padding-bottom: 0;
+}
+.ai-room .sub-head {
+  flex: none;
+}
+
+/* list rows: origin badge + title + last message + meta */
+.ai-row-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+.ai-origin {
+  flex: none;
+  font-size: 11px;
+  line-height: 1;
+  padding: 4px 7px;
+  border-radius: 999px;
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+.ai-origin-lookup {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+.ai-origin-parse {
+  background: var(--ok-soft);
+  color: var(--ok);
+}
+.ai-origin-summarize {
+  background: var(--danger-soft);
+  color: var(--danger);
+}
+.ai-origin-manual {
+  background: var(--border);
+  color: var(--text-2);
+}
+.ai-row-preview {
+  margin-top: 4px;
+  font-size: 13px;
+  color: var(--text-2);
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+}
+
+/* the transcript */
+.ai-transcript {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px 0 16px;
+  max-width: 720px;
+  width: 100%;
+}
+/* pre-wrap lives on the text block, not on the bubble: a JSON answer is laid
+   out as rows, and inherited pre-wrap would turn every newline between those
+   elements into a blank line. */
+.ai-msg {
+  max-width: 88%;
+  border-radius: 12px;
+  padding: 8px 12px;
+  font-size: 14.5px;
+  line-height: 1.6;
+  word-break: break-word;
+}
+.ai-msg-text {
+  white-space: pre-wrap;
+}
+.ai-msg-user {
+  align-self: flex-end;
+  background: var(--accent);
+  color: #fff;
+}
+.ai-msg-assistant {
+  align-self: flex-start;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  box-shadow: var(--shadow);
+}
+.ai-msg-pending {
+  color: var(--text-3);
+}
+.ai-msg-system {
+  align-self: stretch;
+  max-width: 100%;
+  border: 1px dashed var(--border-strong);
+  border-radius: 10px;
+  background: var(--panel-2);
+  font-size: 12.5px;
+  color: var(--text-2);
+}
+.ai-msg-system summary {
+  cursor: pointer;
+  padding: 7px 12px;
+  user-select: none;
+  color: var(--text-3);
+}
+.ai-msg-system pre {
+  margin: 0;
+  padding: 0 12px 10px;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-family: inherit;
+}
+
+/* send failure: the draft stays in the box, retry is one tap */
+.ai-send-error {
+  align-self: stretch;
+  border: 1px solid var(--danger-soft);
+  background: var(--danger-soft);
+  border-radius: 10px;
+  padding: 8px 12px;
+  font-size: 13px;
+  color: var(--danger);
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.ai-send-error p {
+  margin: 0;
+  flex: 1;
+}
+
+/* the LLM page (settings moved its AI cards to their own page) */
+.llm-page .card {
+  margin-bottom: 14px;
+}
+.llm-prompt {
+  width: 100%;
+  resize: vertical;
+  font-family: inherit;
+  font-size: 13px;
+  line-height: 1.7;
+}
+.llm-prompt-state {
+  font-size: 12px;
+  color: var(--rd-muted);
+  align-self: center;
+}
+.llm-prompt-row {
+  display: flex;
+  gap: 8px;
+  align-items: flex-start;
+  padding: 10px 0;
+  border-top: 1px solid var(--border);
+}
+.llm-prompt-main {
+  flex: 1;
+  min-width: 0;
+  display: grid;
+  gap: 4px;
+}
+.llm-prompt-main b {
+  font-size: 13.5px;
+}
+.llm-prompt-main small {
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--rd-muted);
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+/* the edit dialog: a prompt list can be long, so editing opens centered over
+   the page instead of appending a form under the last row (which used to
+   mean scrolling past every prompt to reach it) */
+.llm-dialog-mask {
+  position: fixed;
+  inset: 0;
+  z-index: 70;
+  background: rgba(15, 23, 42, 0.45);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 18px;
+}
+.llm-dialog {
+  width: 100%;
+  max-width: 560px;
+  max-height: min(85vh, 640px);
+  overflow-y: auto;
+  background: var(--panel);
+  border-radius: 14px;
+  padding: 16px;
+  box-shadow: 0 18px 50px rgba(15, 23, 42, 0.28);
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.llm-dialog-title {
+  font-size: 15px;
+  font-weight: 600;
+}
+.llm-dialog .field {
+  margin: 0;
+}
+.llm-dialog-reset {
+  align-self: flex-start;
+}
+
+/* the seeded-system badge on a library row */
+.llm-badge {
+  display: inline-block;
+  margin-left: 6px;
+  padding: 1px 6px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: normal;
+  color: var(--rd-muted);
+  vertical-align: 1px;
+}
+
+/* step 1 of a new chat: choose the opening prompt */
+.ai-choose {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  max-width: 720px;
+  width: 100%;
+  margin: 0 auto;
+  padding: 10px 0 0;
+}
+.ai-choose-hint {
+  margin: 0;
+  font-size: 12.5px;
+  color: var(--rd-muted);
+}
+.ai-choose-list {
+  display: flex;
+  flex-direction: column;
+  overflow-y: auto;
+}
+.ai-choose-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  padding: 11px 12px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: transparent;
+  color: inherit;
+  text-align: left;
+  font-size: 14px;
+  cursor: pointer;
+}
+.ai-choose-row + .ai-choose-row {
+  margin-top: 8px;
+}
+.ai-choose-row.on {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+.ai-choose-name {
+  flex: 1;
+  min-width: 0;
+}
+.ai-choose-badge {
+  flex: none;
+  padding: 1px 6px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  font-size: 11px;
+  color: var(--rd-muted);
+}
+.ai-choose-preview {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 12px;
+  border: 1px dashed var(--border);
+  border-radius: 10px;
+  font-size: 12.5px;
+  line-height: 1.7;
+  white-space: pre-wrap;
+  color: var(--rd-muted);
+}
+.ai-choose-actions {
+  flex: none;
+  display: flex;
+  justify-content: flex-end;
+  padding-bottom: 4px;
+}
+
+/* the standing prompt shown in a chat room that has not started yet */
+.ai-open-prompt {
+  margin-top: 10px;
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  justify-content: center;
+  font-size: 12.5px;
+  color: var(--rd-muted);
+}
+
+/* the composer */
+.ai-composer {
+  flex: none;
+  display: flex;
+  gap: 8px;
+  align-items: flex-end;
+  padding: 10px 0 calc(10px + env(safe-area-inset-bottom));
+  max-width: 720px;
+  width: 100%;
+  border-top: 1px solid var(--border);
+}
+.ai-composer textarea {
+  flex: 1;
+  resize: none;
+  border: 1px solid var(--border-strong);
+  border-radius: 10px;
+  padding: 9px 12px;
+  font: inherit;
+  font-size: 14.5px;
+  background: var(--panel);
+  color: var(--text);
+}
+.ai-composer textarea:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+
+/* the word card's cached AI gloss (Reader) */
+.dict-ai {
+  margin-top: 8px;
+  border-top: 1px dashed var(--border-strong);
+  padding-top: 8px;
+}
+.dict-ai-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--accent);
+  margin-bottom: 4px;
+}
+.dict-ai-head .dict-ai-star {
+  font-size: 13px;
+}
+.dict-ai-meaning {
+  font-size: 13.5px;
+  line-height: 1.5;
+  color: var(--text);
+}
+.dict-ai-trans {
+  font-size: 12.5px;
+  color: var(--text-2);
+  margin-top: 2px;
+}
+.dict-ai-note {
+  font-size: 12px;
+  color: var(--text-3);
+  margin-top: 2px;
+}
+
+.dict-ai-open {
+  margin-top: 6px;
+  border: 0;
+  background: transparent;
+  padding: 2px 0;
+  color: var(--accent);
+  font: inherit;
+  font-size: 12.5px;
+  cursor: pointer;
+}
+
+/* The AI panel's way into the full transcript. A dashed border says "this
+   leaves the sheet" — the answer above it is the sheet's own content. */
+.ai-open-chat {
+  display: block;
+  margin-top: 16px;
+  width: 100%;
+  border: 1px dashed var(--border-strong);
+  border-radius: 10px;
+  background: transparent;
+  color: var(--accent);
+  font: inherit;
+  font-size: 13px;
+  padding: 9px 12px;
+  cursor: pointer;
+}
+.ai-open-chat:active {
+  background: var(--fill);
+}
+
+/* A JSON answer read as facts: labelled rows, lists as lists, and the raw
+   object one tap away. */
+.ai-json {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.ai-json-rows {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.ai-json-row {
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+}
+.ai-json-key {
+  flex: none;
+  min-width: 46px;
+  font-size: 12px;
+  line-height: 1.7;
+  color: var(--text-3);
+}
+.ai-json-val {
+  flex: 1;
+  min-width: 0;
+}
+.ai-json-text,
+.ai-json-atom {
+  font-size: 14px;
+  line-height: 1.6;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.ai-json-atom {
+  color: var(--text-2);
+}
+.ai-json-list {
+  margin: 0;
+  padding-left: 18px;
+  font-size: 14px;
+  line-height: 1.6;
+}
+.ai-json-items {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.ai-json-item {
+  border-left: 2px solid var(--border-strong);
+  padding-left: 8px;
+}
+.ai-json-raw {
+  font-size: 12px;
+  color: var(--text-3);
+}
+.ai-json-raw summary {
+  cursor: pointer;
+  user-select: none;
+}
+.ai-json-raw pre {
+  margin: 4px 0 0;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: var(--panel-2);
+  overflow-x: auto;
+  font-size: 11.5px;
+  line-height: 1.5;
+  white-space: pre;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+
+/* Rows that slide left for 删除. The gesture picks its axis first (see
+   SwipeRow), so a vertical swipe is still the list's. */
+.ai-swipe {
+  position: relative;
+  border-radius: var(--radius);
+  touch-action: pan-y;
+}
+.ai-swipe-del {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  bottom: 4px;
+  width: 68px;
+  border: 0;
+  border-radius: 10px;
+  background: var(--danger);
+  color: #fff;
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+  /* Hidden until the row moves: geometry alone would let a corner of the red
+     button show through the card's rounded corner. */
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.12s ease;
+}
+.ai-swipe.open .ai-swipe-del {
+  opacity: 1;
+  pointer-events: auto;
+}
+.ai-swipe-body {
+  position: relative;
+  will-change: transform;
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+.ai-more {
+  display: flex;
+  justify-content: center;
+  padding: 16px 0 8px;
+}
+.ai-more-end {
+  font-size: 12px;
+  color: var(--text-3);
+}
+
+/* -------------------------------- 听书 ----------------------------------
+   The band that follows the voice, and the bar that drives it. The band is a
+   fixed layer of plain boxes rather than an inline <span> wrapped around the
+   text: the chapter DOM is React's, and inserting into it is how a reader ends
+   up unmounting its own content later (see AGENTS.md). */
+
+.listen-marks {
+  position: fixed;
+  inset: 0;
+  z-index: 20;
+  pointer-events: none;
+}
+.listen-marks span {
+  position: absolute;
+  background: var(--rd-listen);
+  border-radius: 3px;
+  /* No transition: the band must land on the new line in the same frame the
+     page does, or it visibly trails the voice by one turn. */
+}
+
+.listen-bar {
+  position: fixed;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 45;
+  display: flex;
+  align-items: center;
+  gap: 1px;
+  width: min(560px, calc(100vw - 20px));
+  box-sizing: border-box;
+  padding: 7px 6px;
+  border-radius: 18px;
+  background: var(--chrome-bg);
+  border: 1px solid var(--chrome-border);
+  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.22);
+  color: var(--chrome-fg);
+  font-family: var(--font);
+}
+
+.lb-play {
+  flex: 0 0 auto;
+  width: 40px;
+  height: 40px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  border-radius: 50%;
+  background: var(--accent);
+  color: #fff;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+.lb-play:active {
+  transform: scale(0.94);
+}
+
+.lb-meta {
+  flex: 1 1 auto;
+  min-width: 0;
+  padding: 0 6px 0 8px;
+  line-height: 1.25;
+}
+/* The reader turned away from the voice: say so, and make the way back look
+   like something you can press. */
+.lb-meta.lb-away {
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+.lb-meta.lb-away .lb-sub {
+  color: var(--accent);
+  font-weight: 600;
+}
+.lb-title {
+  font-size: 12.5px;
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.lb-sub {
+  margin-top: 1px;
+  font-size: 10.5px;
+  color: var(--chrome-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.lb-btn {
+  flex: 0 0 auto;
+  /* Two pixels smaller than the old 34: at 360px the bar carries five controls
+     besides play and close, and every pixel they give up is a character the
+     sentence counter gets to keep. */
+  width: 32px;
+  height: 32px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--chrome-fg);
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+.lb-btn:active {
+  background: var(--chrome-btn-bg);
+}
+
+.lb-rate {
+  flex: 0 0 auto;
+  min-width: 40px;
+  height: 28px;
+  padding: 0 6px;
+  border: 1px solid var(--chrome-btn-border);
+  border-radius: 14px;
+  background: var(--chrome-btn-bg);
+  color: var(--chrome-btn-fg);
+  font-family: var(--font);
+  font-size: 11.5px;
+  font-variant-numeric: tabular-nums;
+  cursor: pointer;
+}
+
+.lb-close {
+  flex: 0 0 auto;
+  width: 28px;
+  height: 28px;
+  margin-left: 2px;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--chrome-muted);
+  font-size: 18px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+/* The tab that starts listening says so while a session is live. */
+.m-tab.listening {
+  color: var(--accent);
+}
+
+/* 朗读 in the selection toolbar: the same outlined pill as 批注, because both
+   are "do something with this sentence" rather than "look something up". */
+.sel-listen {
+  height: 22px;
+  padding: 0 9px;
+  border: 1px solid var(--accent);
+  border-radius: 4px;
+  background: transparent;
+  color: var(--accent);
+  font-family: var(--font);
+  font-size: 12px;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+/* Voice picker inside the Aa-style sheet. Two columns because the labels are
+   long ("晓北 · 女声，东北话") and a single column would scroll for them. */
+.rd-voice-row {
+  display: block;
+}
+.rd-voices {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px;
+  margin-top: 8px;
+}
+.rd-voice {
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  background: var(--panel-2);
+  color: var(--text-2);
+  font-family: var(--font);
+  font-size: 12.5px;
+  text-align: left;
+  cursor: pointer;
+}
+.rd-voice.on {
+  border-color: var(--accent);
+  background: var(--panel);
+  color: var(--text);
+  font-weight: 600;
+}
+
+/* =============================== shelves ===============================
+   A shelf is a container a book belongs to, and the page's own title now says
+   which one you are looking at. The switcher is a pill in the header rather
+   than a row of chips: a shelf may be locked, and switching to it may need a
+   password, which only a sheet can ask for. */
+
+.shelf-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  /* `100%` of the h1 is 9px *less* than the pill's own max-content, because the
+     negative left margin below counts in the parent's shrink-to-fit width. Left
+     at `100%` the pill hands that 9px to the ellipsis and a two-character shelf
+     name renders as "书…" on a 360px screen with 66px of empty space next to it
+     (measured on the phone, 2026-11-01). Give the nudge back. */
+  max-width: calc(100% + 9px);
+  min-width: 0;
+  /* Negative left margin keeps the text optically on the page's margin: the
+     padding is what makes the pill a target, not what makes it a title. */
+  margin-left: -9px;
+  padding: 3px 8px 3px 9px;
+  border: 1px solid transparent;
+  border-radius: 9px;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  cursor: pointer;
+  touch-action: manipulation;
+}
+
+.shelf-pill:hover,
+.shelf-pill:focus-visible {
+  background: var(--panel-2);
+  border-color: var(--border);
+}
+
+/* The name is the only part that may shrink. The count, the lock and the caret
+   keep their size, so a 12-character shelf name shortens to "苏联和越南…"
+   instead of pushing the header's icons off a 360px screen. */
+.shelf-pill-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.shelf-pill-count {
+  flex: none;
+  font-size: 12.5px;
+  font-weight: 500;
+  color: var(--text-3);
+}
+
+.shelf-pill-lock,
+.shelf-pill-caret {
+  flex: none;
+  color: var(--text-3);
+}
+
+/* Selection mode reuses the tag row (same place, same height), so entering it
+   does not move the grid. */
+.lib-selectbar {
+  align-items: center;
+}
+
+.lib-select-count {
+  flex: 0 0 auto;
+  padding-left: 2px;
+  font-size: 12.5px;
+  color: var(--text-2);
+}
+
+/* The verbs of a selection. Fixed to the bottom edge because they act on the
+   grid behind them, and the grid scrolls. */
+.lib-select-actions {
+  position: fixed;
+  left: 50%;
+  bottom: 0;
+  transform: translateX(-50%);
+  z-index: 30;
+  width: 100%;
+  max-width: 720px;
+  display: flex;
+  gap: 10px;
+  padding: 10px 20px calc(12px + env(safe-area-inset-bottom));
+  background: var(--panel);
+  border-top: 1px solid var(--border);
+}
+
+.lib-select-actions .btn {
+  flex: 1;
+  justify-content: center;
+}
+
+/* The check on a selected card. A tint alone disappears over a dark cover
+   photograph, so the mark is a shape with its own contrast. */
+.book-card {
+  position: relative;
+}
+
+.book-card.selected {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+.book-check {
+  position: absolute;
+  top: 8px;
+  left: 8px;
+  z-index: 2;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  font-size: 13px;
+  line-height: 1;
+  color: #fff;
+  background: rgba(15, 23, 42, 0.42);
+  border: 1.5px solid rgba(255, 255, 255, 0.92);
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.28);
+}
+
+.book-card.selected .book-check {
+  background: var(--accent);
+  border-color: var(--accent);
+}
+
+/* The locked shelf: the name and the size stay, the books do not. This is what
+   the password buys. */
+.shelf-locked {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  padding: 52px 24px;
+  text-align: center;
+  color: var(--text-3);
+}
+
+.shelf-locked-title {
+  margin: 8px 0 0;
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.shelf-locked-sub {
+  margin: 0 0 14px;
+  font-size: 13px;
+}
+
+/* ---- the switcher's rows ---- */
+
+.shelf-list {
+  max-height: 52vh;
+  overflow-y: auto;
+}
+
+.shelf-row {
+  display: flex;
+  align-items: center;
+  width: 100%;
+  padding: 0 8px 0 4px;
+}
+
+.shelf-row.on {
+  background: var(--accent-soft);
+}
+
+.shelf-row-main {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 1;
+  min-width: 0;
+  padding: 12px 8px;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.shelf-row-mark {
+  flex: none;
+  width: 14px;
+  font-size: 13px;
+  color: var(--accent);
+}
+
+.shelf-row-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 15px;
+}
+
+.shelf-row.on .shelf-row-name {
+  font-weight: 600;
+  color: var(--accent);
+}
+
+.shelf-row-lock {
+  flex: none;
+  font-size: 11px;
+}
+
+.shelf-row-count {
+  flex: none;
+  margin-left: auto;
+  padding-left: 8px;
+  font-size: 12.5px;
+  color: var(--text-3);
+}
+
+/* 40px square so the row's management menu is reachable with a thumb; the
+   sheet's own item rows are full-width, and this one is an aside. */
+.shelf-row-more {
+  flex: none;
+  width: 40px;
+  height: 40px;
+  border: 0;
+  border-radius: 50%;
+  background: none;
+  color: var(--text-3);
+  font-size: 18px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.shelf-row-more:hover {
+  background: var(--panel-2);
+}
+
+/* ---- create / rename / password ---- */
+
+.shelf-form {
+  padding: 6px 18px calc(14px + env(safe-area-inset-bottom));
+}
+
+.shelf-form .edit-actions {
+  margin-top: 14px;
+}
+
+.shelf-form-note {
+  margin: 10px 0 0;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--text-3);
+}
+
+.shelf-form-error {
+  margin: 8px 0 0;
+  font-size: 12.5px;
+  color: var(--danger);
+}
+
+.shelf-move-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.shelf-move-meta {
+  font-size: 12.5px;
+  color: var(--text-3);
+}
+
+@media (max-width: 640px) {
+  /* The shelf's title is the one header item that is allowed to shrink, since
+     its length is whatever the reader named the shelf. It still must not wrap:
+     a header that grows a line pushes the whole grid down. The other pages keep
+     `flex: 0 0 auto` — their titles are fixed words. */
+  .page.shell > .lib-head > h1.lib-title {
+    flex: 0 1 auto;
+    min-width: 0;
+  }
+
+  .shelf-pill {
+    font-size: 18px;
+  }
+
+  /* The selection bar sits above the tab bar, which is in flow at the bottom of
+     the app column and 56px tall (7px + 26px icon + 2px gap + ~15px label +
+     6px, plus the safe area). Same number as `.tabbar-item`'s own padding. */
+  .lib-select-actions {
+    bottom: calc(56px + env(safe-area-inset-bottom));
+    padding: 8px 14px calc(8px + env(safe-area-inset-bottom));
+  }
+}
+
+/* The unlock form is rendered inside the switcher and on its own; the class is
+   the host that gives it the sheet's gutters in both places. */
+.unlock-form {
+  padding: 0 18px calc(14px + env(safe-area-inset-bottom));
 }

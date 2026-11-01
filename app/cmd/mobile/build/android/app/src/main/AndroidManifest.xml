@@ -14,6 +14,8 @@
     <uses-permission android:name="android.permission.CAMERA" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
+    <!-- 听书 keeps reading with the screen off; the type has to match the use -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" />
 
     <queries>
         <intent>
@@ -45,11 +47,24 @@
             </intent-filter>
             <!-- Receive an EPUB shared from other apps (WeChat, browsers, file
                  managers: "分享到 EpubMaker") or opened with this app. The
-                 stream is copied into the cache and imported by the frontend. -->
+                 stream is copied into the cache and imported by the frontend.
+                 SEND_MULTIPLE is separate on purpose: a filter carrying
+                 ACTION_SEND does not match a multi-item share, so "分享 2 项"
+                 from a file manager used to miss the app entirely. -->
             <intent-filter>
                 <action android:name="android.intent.action.SEND" />
                 <category android:name="android.intent.category.DEFAULT" />
                 <data android:mimeType="application/epub+zip" />
+                <data android:mimeType="application/epub" />
+                <data android:mimeType="application/octet-stream" />
+                <data android:mimeType="application/x-zip-compressed" />
+                <data android:mimeType="application/zip" />
+            </intent-filter>
+            <intent-filter>
+                <action android:name="android.intent.action.SEND_MULTIPLE" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:mimeType="application/epub+zip" />
+                <data android:mimeType="application/epub" />
                 <data android:mimeType="application/octet-stream" />
                 <data android:mimeType="application/x-zip-compressed" />
                 <data android:mimeType="application/zip" />
@@ -61,6 +76,7 @@
                 <data android:scheme="content" />
                 <data android:scheme="file" />
                 <data android:mimeType="application/epub+zip" />
+                <data android:mimeType="application/epub" />
                 <data android:mimeType="application/octet-stream" />
                 <data android:mimeType="application/x-zip-compressed" />
                 <data android:mimeType="application/zip" />
@@ -80,7 +96,7 @@
         <service
             android:name=".WailsForegroundService"
             android:exported="false"
-            android:foregroundServiceType="dataSync" />
+            android:foregroundServiceType="dataSync|mediaPlayback" />
     </application>
 
 </manifest>

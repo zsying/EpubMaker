@@ -70,12 +70,22 @@ type Dict struct {
 var (
 	edgeJunk = regexp.MustCompile(`^[^A-Za-z]+|[^A-Za-z]+$`)
 	spaceRun = regexp.MustCompile(`\s+`)
+	// Invisible characters a print conversion leaves inside words. A soft
+	// hyphen (U+00AD) is the hyphenation point the typesetter used, so the page
+	// really does read "ac-cused"; the key must still be "accused", or a
+	// selection that spans the line break misses a word that is right there on
+	// screen. Zero-width spaces/marks and the BOM come from web-sourced text.
+	invisible = strings.NewReplacer(
+		"\u00ad", "", "\u200b", "", "\u200c", "", "\u200d", "", "\ufeff", "",
+	)
 )
 
-// Normalize turns a raw text selection into a lookup key: quotes are unified
-// and trimmed, surrounding punctuation is dropped, whitespace collapses, the
-// string is lowercased, and a trailing possessive is removed.
+// Normalize turns a raw text selection into a lookup key: invisible marks are
+// dropped, quotes are unified and trimmed, surrounding punctuation is dropped,
+// whitespace collapses, the string is lowercased, and a trailing possessive is
+// removed.
 func Normalize(s string) string {
+	s = invisible.Replace(s)
 	s = strings.NewReplacer(
 		"\u2018", "'", "\u2019", "'",
 		"\u201c", "\"", "\u201d", "\"",

@@ -16,15 +16,19 @@ import {
   Book,
   Bookmark,
   Chapter,
+  ExplainResult,
   LookupResult,
+  ParseResult,
   ReadingProgress,
+  SummaryResult,
   TocEntry,
 } from '../api';
 import { Caret } from '../Caret';
 import { toast, toastError } from '../toast';
 import { Anchor, EDGE_GAP, placeOverlay } from '../overlay';
-import { wordAt, isCJK } from '../wordHit';
+import { wordAt, isCJK, stripInvisible } from '../wordHit';
 import {
+  anchorOffset,
   blockOf,
   charOffset,
   getSelectionOffsets,
@@ -35,19 +39,50 @@ import {
 } from '../sentence';
 import { speakWord } from '../speech';
 import {
+  chapterSpans,
+  nativeTts,
+  OnlinePlayer,
+  prepareTts,
+  publishNowPlaying,
+  setListenCommandHandler,
+  setOnlineFetcher,
+  setTtsLogger,
+  setTtsSink,
+  spanIndexAt,
+  ttsAvailability,
+  webSpeak,
+  webStop,
+  type ListenCommand,
+  type NowPlaying,
+  type Span,
+  type TtsEngine,
+  type TtsEvent,
+} from '../readAloud';
+import ListenBar from '../components/ListenBar';
+import {
   MODE_KEY,
   FONT_FAMILY_KEY,
   FONT_OVERRIDE_KEY,
+  TURN_SENSITIVITY_KEY,
+  TURN_SENSITIVITY_LEVELS,
   APP_THEMES,
   appTheme,
   applyAppTheme,
   fontOverrideEnabled,
+  turnSensitivity,
+  turnThresholds,
+  turnLevelFactor,
   type AppTheme,
   type ReadMode,
+  type TurnSensitivity,
 } from '../readingPrefs';
 import { isTouchPrimary } from '../device';
-import { useBackClose } from '../backNav';
+import { closeForNavigation, navigationDepth, useBackClose } from '../backNav';
 import FontPicker, { CUSTOM_FONT_FAMILY } from '../components/FontPicker';
+import AIPanel from '../components/AIPanel';
+import AISentence from '../components/AISentence';
+import { TurnPeek } from '../components/TurnPeek';
+import { lastTextPage } from '../columns';
 
 const FONT_KEY = 'epubmaker.fontSize';
 const TOC_DOCK_KEY = 'epubmaker.tocDocked';
@@ -59,6 +94,74 @@ const TOC_DOCK_W = 268;
 // Height of the top/bottom band that reveals (or, on touch, toggles) the reader
 // chrome. Same band for hover and tap so the affordance is in one place.
 const CHROME_EDGE = 64;
+
+/* -------------------------------- 听书 --------------------------------
+   A listening session reads the chapter sentence by sentence and keeps a
+   window of sentences queued in the engine, so the next one starts without a
+   gap and a screen that goes dark does not stop the voice. The reader owns the
+   queue position; the engine only reports "this one started / finished".
+   Every sentence is a span with chapter-text offsets, which is what lets the
+   page turn to it and the band follow it. */
+
+/** How many sentences may be queued ahead of the one being spoken. Four is
+ * roughly 15-25 seconds of speech: enough to cover a slow network fetch of the
+ * online voice, short enough that skipping forward feels immediate. */
+const LISTEN_WINDOW = 4;
+
+const LISTEN_RATE_KEY = 'epubmaker.listen.rate';
+const LISTEN_ENGINE_KEY = 'epubmaker.listen.engine';
+const LISTEN_VOICE_KEY = 'epubmaker.listen.voice';
+
+/** The rates the bar cycles through. 0.75 for a hard passage, 2 for skimming. */
+const LISTEN_RATES = [0.75, 1, 1.25, 1.5, 2];
+
+/** What the phone's media widget is told when there is no session. Sending it
+ * is how the notification is taken down; the host does not guess. */
+const INACTIVE_NOW_PLAYING: NowPlaying = {
+  active: false,
+  playing: false,
+  title: '',
+  artist: '',
+  canPrev: false,
+  canNext: false,
+};
+
+/** 听书 goes into the on-device log under its own category, so a week of real
+ * listening is a record the reader can scroll back through — the numbers a
+ * tuning decision needs (how slow a fetch was, how long the silence between
+ * sentences) are not guessable after the fact. Fire and forget: a log write
+ * must never be a reason for the reading to stutter or fail. */
+function ttsLog(level: 'debug' | 'info' | 'warn', msg: string, detail = '') {
+  void api.logClient(level, 'tts', msg, detail).catch(() => {});
+}
+
+type ListenState = {
+  playing: boolean;
+  /** Sentence being spoken right now. */
+  index: number;
+  engine: TtsEngine;
+  rate: number;
+  voice: string;
+};
+
+type MarkBox = { left: number; top: number; width: number; height: number };
+
+/** Which list the TOC panel is showing: the book's own outline, or the spine. */
+type TocView = 'nav' | 'file';
+const TOC_VIEW_KEY = 'epubmaker.tocView';
+
+/** Below this the scroll-mode aside is hidden (it becomes the drawer), so no
+ *  outline is on screen to highlight. Matches the CSS breakpoint. */
+const NARROW_QUERY = '(max-width: 980px)';
+
+function readTocView(): TocView | null {
+  try {
+    const v = localStorage.getItem(TOC_VIEW_KEY);
+    return v === 'nav' || v === 'file' ? v : null;
+  } catch {
+    return null;
+  }
+}
 
 /** True while a field is focused — the case where a soft keyboard is (or is
  * about to be) covering part of the screen. */
@@ -93,6 +196,75 @@ function docKey(href: string): string {
   return i >= 0 ? href.slice(0, i) : href;
 }
 
+// ---- the two views of one book, never mixed -------------------------------
+//
+//  * 目录 (nav) — the book's own outline, EPUB3 nav or NCX, exactly as written.
+//    It is the only thing that knows what the sections are *called*. It may
+//    name several sections inside one document, and it may leave documents out
+//    (a cover, a continuation page a converter split off) because its author
+//    never thought of them as chapters.
+//  * 文件 (files) — the spine, one row per document. It knows every document
+//    and nothing about what they are called.
+//
+// The reader used to weave the two together (ADR-31) so one list reached every
+// document, and against 邓小平时代 that produced rows the book never had: its
+// last document, whose only title is the English book title, appeared after
+// 注 释 as a second title page, and the two sections that share one document
+// lit up together — a chapter that looked duplicated. A faithful list of 33
+// sections that is a little short of 18 documents is easier to understand than
+// 35 rows where two were invented, and the switch is right there.
+
+/** Every nav href that points into `doc`, in outline order. */
+function hrefsInDoc(entries: TocEntry[], doc: string): string[] {
+  const out: string[] = [];
+  const walk = (es: TocEntry[]) => {
+    for (const e of es) {
+      if (e.href && docKey(e.href) === doc) out.push(e.href);
+      if (e.children?.length) walk(e.children);
+    }
+  };
+  walk(entries);
+  return out;
+}
+
+/** Rows a nav actually draws (group nodes without an href are not rows). */
+function countTocEntries(entries: TocEntry[]): number {
+  let n = 0;
+  const walk = (es: TocEntry[]) => {
+    for (const e of es) {
+      if (e.href) n += 1;
+      if (e.children?.length) walk(e.children);
+    }
+  };
+  walk(entries);
+  return n;
+}
+
+/** The `#fragment` a nav entry points at, percent-decoded ('' if it has none). */
+function anchorIdOf(href: string): string {
+  const i = href.indexOf('#');
+  if (i < 0) return '';
+  const raw = href.slice(i + 1);
+  try {
+    return decodeURIComponent(raw);
+  } catch {
+    // A malformed escape is still a usable id in most books.
+    return raw;
+  }
+}
+
+/** The rendered element an anchor was rewritten onto (id → data-anc, because
+ *  DOMPurify may not keep `id`), or null when the book has no such anchor — a
+ *  section that points at its document's top, or one the sanitizer dropped. */
+function anchorElement(root: Element, id: string): Element | null {
+  if (!id) return null;
+  try {
+    return root.querySelector(`[data-anc="${CSS.escape(id)}"]`);
+  } catch {
+    return null;
+  }
+}
+
 // Return the node-path keys (matching TocNode's key encoding) from the root down
 // to the entry whose document href matches `doc`. Used by "locate current chapter"
 // to expand every ancestor group.
@@ -107,30 +279,6 @@ function findTocPath(es: TocEntry[], doc: string, base = ''): string[] {
     }
   }
   return [];
-}
-
-// Which TOC nodes count as "current" for the active highlight. We match a node
-// by its document (fragment-stripped) href against the open chapter. Fragment-less
-// chapter entries are preferred; if the book's TOC has no fragment-less entry for
-// this document, we fall back to the first fragment-bearing match.
-function computeActiveHrefs(entries: TocEntry[], activeDoc: string): Set<string> {
-  const fragLess: string[] = [];
-  const any: string[] = [];
-  const walk = (es: TocEntry[]) => {
-    for (const e of es) {
-      if (!e.href) {
-        if (e.children) walk(e.children);
-        continue;
-      }
-      if (docKey(e.href) === activeDoc) {
-        if (e.href.includes('#')) any.push(e.href);
-        else fragLess.push(e.href);
-      }
-      if (e.children) walk(e.children);
-    }
-  };
-  walk(entries);
-  return new Set(fragLess.length ? fragLess : any);
 }
 
 // Recursive hierarchical TOC renderer. Collapse state is controlled by the parent
@@ -154,7 +302,7 @@ function TocTree({
   itemClass: string;
   activeSet: Set<string>;
   resolve: (href: string) => string | undefined;
-  onPick: (cid: string) => void;
+  onPick: (cid: string, href?: string) => void;
   collapsed: Set<string>;
   onToggle: (key: string) => void;
   pathBase?: string;
@@ -199,7 +347,7 @@ function TocNode({
   itemClass: string;
   activeSet: Set<string>;
   resolve: (href: string) => string | undefined;
-  onPick: (cid: string) => void;
+  onPick: (cid: string, href?: string) => void;
   collapsed: Set<string>;
   onToggle: (key: string) => void;
 }) {
@@ -212,7 +360,9 @@ function TocNode({
     onToggle(nodeKey);
   };
   const labelClick = () => {
-    if (cid) onPick(cid);
+    // The href travels with the id: a nav entry usually points at a section
+    // inside the document (#filepos…), not at the document's top.
+    if (cid) onPick(cid, entry.href);
     else if (hasKids) onToggle(nodeKey);
   };
   return (
@@ -259,9 +409,123 @@ function TocNode({
 }
 const posKey = (id: string) => `epubmaker.pos.${id}`;
 
+/** The 目录 / 文件 switch. It only exists when the book has a nav to switch to:
+ *  a book without one has exactly one possible view, and a control that cannot
+ *  change anything is a question with no answer. */
+function TocSeg({ view, onChange }: { view: TocView; onChange: (v: TocView) => void }) {
+  return (
+    <span className="toc-seg" role="tablist">
+      <button
+        type="button"
+        role="tab"
+        aria-selected={view === 'nav'}
+        className={view === 'nav' ? 'on' : ''}
+        onClick={() => onChange('nav')}
+        title="按书的目录（EPUB nav / NCX），原样显示"
+      >
+        目录
+      </button>
+      <button
+        type="button"
+        role="tab"
+        aria-selected={view === 'file'}
+        className={view === 'file' ? 'on' : ''}
+        onClick={() => onChange('file')}
+        title="按文件（spine 文档），每份文档一行"
+      >
+        文件
+      </button>
+    </span>
+  );
+}
+
+/** "Locate current chapter" — the same icon in all three TOC surfaces. */
+function TocLocate({ onClick }: { onClick: () => void }) {
+  return (
+    <button
+      className="toc-locate"
+      title="定位到当前章节"
+      onClick={onClick}
+      aria-label="定位到当前章节"
+    >
+      <svg
+        viewBox="0 0 24 24"
+        width="15"
+        height="15"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="2"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      >
+        <circle cx="12" cy="12" r="3" />
+        <path d="M12 2v3M12 19v3M2 12h3M19 12h3" />
+      </svg>
+    </button>
+  );
+}
+
+/** One list, two sources. The nav is drawn as the tree it is; the file view is
+ *  one row per spine document, numbered, which is the only way to reach a
+ *  document the nav never names. */
+function TocList({
+  view,
+  toc,
+  chapters,
+  itemClass,
+  activeSet,
+  resolve,
+  onPick,
+  current,
+  openChapter,
+  collapsed,
+  onToggle,
+}: {
+  view: TocView;
+  toc: TocEntry[];
+  chapters: Chapter[];
+  itemClass: string;
+  activeSet: Set<string>;
+  resolve: (href: string) => string | undefined;
+  onPick: (cid: string, href?: string) => void;
+  current: string | null;
+  openChapter: (cid: string) => void;
+  collapsed: Set<string>;
+  onToggle: (key: string) => void;
+}) {
+  if (view === 'nav') {
+    return (
+      <TocTree
+        entries={toc}
+        itemClass={itemClass}
+        activeSet={activeSet}
+        resolve={resolve}
+        onPick={onPick}
+        collapsed={collapsed}
+        onToggle={onToggle}
+      />
+    );
+  }
+  return (
+    <>
+      {chapters.map((c, i) => (
+        <button
+          key={c.id}
+          className={`${itemClass}${c.id === current ? ' active' : ''}`}
+          onClick={() => openChapter(c.id)}
+          title={c.title}
+        >
+          <span className="num">{String(i + 1).padStart(2, '0')}</span>
+          {c.title}
+        </button>
+      ))}
+    </>
+  );
+}
+
 // restore carries a layout-independent source character offset (not a page
 // number), so the target page is re-derived from the current layout.
-type PageIntent = { type: 'first' | 'last' | 'restore'; offset?: number } | null;
+type PageIntent = { type: 'first' | 'last' | 'restore'; offset?: number; cid?: string } | null;
 
 // `y`/`bottom` are the selection's viewport edges: overlays flip from one side
 // of the text to the other when there is no room in their preferred direction.
@@ -278,7 +542,10 @@ type SelState = {
   firstRect?: { left: number; top: number; right: number; bottom: number };
   lastRect?: { left: number; top: number; right: number; bottom: number };
 } | null;
-type PopoverState = { x: number; y: number; ann: Annotation } | null;
+// `fresh` marks a popover opened by 批注: the highlight was created a moment
+// ago, so the note field takes the cursor. Opening an existing mark must not
+// raise the keyboard — the reader may only be changing its colour.
+type PopoverState = { x: number; y: number; ann: Annotation; fresh?: boolean } | null;
 // `offset`/`context` are captured at lookup time so a manual "add to notebook"
 // can still record where the word came from.
 type LookupCardState = {
@@ -288,7 +555,43 @@ type LookupCardState = {
   res: LookupResult;
   offset: number;
   context: string;
+  /** The word as it appears on the page (invisibles stripped). The dictionary
+   * normalises case, so `query` comes back as "melissa" for a name the reader
+   * tapped as "Melissa" — fine for a lookup key, wrong for a card that quotes
+   * the text back. */
+  surface: string;
 } | null;
+
+// The AI panel is one surface with three callers (0.4, C 方案): the word card's
+// contextual gloss, the selection's sentence parse, the chapter guide. Each
+// carries exactly the grounded inputs its Backend call needs — the model never
+// invents a word, a sentence or a chapter, it only re-reads what is on screen.
+type AIPanelState =
+  | { kind: 'explain'; word: string; sentence: string }
+  | { kind: 'parse'; sentence: string }
+  | { kind: 'summary' }
+  | null;
+
+// A page turn the finger is holding. `follow` is the drag itself — the page
+// sits exactly where the thumb has dragged it; `settle` is the release, where
+// the same slide carries it to whichever end the gesture earned.
+type TurnDrag = { dir: 1 | -1; phase: 'follow' | 'settle' };
+
+// Echoes the sentence the word came from with the word itself marked. The
+// sentence is plain text lifted off the page, so the only markup in it is the
+// one this function adds.
+function highlightWord(sentence: string, word: string) {
+  if (!word) return sentence;
+  const i = sentence.toLowerCase().indexOf(word.toLowerCase());
+  if (i < 0) return sentence;
+  return (
+    <>
+      {sentence.slice(0, i)}
+      <b className="ai-hl">{sentence.slice(i, i + word.length)}</b>
+      {sentence.slice(i + word.length)}
+    </>
+  );
+}
 
 // A visit opened from one of the notebook pages (生词本 / 划线 / 书签): "show me
 // this entry in the book". It is a detour, not reading — the position it opens
@@ -333,6 +636,14 @@ type Highlight = { id: string; startOffset: number; endOffset: number; color?: s
 // revealed once measured — otherwise it would paint once at its clipped
 // position. `revision` re-measures when the content changes height, e.g. when
 // the dictionary card grows its "already saved" footer.
+//
+// Re-measuring on a size change of the element itself, rather than on a list of
+// state keys, is what keeps a card that GROWS in place. The dictionary card is
+// placed while it is still short and then grows: a cached AI answer arrives a
+// moment later (reopening a word that was asked about before), an image or a
+// font swap re-wraps the text, "加入生词本" turns into one line of text. Each of
+// those pushed the bottom of the card past the window edge, because the clamp
+// applied at open time was computed against the old height.
 function useAnchoredOverlay(
   anchor: Anchor | null,
   prefer: 'above' | 'below',
@@ -370,10 +681,18 @@ function useAnchoredOverlay(
     const vv = window.visualViewport;
     vv?.addEventListener('resize', measure);
     vv?.addEventListener('scroll', measure);
+    // Anything that changes the overlay's own height re-places it. Observing the
+    // element is the only way to catch content that arrives asynchronously and
+    // silently (the cached AI answer), and it costs nothing when nothing moves:
+    // the observer fires on size, and `setPos` returns the previous object when
+    // the position is unchanged.
+    const ro = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(() => measure());
+    ro?.observe(el);
     return () => {
       window.removeEventListener('resize', measure);
       vv?.removeEventListener('resize', measure);
       vv?.removeEventListener('scroll', measure);
+      ro?.disconnect();
     };
   }, [anchor?.x, anchor?.top, anchor?.bottom, prefer, gap, revision]);
 
@@ -402,6 +721,33 @@ function selectionEndRects(range: Range): { first: DOMRect; last: DOMRect } | nu
   const list = range.getClientRects();
   if (list.length === 0) return null;
   return { first: list[0], last: list[list.length - 1] };
+}
+
+// The line fragment of `rects` that a point falls on, if any.
+//
+// getBoundingClientRect() is the UNION of those fragments, and one range in
+// particular lies about itself: the character right after a soft-hyphen (U+00AD)
+// line break — print-converted EPUBs ship them inside words — reports an empty
+// run at the end of the previous line plus its own glyph, so the union is a box
+// as wide as the column and two lines tall. Every point on the following line
+// then looks like it sits on that one character, and every tap there resolves
+// to the hyphenated word. Matching fragment by fragment keeps the answer local
+// to where the glyph is actually painted.
+function fragmentAt(
+  rects: ArrayLike<DOMRect>,
+  x: number,
+  y: number,
+  padX: number,
+  padY: number,
+): DOMRect | null {
+  for (let i = 0; i < rects.length; i++) {
+    const r = rects[i];
+    if (r.width <= 0) continue;
+    if (x >= r.left - padX && x <= r.right + padX && y >= r.top - padY && y <= r.bottom + padY) {
+      return r;
+    }
+  }
+  return null;
 }
 
 // The word a notebook jump points at. Offsets are stored as "where the
@@ -520,10 +866,71 @@ export default function Reader() {
   const [fontOverride, setFontOverride] = useState<boolean>(fontOverrideEnabled);
   const [fontEpoch, setFontEpoch] = useState(0);
 
+  // How long a horizontal drag has to be before it turns the page. State so
+  // the Aa sheet can change it live, plus a ref because the gesture listeners
+  // are registered once per page and would otherwise keep the value they were
+  // born with — re-registering them to pick up a slider move would abort a
+  // drag that is already in flight.
+  const [turnSens, setTurnSens] = useState<TurnSensitivity>(turnSensitivity);
+  const turnSensRef = useRef(turnSens);
+  turnSensRef.current = turnSens;
+
   // paged reading state
   const [pageIndex, setPageIndex] = useState(0);
   const [pageCount, setPageCount] = useState(1);
+  // How many columns the strip is wide. Not the same as pageCount: the last
+  // column can be empty (a block ending a few pixels past a column edge), and
+  // the strip still has to be wide enough to hold every column that has text in
+  // it. Turnable pages are pageCount; the box is stripCols.
+  const [stripCols, setStripCols] = useState(1);
   const [pagesPerView, setPagesPerView] = useState(1);
+
+  /* ---- 听书 ---- */
+  const [listen, setListen] = useState<ListenState | null>(null);
+  // Rectangles of the sentence being spoken, painted by a fixed layer above the
+  // page. Never spans injected into the text: the chapter DOM belongs to React.
+  const [listenMarks, setListenMarks] = useState<MarkBox[]>([]);
+  const [listenSheet, setListenSheet] = useState(false);
+  // Whether the page still follows the voice. A manual turn says "I want to
+  // look over here": the reading must not drag the page back a second later,
+  // which is exactly what it did — every sentence start re-paged, so a swipe
+  // looked like it had never happened. The bar keeps the way home.
+  const [following, setFollowing] = useState(true);
+  const followRef = useRef(true);
+  /** When the reader's own code last scrolled the text (following the voice,
+   * restoring a position). A scroll inside this window is ours, not a signal
+   * that the reader went somewhere else. */
+  const autoScrollAtRef = useRef(0);
+  const [edgeVoices, setEdgeVoices] = useState<Array<{ name: string; label: string }>>([]);
+  // Preferences outlive the session; the session snapshots them when it starts
+  // so changing the rate mid-chapter is an explicit action, not a side effect.
+  const [listenRate, setListenRate] = useState<number>(() => {
+    const v = Number(localStorage.getItem(LISTEN_RATE_KEY));
+    return LISTEN_RATES.includes(v) ? v : 1;
+  });
+  const [listenEngine, setListenEngine] = useState<TtsEngine>(() =>
+    localStorage.getItem(LISTEN_ENGINE_KEY) === 'online' ? 'online' : 'system',
+  );
+  const [listenVoice, setListenVoice] = useState<string>(
+    () => localStorage.getItem(LISTEN_VOICE_KEY) || 'zh-CN-XiaoxiaoNeural',
+  );
+  // The engine calls back from outside React, so the handler is reached through
+  // a ref that every render refreshes — the alternative is a closure that
+  // speaks from a chapter two pages old.
+  const listenRef = useRef<ListenState | null>(null);
+  listenRef.current = listen;
+  const spansRef = useRef<Span[]>([]);
+  const pushedRef = useRef(0);
+  const onlineRef = useRef<OnlinePlayer | null>(null);
+  const listenHandlerRef = useRef<(e: TtsEvent) => void>(() => {});
+  // Same trick for the notification's buttons: they arrive on a channel the
+  // host owns, installed once, and must reach the session as it is *now*.
+  const listenCmdRef = useRef<(c: ListenCommand) => void>(() => {});
+  /** The last now-playing record handed to the host, as JSON. Publishing is a
+   * side effect with a real cost on the phone (a notification rebuild), and the
+   * session object is recreated on every sentence — so equality is judged on
+   * what the widget actually shows, not on the object identity. */
+  const nowPlayingRef = useRef('');
   const [chromeOpen, setChromeOpen] = useState(false);
   const [chromeHover, setChromeHover] = useState(false);
   // Resolved once: the pointer class of a device does not change mid-session,
@@ -541,6 +948,75 @@ export default function Reader() {
   const [fxOut, setFxOut] = useState(false);
   const fxRef = useRef(false);
   const awaitingChapterRef = useRef(false);
+
+  // Page-turn motion for WITHIN-chapter turns: the column strip slides to the
+  // neighbouring page and a shadow band sweeps across the sheet. Held only for
+  // the duration of the gesture and deliberately not a permanent CSS
+  // transition — every other transform change on that strip (measure, restore,
+  // 1<->2 page mode, rotation) must land instantly, or the text would fly in
+  // from page 1 whenever the layout is rebuilt.
+  const [turnFx, setTurnFx] = useState<{ id: number; dir: 1 | -1 } | null>(null);
+  const turnFxSeq = useRef(0);
+  const turnFxTimer = useRef(0);
+  useEffect(() => () => window.clearTimeout(turnFxTimer.current), []);
+
+  // A page turn the FINGER owns (touch), see beginDragTurn. While the finger is
+  // down the page follows it exactly, with no easing at all — a turn that eases
+  // is a turn that reports the gesture rather than obeying it. The release
+  // decides the rest, and both endings are the same slide, so "half a page,
+  // then put it back" is a state the page really passes through.
+  //
+  // The offset is written straight to the DOM (.reader-drag), never through
+  // React: this runs on every touchmove, and a re-render of the reader tree per
+  // frame is not something a page turn should cost.
+  const [turnDrag, setTurnDrag] = useState<TurnDrag | null>(null);
+  const dragLayerRef = useRef<HTMLDivElement>(null);
+  const veilRef = useRef<HTMLDivElement>(null);
+  // The tag hanging out of the page's top edge, and the gesture that pulls it
+  // out (see the touch effect). Both are written straight to the DOM for the
+  // same reason the page turn is: this runs on every touchmove.
+  const tagWrapRef = useRef<HTMLDivElement>(null);
+  const tagRef = useRef<HTMLDivElement>(null);
+  // The gesture lives in an effect registered once per page, so it cannot read
+  // the bookmark callbacks of the render it was created in; it calls through
+  // this instead. Assigned at the bottom of the bookmark section.
+  const bookmarkToggleRef = useRef<() => void>(() => {});
+  // The neighbouring chapter's page, laid out and waiting one spread off-screen
+  // (see TurnPeek). A chapter edge is then a place where the book still turns
+  // like a book: the finger pulls the page it is actually going to into view.
+  const [peek, setPeek] = useState<{ cid: string; side: 1 | -1; html: string } | null>(null);
+  const peekRef = useRef<HTMLDivElement>(null);
+  // The gesture and wheel listeners are registered once per page and hold their
+  // own closure; a peek that arrives afterwards has to be visible to them, so it
+  // is also mirrored here rather than read from state inside those listeners.
+  const peekLive = useRef(peek);
+  peekLive.current = peek;
+  // Sanitised HTML of chapters already fetched for a peek, so turning back and
+  // forth across a boundary does not re-render the chapter each time. Small and
+  // bounded: a session only ever visits a handful of neighbours per chapter.
+  const peekCache = useRef(new Map<string, string>());
+  // Set from the frame the chapter turn lands until the new chapter has been
+  // measured and painted: the peek is covering the page during the swap, so
+  // nothing underneath it may be exposed first.
+  const peekHandoffRef = useRef(false);
+  // Measured band geometry, per veil element (see placeBand).
+  const bandGeomRef = useRef<{ el: HTMLElement; w: number; bw: number } | null>(null);
+  // The live drag: how far the page is pulled, in px, where the finger picked
+  // it up, how it must end, and whether the release slide is the thing running
+  // now. Deliberately not state — it changes every frame and nothing renders
+  // from it.
+  const dragTurnRef = useRef<{
+    dir: 1 | -1;
+    px: number;
+    origin: number;
+    commit: boolean;
+    settling: boolean;
+    // What the gesture is turning: a page of this chapter, or — at a chapter
+    // edge, with the neighbour's page in the peek — the chapter itself.
+    kind: 'page' | 'chapter';
+  } | null>(null);
+  const dragEndTimer = useRef(0);
+  useEffect(() => () => window.clearTimeout(dragEndTimer.current), []);
 
   // book-page geometry (proportions like a real paperback)
   const [stageWidth, setStageWidth] = useState(0);
@@ -581,6 +1057,10 @@ export default function Reader() {
   const [selDragging, setSelDragging] = useState(false);
   const [popover, setPopover] = useState<PopoverState>(null);
   const [noteDraft, setNoteDraft] = useState('');
+  const noteRef = useRef<HTMLTextAreaElement>(null);
+  // The colour the next highlight takes. Remembered across marks so 批注 does
+  // not quietly use yellow on a page the reader has been marking in green.
+  const [markColor, setMarkColor] = useState<string>('yellow');
 
   // Dictionary card for a word picked out of the page. It is positioned in
   // viewport coordinates and rendered outside the page flow on purpose: this
@@ -588,10 +1068,27 @@ export default function Reader() {
   // would change the page count and throw the reader off their page.
   const [lookupCard, setLookupCard] = useState<LookupCardState>(null);
   const [lookupBusy, setLookupBusy] = useState(false);
+  // The AI gloss the card already knows about. When this exact word + sentence
+  // was explained before, the answer is in the local cache, and the card shows
+  // it the moment it opens — no ✦ tap, no network. Cleared with the card.
+  const [cardAI, setCardAI] = useState<ExplainResult | null>(null);
   // Whether a dictionary is installed at all. A tap on a word always opens
   // the lookup card — without a dictionary it says so and points at the
   // download in 我的 → 查词词库, which is far better than a dead tap.
   const [dictReady, setDictReady] = useState(false);
+
+  // The AI panel (0.4). Null means no ask is in flight or on screen; every
+  // entry point sets a payload and lets <AIPanel> own the rest.
+  const [aiPanel, setAIPanel] = useState<AIPanelState>(null);
+  // The chapter-guide privacy confirmation, asked on every send (the chapter
+  // text leaves the device). Kept apart from the panel so a cancel leaves no
+  // trace of the ask at all. `configured` is the preflight: without a provider
+  // there is nothing to confirm, only a door to settings.
+  const [guideAsk, setGuideAsk] = useState<{
+    model: string;
+    chars: number;
+    configured: boolean;
+  } | null>(null);
 
   // Hardware back closes one overlay per press (newest first), never the page
   // underneath. The keyboard Escape path below peels the same layers on
@@ -603,6 +1100,73 @@ export default function Reader() {
   useBackClose(tocOpen, () => setTocOpen(false));
   useBackClose(bmOpen, () => setBmOpen(false));
   useBackClose(annOpen, () => setAnnOpen(false));
+  useBackClose(!!aiPanel, () => setAIPanel(null));
+  useBackClose(!!guideAsk, () => setGuideAsk(null));
+
+  // 批注 hands the cursor to the note field straight away; opening an existing
+  // mark does not, because a keyboard rising over the page someone is only
+  // recolouring is an interruption. Cursor at the end: a note is written
+  // forwards. Deferred one frame: on the first commit the popover is still
+  // measuring itself and paints with visibility:hidden, and a hidden element
+  // cannot take focus.
+  useEffect(() => {
+    if (!popover?.fresh) return;
+    const raf = requestAnimationFrame(() => {
+      const el = noteRef.current;
+      if (!el) return;
+      el.focus();
+      el.setSelectionRange(el.value.length, el.value.length);
+    });
+    return () => cancelAnimationFrame(raf);
+  }, [popover?.fresh, popover?.ann.id]);
+
+  // If this exact question was asked before — same word, same sentence — the
+  // answer is already on the device, and the card opens with it showing. The
+  // read is cache-only and never calls the provider; a miss changes nothing.
+  //
+  // This hook lives up here with the other overlay effects on purpose: the
+  // component returns early while `loading`, and a hook registered after that
+  // return would change the hook count between renders — which React reports
+  // by unmounting the whole reader.
+  useEffect(() => {
+    setCardAI(null);
+    if (!lookupCard) return;
+    const word = lookupCard.res.entry?.word || lookupCard.surface || lookupCard.res.query;
+    const sentence = lookupCard.context;
+    if (!word || !sentence) return;
+    let alive = true;
+    api
+      .aiExplainCached(word, sentence)
+      .then((r) => {
+        if (alive) setCardAI(r ?? null);
+      })
+      .catch(() => {
+        /* a cache read failure is a miss, not a problem for the reader */
+      });
+    return () => {
+      alive = false;
+    };
+  }, [lookupCard]);
+
+  // The chapter guide lives in the top bar (0.4): reading it is a deliberate
+  // act about the whole chapter, so it belongs with 目录/书签 rather than
+  // floating over the first page. Reading the settings FIRST is deliberate —
+  // the confirmation can then name the provider that receives the text, and
+  // when nothing is configured yet it says so and offers the way there instead
+  // of letting the send fail afterwards.
+  function openGuide() {
+    api
+      .aiConfig()
+      .then((cfg) =>
+        setGuideAsk({
+          model: cfg.model,
+          chars: contentRef.current?.textContent?.length ?? 0,
+          configured: cfg.configured,
+        }),
+      )
+      .catch(() => toastError('读取 AI 设置失败'));
+  }
+
   // A jump from the notebook or an annotation list has to be visible, not just
   // correct: this is a transient highlight over the landed-on text.
   const [flash, setFlash] = useState<{
@@ -661,6 +1225,22 @@ export default function Reader() {
   // Kept in a ref (not a one-shot intent) so it survives across measure passes
   // — e.g. when the first measurement happens before the stage is laid out.
   const restoreOffsetRef = useRef<number | null>(null);
+  // The chapter a pending restore offset belongs to. Restore offsets and
+  // chapter intents may only be consumed by a measure pass whose DOM actually
+  // holds that chapter — see htmlChapterRef below.
+  const restoreCidRef = useRef<string | null>(null);
+  // A TOC entry that points at a section *inside* a document: the anchor name
+  // (the nav href's #fragment) plus the chapter that carries it. Resolved to a
+  // text offset by the first measure pass / scroll restore that holds that
+  // chapter, because the element only exists once the HTML is in the DOM.
+  const anchorJumpRef = useRef<{ cid: string; anchor: string } | null>(null);
+  // The chapter whose html was last handed to setHtml. setCurrent immediately
+  // re-runs the render effect (the annotation list changed) while the DOM
+  // still holds the PREVIOUS chapter, and that pass can beat the
+  // RenderChapter fetch on a slow device — landing the previous chapter's
+  // last page instead of the new one's. Stamped at setHtml time, in both the
+  // success and the failure branch, so a failed load still releases intents.
+  const htmlChapterRef = useRef<string | null>(null);
   const locationUsedRef = useRef(false);
   // A selection to raise once the jump target is actually on screen: the
   // notebook hands over the word's offsets, the annotation drawer the line's.
@@ -725,6 +1305,7 @@ export default function Reader() {
           null;
         if (prog && prog.chapterId === target && prog.positionOffset > 0) {
           restoreOffsetRef.current = prog.positionOffset;
+          restoreCidRef.current = target;
         }
         // A preview visit (生词本 / 划线 / 书签) carries its own anchor, which
         // outranks the saved progress: the whole point is landing on THAT spot.
@@ -732,6 +1313,7 @@ export default function Reader() {
         const entry = entryRef.current;
         if (entry && !locationUsedRef.current) {
           restoreOffsetRef.current = entry.offset;
+          restoreCidRef.current = target;
           locationUsedRef.current = true;
         }
         if (restoreOffsetRef.current === null) {
@@ -771,10 +1353,12 @@ export default function Reader() {
     (async () => {
       try {
         const r = await api.renderChapter(id, current);
+        htmlChapterRef.current = current;
         setHtml(r.html);
         if (mode === 'scroll') mainRef.current?.scrollTo({ top: 0, behavior: 'auto' });
       } catch (e) {
         toastError(e);
+        htmlChapterRef.current = current;
         setHtml('<p class="muted">章节内容读取失败</p>');
       }
     })();
@@ -790,6 +1374,7 @@ export default function Reader() {
     () => localStorage.setItem(FONT_OVERRIDE_KEY, fontOverride ? '1' : '0'),
     [fontOverride],
   );
+  useEffect(() => localStorage.setItem(TURN_SENSITIVITY_KEY, turnSens), [turnSens]);
 
   // Registers the selected reading font once per change and re-measures the
   // paged layout after the face is really loaded: a font swap changes every
@@ -876,6 +1461,28 @@ export default function Reader() {
     const timer = window.setTimeout(() => setFlash(null), 1400);
     return () => window.clearTimeout(timer);
   }, [safeHtml, mode, preview]);
+
+  // Scroll-mode counterpart of the anchor jump: the TOC asked for a section in
+  // the middle of this document, so after the html is committed, move the
+  // container to the anchor instead of leaving the reader at the top.
+  useEffect(() => {
+    if (mode !== 'scroll' || !anchorJumpRef.current) return;
+    if (!contentRef.current) return;
+    const off = takeAnchorOffset(current);
+    if (off === null) return;
+    const after = scrollTextTo(off);
+    if (!after) return;
+    if (!preview && current) api.saveProgress(id, current, off, 1).catch(() => {});
+    setFlash({
+      left: after.left - 2,
+      top: after.top - 3,
+      width: Math.max(after.width, 6),
+      height: after.height + 6,
+    });
+    const timer = window.setTimeout(() => setFlash(null), 1400);
+    return () => window.clearTimeout(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [safeHtml, mode]);
 
   // The word a 生词本 jump points at stays lit for as long as you are on the
   // page — the highlight marks the spot; no menus are raised by themselves.
@@ -1022,8 +1629,19 @@ export default function Reader() {
       const range = document.createRange();
       range.setStart(node, lo);
       range.setEnd(node, Math.min(lo + 1, len));
-      const r = range.getBoundingClientRect();
-      if (r.width > 0) {
+      // A character right after a soft-hyphen break reports two fragments: the
+      // hyphen at the end of the previous line and its own glyph on the next
+      // one. The glyph is the last one, and that is where the offset lands — the
+      // union of the two would average into a column the text is not in.
+      const frags = range.getClientRects();
+      let r: DOMRect | null = null;
+      for (let i = frags.length - 1; i >= 0; i--) {
+        if (frags[i].width > 0) {
+          r = frags[i];
+          break;
+        }
+      }
+      if (r) {
         const cx = r.left + r.width / 2;
         let page = Math.floor((cx - colLeft) / stride);
         if (page < 0) page = 0;
@@ -1075,12 +1693,460 @@ export default function Reader() {
   // Returns the source character offset of the first character shown on page `p`,
   // using the sampled map built on every measure.
   function offsetForPage(p: number): number {
+    return pageStartOffset(p) ?? offsetMapRef.current.at(-1)?.offset ?? 0;
+  }
+
+  // The same lookup, but honest about a page the sampled map never reaches. The
+  // map is sampled every 48 characters, so a short last page can have no sample
+  // of its own; answering "the last offset in the map" is fine for recording
+  // where the reader is, but a caller that maps that offset back to a page lands
+  // on the page *before* it — which is how landing on the last page of a chapter
+  // got nudged back one page by the next measure.
+  function pageStartOffset(p: number): number | null {
     const map = offsetMapRef.current;
-    if (map.length === 0) return 0;
+    if (map.length === 0) return null;
     for (const s of map) {
       if (s.page >= p) return s.offset;
     }
-    return map[map.length - 1].offset;
+    return null;
+  }
+
+  // The offset just past the last page on screen. The outline uses it to decide
+  // which section the reader is *in*: a page that shows where a section starts
+  // counts as being in that section, so jumping to 第7章 does not keep saying
+  // 第6章 while the 第7章 heading sits halfway down the same page.
+  function offsetAfterLastPage(): number {
+    return pageStartOffset(pageIndex + pagesPerView) ?? Number.MAX_SAFE_INTEGER;
+  }
+
+  /* ---- 听书: the session ------------------------------------------------ */
+
+  function listenVoiceLabel(): string {
+    return edgeVoices?.find((v) => v.name === listenVoice)?.label || '在线音色';
+  }
+
+  /** The reader took the page into their own hands. Reading carries on; the
+   * page and the band stop chasing the voice until the reader asks for them
+   * back. Without this every sentence start re-paged the reader a second after
+   * a swipe, so a manual turn looked like it had been ignored. */
+  function pauseFollow() {
+    if (!listenRef.current || !followRef.current) return;
+    followRef.current = false;
+    setFollowing(false);
+    setListenMarks([]);
+    ttsLog('debug', '手动翻页，暂停跟随', `第 ${(listenRef.current.index || 0) + 1} 句`);
+  }
+
+  /** Back to where the voice is, and follow it again from here. */
+  function resumeFollow() {
+    followRef.current = true;
+    setFollowing(true);
+    const L = listenRef.current;
+    if (L) showListenSpan(L.index);
+  }
+
+  /** Silences every engine at once. Called before any restart, so a sentence is
+   * never read twice by two engines that both think they are in charge. */
+  function clearListenEngine() {
+    nativeTts()?.clear();
+    onlineRef.current?.stop();
+    onlineRef.current = null;
+    webStop();
+  }
+
+  function pushSpan(i: number, L: ListenState) {
+    const span = spansRef.current[i];
+    if (!span) return;
+    const sid = String(i);
+    if (L.engine === 'online') {
+      if (!onlineRef.current) onlineRef.current = new OnlinePlayer(L.voice, L.rate);
+      onlineRef.current.push(sid, span.text);
+      return;
+    }
+    const native = nativeTts();
+    if (native) {
+      native.speak(sid, span.text, L.rate);
+      return;
+    }
+    // Desktop: Web Speech is the engine, and the only one that needs no bridge.
+    if (!webSpeak(sid, span.text, L.rate)) {
+      toast('这台设备没有可用的朗读引擎', 'error');
+      stopListen();
+    }
+  }
+
+  /** Keeps the engine fed, starting at sentence `from`.
+   *
+   * The window is engine-shaped on purpose. The system engine queues inside
+   * Android, where the queue keeps playing with the screen off and JS frozen —
+   * so it gets the whole rest of the chapter, and the reading does not stop at
+   * the fourth sentence after the phone goes dark. The online voice is fetched
+   * per sentence over the network: handing it a whole chapter would mean 40
+   * simultaneous requests and no chance to cancel them, so it stays a window. */
+  function pumpListen(from: number) {
+    const L = listenRef.current;
+    if (!L) return;
+    const spans = spansRef.current;
+    const limit = L.engine === 'system' ? spans.length : from + LISTEN_WINDOW;
+    while (pushedRef.current < spans.length && pushedRef.current < limit) {
+      pushSpan(pushedRef.current, L);
+      pushedRef.current += 1;
+    }
+  }
+
+  /** On-screen boxes for one sentence, filtered to what is actually visible:
+   * the paged strip holds the whole chapter, so an off-page column has real
+   * coordinates that would paint the band somewhere off the paper. */
+  function spanRects(span: Span): DOMRect[] {
+    const root = contentRef.current;
+    if (!root) return [];
+    const a = textNodeAt(root, span.start);
+    const b = textNodeAt(root, Math.max(span.start, span.end - 1));
+    if (!a || !b) return [];
+    const range = document.createRange();
+    range.setStart(a.node, Math.min(a.offset, (a.node.textContent || '').length));
+    range.setEnd(b.node, Math.min(b.offset + 1, (b.node.textContent || '').length));
+    const view = stageRef.current?.getBoundingClientRect();
+    return Array.from(range.getClientRects()).filter((r) => {
+      if (r.width < 2 || r.height < 2) return false;
+      if (!view) return true;
+      return (
+        r.right > view.left && r.left < view.right && r.bottom > view.top && r.top < view.bottom
+      );
+    });
+  }
+
+  function paintListen(span: Span) {
+    setListenMarks(
+      spanRects(span).map((r) => ({
+        left: r.left,
+        top: r.top,
+        width: r.width,
+        height: r.height,
+      })),
+    );
+  }
+
+  /** Scroll mode has no pages: bring the sentence into view when the reading
+   * walks past the bottom of the screen, and leave it alone otherwise (a jump
+   * every sentence would feel like the page is being dragged). */
+  function revealSpan(span: Span) {
+    const scroller = mainRef.current;
+    if (!scroller) return;
+    const rects = spanRects(span);
+    if (rects.length === 0) return;
+    const box = scroller.getBoundingClientRect();
+    const top = rects[0].top;
+    const bottom = rects[rects.length - 1].bottom;
+    if (top >= box.top + 24 && bottom <= box.bottom - 24) return;
+    // Tell the scroll listener this one is ours, so following the voice does
+    // not read as the reader scrolling away.
+    autoScrollAtRef.current = Date.now();
+    scroller.scrollTo({
+      top: scroller.scrollTop + (top - box.top) - box.height / 3,
+      behavior: 'smooth',
+    });
+  }
+
+  /** Puts the sentence on screen: turns the page if it lives on another one,
+   * then paints the band once the layout has settled. Both frames test that the
+   * session is still alive first — a stop that lands inside the two frames would
+   * otherwise be followed by a repaint, leaving a band on the page with nothing
+   * left to clear it.
+   *
+   * Does nothing at all once the reader has turned away: their page is theirs
+   * until they ask for the voice's again. */
+  function showListenSpan(i: number) {
+    if (!followRef.current) return;
+    const span = spansRef.current[i];
+    if (!span) return;
+    if (mode === 'paged') {
+      const target = pageIndexForOffset(span.start);
+      if (target !== pageIndex) setPageIndex(target);
+      // Two frames: the first lets the strip move, the second measures it.
+      window.requestAnimationFrame(() =>
+        window.requestAnimationFrame(() => {
+          if (listenRef.current) paintListen(span);
+        }),
+      );
+      return;
+    }
+    window.requestAnimationFrame(() => {
+      if (!listenRef.current) return;
+      revealSpan(span);
+      paintListen(span);
+    });
+  }
+
+  /** Starts (or restarts) a session at `fromOffset` — the current page, a
+   * selection, or the beginning of a chapter that was just opened. */
+  function startListen(fromOffset?: number) {
+    const avail = ttsAvailability();
+    // The online voice is fetched by the backend and played by an <audio>
+    // element, so it needs neither the phone's engine nor Web Speech: only the
+    // local engines have to prove they exist.
+    if (listenEngine !== 'online' && !avail.system && !avail.web) {
+      toast('这台设备没有可用的朗读引擎', 'error');
+      return;
+    }
+    const spans = chapterSpans(safeHtml);
+    if (spans.length === 0) {
+      toast('这一章没有可朗读的文字', 'info');
+      return;
+    }
+    const base =
+      fromOffset !== undefined
+        ? fromOffset
+        : mode === 'paged'
+          ? offsetForPage(pageIndex)
+          : offsetAtViewportTop();
+    const at = spanIndexAt(spans, base);
+    clearListenEngine();
+    spansRef.current = spans;
+    pushedRef.current = at;
+    followRef.current = true;
+    setFollowing(true);
+    const L: ListenState = {
+      playing: true,
+      index: at,
+      engine: listenEngine,
+      rate: listenRate,
+      voice: listenVoice,
+    };
+    listenRef.current = L;
+    setListen(L);
+    prepareTts(L.engine);
+    pumpListen(at);
+    showListenSpan(at);
+    ttsLog(
+      'info',
+      '开始朗读',
+      `${chapters.find((c) => c.id === current)?.title || ''} · 第 ${at + 1}/${spans.length} 句 · ` +
+        `引擎 ${L.engine === 'online' ? `在线 ${listenVoiceLabel()}` : '系统'} · 语速 ${L.rate}×`,
+    );
+  }
+
+  function stopListen() {
+    const L = listenRef.current;
+    if (L) ttsLog('info', '退出听书', `停在第 ${L.index + 1} 句`);
+    clearListenEngine();
+    listenRef.current = null;
+    setListen(null);
+    setListenMarks([]);
+    setListenSheet(false);
+    followRef.current = true;
+    setFollowing(true);
+  }
+
+  /** Play / pause. Pausing keeps the position: the bar stays, and pressing play
+   * again re-reads the sentence that was interrupted. */
+  function toggleListen() {
+    const L = listenRef.current;
+    if (!L) {
+      startListen();
+      return;
+    }
+    if (L.playing) {
+      clearListenEngine();
+      const paused = { ...L, playing: false };
+      listenRef.current = paused;
+      setListen(paused);
+      ttsLog('info', '暂停朗读', `第 ${L.index + 1} 句`);
+      return;
+    }
+    const resumed = { ...L, playing: true };
+    listenRef.current = resumed;
+    setListen(resumed);
+    pushedRef.current = L.index;
+    // Pressing play is a request to listen, not to look at the page the reader
+    // left behind: follow the voice again from here.
+    followRef.current = true;
+    setFollowing(true);
+    pumpListen(L.index);
+    ttsLog('info', '继续朗读', `第 ${L.index + 1} 句`);
+  }
+
+  function jumpListen(delta: number) {
+    const L = listenRef.current;
+    if (!L) return;
+    const total = spansRef.current.length;
+    const at = L.index + delta;
+    // Past either end of the chapter, the voice walks into the neighbouring
+    // one — the same thing 听书 already does on its own when a chapter runs out.
+    // Going back lands on the previous chapter's first sentence rather than its
+    // last: the reader asked for "the previous one", and a chapter is the unit
+    // they can see.
+    if (at < 0 || at >= total) {
+      const target = at < 0 ? prev : next;
+      if (!target) return;
+      ttsLog('info', at < 0 ? '上一章' : '下一章', target.title);
+      openChapter(target.id, { type: 'first' });
+      return;
+    }
+    clearListenEngine();
+    const s = { ...L, index: at, playing: true };
+    listenRef.current = s;
+    setListen(s);
+    pushedRef.current = at;
+    // 上一句/下一句 are explicit moves along the voice's own path, so they take
+    // the page back with them.
+    followRef.current = true;
+    setFollowing(true);
+    pumpListen(at);
+    showListenSpan(at);
+    ttsLog('debug', delta > 0 ? '下一句' : '上一句', `第 ${at + 1}/${spansRef.current.length} 句`);
+  }
+
+  /** A button on the media notification / lock screen / headset. The host has
+   * no idea where the voice is — it only knows which button was pressed — so
+   * every one of these is routed into the same handlers the bar uses. */
+  function onListenCommand(cmd: ListenCommand) {
+    const L = listenRef.current;
+    if (cmd === 'toggle') {
+      toggleListen();
+      return;
+    }
+    if (cmd === 'stop') {
+      if (L) stopListen();
+      return;
+    }
+    // Skipping with no session at all is a request to listen, not a no-op: the
+    // widget can outlive a reader that was rebuilt under it.
+    if (!L) {
+      startListen();
+      return;
+    }
+    jumpListen(cmd === 'next' ? 1 : -1);
+  }
+
+  function changeListenRate() {
+    const i = LISTEN_RATES.indexOf(listenRate);
+    setListenRateTo(LISTEN_RATES[(i + 1) % LISTEN_RATES.length]);
+  }
+
+  function setListenRateTo(rate: number) {
+    setListenRate(rate);
+    localStorage.setItem(LISTEN_RATE_KEY, String(rate));
+    const L = listenRef.current;
+    if (!L) return;
+    ttsLog('info', '调整语速', `${L.rate}× → ${rate}×`);
+    // The platform applies the rate per utterance, so the current sentence has
+    // to start over for the change to be audible now.
+    const s = { ...L, rate };
+    listenRef.current = s;
+    setListen(s);
+    if (!L.playing) return;
+    clearListenEngine();
+    pushedRef.current = L.index;
+    pumpListen(L.index);
+  }
+
+  function switchListenEngine(engine: TtsEngine) {
+    setListenEngine(engine);
+    localStorage.setItem(LISTEN_ENGINE_KEY, engine);
+    const L = listenRef.current;
+    if (!L) return;
+    ttsLog(
+      'info',
+      '切换朗读引擎',
+      `${L.engine === 'online' ? '在线' : '系统'} → ${engine === 'online' ? '在线' : '系统'}`,
+    );
+    const s = { ...L, engine };
+    listenRef.current = s;
+    setListen(s);
+    clearListenEngine();
+    prepareTts(engine);
+    pushedRef.current = L.index;
+    if (L.playing) pumpListen(L.index);
+  }
+
+  function switchListenVoice(voice: string) {
+    setListenVoice(voice);
+    localStorage.setItem(LISTEN_VOICE_KEY, voice);
+    const L = listenRef.current;
+    if (!L) return;
+    ttsLog('info', '切换音色', voice);
+    const s = { ...L, voice };
+    listenRef.current = s;
+    setListen(s);
+    clearListenEngine();
+    pushedRef.current = L.index;
+    if (L.playing) pumpListen(L.index);
+  }
+
+  /** Everything the engines report comes through here. Deliberately does not
+   * advance on `done`: the next sentence's `start` is what moves the page, so
+   * a paused or cleared queue cannot turn pages behind the reader's back. */
+  function onTtsEvent(e: TtsEvent) {
+    const L = listenRef.current;
+    if (!L) return;
+    if (e.type === 'start' && e.sid) {
+      const i = Number(e.sid);
+      if (!Number.isFinite(i) || i < 0 || i >= spansRef.current.length) return;
+      if (i !== L.index || !L.playing) {
+        const s = { ...L, index: i, playing: true };
+        listenRef.current = s;
+        setListen(s);
+      }
+      showListenSpan(i);
+      pumpListen(i);
+      return;
+    }
+    if (e.type === 'idle') {
+      if (e.code === 'clear' || e.code === 'shutdown') return;
+      if (e.code === 'focus_lost') {
+        // A call or another player took the audio: pause rather than talk over it.
+        const s = { ...L, playing: false };
+        listenRef.current = s;
+        setListen(s);
+        return;
+      }
+      if (pushedRef.current < spansRef.current.length) {
+        pumpListen(L.index);
+        return;
+      }
+      // The chapter is finished: read on into the next one, which is the whole
+      // point of 听书 — the reader should not have to turn a page every minute.
+      // A chapter boundary is also where following resumes: the book moved on
+      // under the reader, and there is no page of the old chapter left to hold.
+      if (next) {
+        followRef.current = true;
+        setFollowing(true);
+        ttsLog('info', '本章读完，接着读下一章', next.title);
+        openChapter(next.id, { type: 'first' });
+        return;
+      }
+      toast('全书已读完', 'success');
+      ttsLog('info', '全书读完', '');
+      stopListen();
+      return;
+    }
+    if (e.type === 'error') {
+      const code = e.code || '';
+      ttsLog('warn', '朗读失败', `${code} · 第 ${L.index + 1} 句`);
+      if (code === 'no_zh_voice') {
+        toast('手机上没有中文语音，请先在系统设置里安装中文朗读引擎', 'error');
+        stopListen();
+        return;
+      }
+      if (code === 'init_failed') {
+        toast('朗读引擎启动失败', 'error');
+        stopListen();
+        return;
+      }
+      if (code === 'online_failed' || code === 'online_playback') {
+        // The player has already given up by the time this arrives, so there is
+        // nothing left to fight: pause, drop the engine, and say it once.
+        toast('在线音色请求失败，可在听书设置里换回系统引擎', 'error');
+        const s = { ...L, playing: false };
+        listenRef.current = s;
+        setListen(s);
+        clearListenEngine();
+        return;
+      }
+      // A single failed sentence is not a reason to stop: ask for the next one.
+      pumpListen(pushedRef.current);
+    }
   }
 
   function measureAndLayout() {
@@ -1173,9 +2239,18 @@ export default function Reader() {
     col.style.columnWidth = `${cw}px`;
     col.style.columnGap = `${columnGap}px`;
     col.style.height = `${ch}px`;
-    const pc = Math.max(1, Math.ceil(col.scrollWidth / (cw + columnGap)));
+    const cols = Math.max(1, Math.ceil(col.scrollWidth / (cw + columnGap)));
+    // The box is not the text: the box is left wide enough that no column is
+    // clipped, but the last column can hold nothing but the tail of a block and
+    // then the chapter would offer a blank last page — one the reader has to
+    // turn past, and the one a backwards chapter turn lands on. What the reader
+    // can turn to is decided by the last character that is really on the page,
+    // measured under the width the strip will actually have.
+    col.style.width = `${cols * cw + (cols - 1) * columnGap}px`;
+    const textPage = lastTextPage(col, contentRef.current, stride);
+    const pc = textPage === null ? cols : Math.max(1, Math.min(cols, textPage + 1));
+    setStripCols(cols);
     setPageCount(pc);
-    col.style.width = `${pc * cw + (pc - 1) * columnGap}px`;
 
     // Build the layout-independent offset->page map BEFORE deriving any page,
     // using the geometry we just measured (cw/ch are the local, correct values
@@ -1185,24 +2260,56 @@ export default function Reader() {
     // Capture the source offset of the currently shown page so a layout change
     // (font size / window / DPI) keeps the same text in view instead of the
     // same (now wrong) page number.
-    const keepOffset = offsetForPage(pageIndex);
+    const keepOffset = pageStartOffset(pageIndex);
 
-    const maxIdx = Math.max(0, pc - ppv);
+    // Same rule as maxPageIndex below: the last spread may be a short one, so
+    // the ceiling is the last page-aligned index with content, not pc - ppv.
+    const maxIdx = Math.max(0, Math.floor((pc - 1) / ppv) * ppv);
     const intent = pageIntentRef.current;
+    // A chapter intent (and a restore offset) may only be consumed by a pass
+    // whose DOM holds the intent's chapter: setCurrent re-runs the render
+    // effect (the annotation list changed) while the DOM still holds the
+    // previous chapter, and on a slow device that pass can beat the
+    // RenderChapter fetch. Consuming there lands the PREVIOUS chapter's
+    // maxIdx — after the swap the reader sits on a seemingly arbitrary page
+    // (device repro: a backward chapter turn stopped at 237/265 instead of
+    // 265/265). An unconsumed intent waits for the pass that follows the
+    // html swap; the peek handoff and the turn fade hold back with it.
+    const intentHere = !!intent && (!intent.cid || intent.cid === htmlChapterRef.current);
+    const restoreHere =
+      restoreCidRef.current === null || restoreCidRef.current === htmlChapterRef.current;
     let nextPage = 0;
+    let landed = false;
 
-    if (restoreOffsetRef.current !== null && offsetMapRef.current.length > 0) {
+    // A TOC entry pointing at a section inside a document (nav anchors carry
+    // #filepos…): land on the page that holds the anchor, not on page one.
+    // Resolved here because this is the first pass with both the chapter's DOM
+    // and the offset map.
+    const anchorOff = takeAnchorOffset(htmlChapterRef.current);
+
+    if (anchorOff !== null && offsetMapRef.current.length > 0) {
+      nextPage = Math.min(pageIndexForOffset(anchorOff), maxIdx);
+      landed = true;
+    } else if (
+      restoreOffsetRef.current !== null &&
+      restoreHere &&
+      offsetMapRef.current.length > 0
+    ) {
       // Explicit restore (bookmark / annotation / saved progress): land on the
       // page that currently holds this source offset regardless of layout.
       nextPage = Math.min(pageIndexForOffset(restoreOffsetRef.current), maxIdx);
       restoreOffsetRef.current = null;
-    } else if (intent?.type === 'last') {
+      restoreCidRef.current = null;
+      landed = true;
+    } else if (intentHere && intent?.type === 'last') {
       // Chapter switch backwards: open the previous chapter on its last page.
       nextPage = maxIdx;
-    } else if (intent?.type === 'first') {
+      landed = true;
+    } else if (intentHere && intent?.type === 'first') {
       // Chapter switch forwards (or TOC jump): open on the first page.
       nextPage = 0;
-    } else if (keepOffset !== undefined) {
+      landed = true;
+    } else if (keepOffset !== null) {
       // Layout change only (font size / window / DPI), same chapter: keep the
       // same text in view rather than the same (now wrong) page number.
       nextPage = Math.min(pageIndexForOffset(keepOffset), maxIdx);
@@ -1215,7 +2322,7 @@ export default function Reader() {
       nextPage = Math.max(0, Math.min(maxIdx, nextPage - (nextPage % ppv)));
     }
     setPageIndex(nextPage);
-    pageIntentRef.current = null;
+    if (landed) pageIntentRef.current = null;
 
     // A jump that wants its target selected (notebook word, annotation line)
     // raises the selection UI once the landed page has painted.
@@ -1226,17 +2333,34 @@ export default function Reader() {
     }
 
     // A cross-chapter turn was faded out and is still waiting (see startTurn).
-    // Fade the spread back in ONLY after this measurement has committed the new
-    // chapter's page count and starting page. If we faded in on the safeHtml
-    // change instead, the spread would fade in while pageIndex still pointed at
-    // the OLD chapter, and the index jump on the next frame reads as a visible
-    // "jolt". Deferring one frame guarantees the freshly measured page is
-    // already painted underneath before it becomes visible.
-    if (awaitingChapterRef.current) {
+    // Fade the spread back in ONLY once this measurement has committed the new
+    // chapter's page count and starting page — and only when that measurement
+    // actually consumed the chapter intent (see intentHere above): fading in
+    // on a pass that measured the previous chapter's DOM would reveal the
+    // wrong page mid-swap. If (landed) is deferred, the fade holds until the
+    // pass that follows the html swap.
+    if (awaitingChapterRef.current && landed) {
       awaitingChapterRef.current = false;
       requestAnimationFrame(() => {
         setFxOut(false);
         fxRef.current = false;
+      });
+    }
+
+    // A chapter turn that had a page to show needed no dissolve: the peek has
+    // been covering the sheet since the slide landed, and the chapter loaded
+    // behind it. Now that the new page is measured and painted, dropping the
+    // drag offset and the peek together is invisible — both show the same page.
+    // Hold the drop while the intent is still pending: letting go of the peek
+    // on the previous chapter's measure would expose the old text for the
+    // rest of the RenderChapter round-trip.
+    if (peekHandoffRef.current && landed) {
+      peekHandoffRef.current = false;
+      requestAnimationFrame(() => {
+        dragTurnRef.current = null;
+        placeDrag(0, true);
+        setTurnDrag(null);
+        setPeek(null);
       });
     }
   }
@@ -1272,6 +2396,7 @@ export default function Reader() {
       scroller.getBoundingClientRect().top +
       scroller.scrollTop -
       scroller.clientHeight / 3;
+    autoScrollAtRef.current = Date.now();
     scroller.scrollTo({ top: Math.max(0, top), behavior: 'auto' });
 
     // Measured again after scrolling so the caller's highlight lands on the
@@ -1294,12 +2419,19 @@ export default function Reader() {
   // the paged reader stores — without it every scroll-mode position collapses
   // to "start of the chapter".
   function offsetAtViewportTop(): number {
+    return offsetAtViewportY(false);
+  }
+
+  /** Same measurement at either edge of the reading pane: `fromBottom` answers
+   *  "which text is at the end of what I can see", which is how a scroll-mode
+   *  page decides the section it is in (the paged rule, in one dimension). */
+  function offsetAtViewportY(fromBottom: boolean): number {
     const root = contentRef.current;
     const scroller = mainRef.current;
     if (!root || !scroller) return 0;
     const box = scroller.getBoundingClientRect();
     const x = box.left + Math.min(120, scroller.clientWidth / 2);
-    const y = box.top + 6;
+    const y = fromBottom ? box.bottom - 6 : box.top + 6;
     const doc = document as Document & {
       caretRangeFromPoint?: (x: number, y: number) => Range | null;
     };
@@ -1312,7 +2444,7 @@ export default function Reader() {
       return charOffset(root, caret.startContainer, caret.startOffset);
     }
     // Fallback for engines without caretRangeFromPoint: the first text node
-    // that reaches past the top edge. Coarse (whole node), still better than 0.
+    // that reaches past the edge. Coarse (whole node), still better than 0.
     const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
     let seen = 0;
     let n: Node | null;
@@ -1343,6 +2475,10 @@ export default function Reader() {
     if (!scroller) return;
     let timer = 0;
     const onScroll = () => {
+      // In scroll mode, scrolling IS the page turn: the reader has moved the
+      // text themselves, so the voice must stop dragging it back to the
+      // sentence it is reading. Our own reveal-scroll is not that.
+      if (Date.now() - autoScrollAtRef.current > 700) pauseFollow();
       window.clearTimeout(timer);
       timer = window.setTimeout(() => {
         api.saveProgress(id, current, offsetAtViewportTop(), 1).catch(() => {});
@@ -1362,6 +2498,172 @@ export default function Reader() {
   const progressPct = chapters.length
     ? ((idx + (pageCount ? pageIndex / pageCount : 0)) / chapters.length) * 100
     : 0;
+  const laidOut = sheetWidth > 0 && contentWidth > 0;
+
+  /* ---- 听书: wiring ----------------------------------------------------- */
+
+  // The engines call back from outside React; the handler is refreshed every
+  // render so it always speaks for the chapter on screen.
+  listenHandlerRef.current = onTtsEvent;
+  // Same for the notification's buttons.
+  listenCmdRef.current = onListenCommand;
+
+  useEffect(() => {
+    setTtsSink((e) => listenHandlerRef.current(e));
+    // The media notification's buttons come back through this channel.
+    setListenCommandHandler((c) => listenCmdRef.current(c));
+    // The engines' own timing goes to the on-device log: after a week of real
+    // listening it is the record a tuning decision is made from.
+    setTtsLogger((level, msg, detail) => ttsLog(level, msg, detail));
+    // The online voice is fetched one sentence at a time and handed back as a
+    // data URL: an <audio> element plays it with no CORS and no second server.
+    setOnlineFetcher(async (text, voice, rate) => {
+      const b64 = await api.ttsEdge(text, voice, rate);
+      return `data:audio/mpeg;base64,${b64}`;
+    });
+    return () => {
+      setTtsSink(null);
+      setListenCommandHandler(null);
+      setTtsLogger(null);
+      setOnlineFetcher(null);
+      clearListenEngine();
+      // Leaving the reader ends the session, so the widget goes with it.
+      publishNowPlaying(INACTIVE_NOW_PLAYING);
+      nowPlayingRef.current = JSON.stringify(INACTIVE_NOW_PLAYING);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // What the phone's media notification shows lives below, next to
+  // `currentChapter`: the widget's title *is* the chapter, and a TDZ reference
+  // is not worth the shrug.
+
+  // A new chapter means a new span list. Reading continues from its beginning —
+  // that is also how an automatic chapter turn hands over to the next chapter
+  // without the engine ever going quiet for long.
+  useEffect(() => {
+    const L = listenRef.current;
+    if (!L) return;
+    const spans = chapterSpans(safeHtml);
+    if (spans.length === 0) return;
+    spansRef.current = spans;
+    pushedRef.current = 0;
+    // A new chapter is a new place: the reader's detour, if there was one, is
+    // over and the page follows the voice again.
+    followRef.current = true;
+    setFollowing(true);
+    const s = { ...L, index: 0 };
+    listenRef.current = s;
+    setListen(s);
+    pumpListen(0);
+    showListenSpan(0);
+    ttsLog('debug', '换章朗读', `${spans.length} 句`);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [safeHtml]);
+
+  // The band is geometry, so it has to be re-measured whenever the page it was
+  // measured on changed underneath it.
+  useEffect(() => {
+    const L = listenRef.current;
+    // Not while the reader is away: a page turn of theirs must not bring a band
+    // back for a sentence they are not looking at.
+    if (!L || !followRef.current) return;
+    const span = spansRef.current[L.index];
+    if (!span) return;
+    const raf = window.requestAnimationFrame(() => {
+      // Re-checked inside the frame: closing the bar between the effect and the
+      // frame must not resurrect the band.
+      if (listenRef.current && followRef.current) paintListen(span);
+    });
+    return () => window.cancelAnimationFrame(raf);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pageIndex, mode, fontSize, fontEpoch, theme]);
+
+  // The online voice list is needed by the settings sheet — and by the bar,
+  // which names the voice it is using. Not fetched on a reading session that
+  // never listens.
+  const needsVoices = listenSheet || listen?.engine === 'online';
+  useEffect(() => {
+    if (!needsVoices || edgeVoices.length > 0) return;
+    api
+      .edgeVoices()
+      // A backend that answers null (older build, failed call) must not take
+      // the reader down with it: the list is a picker, not a dependency.
+      .then((list) => setEdgeVoices(Array.isArray(list) ? list : []))
+      .catch(() => {});
+  }, [needsVoices, edgeVoices.length]);
+
+  /* ---- the neighbouring chapter's page, laid out before it is needed ---- */
+  // A chapter turn only slides if there is a page to slide in, and that page has
+  // to exist before the finger gets there. It is fetched while the reader sits
+  // on the one page from which a chapter turn is even possible — and laid out
+  // (by TurnPeek) once it arrives, off-screen, where it costs nothing to keep.
+  useEffect(() => {
+    // A turn is in flight: the page on the sheet is the one being dragged, and
+    // the peek is part of that turn. Leave the stage alone until it is over.
+    if (turnDrag) return;
+    const want =
+      mode === 'paged' && laidOut && !preview && !peekHandoffRef.current
+        ? pageIndex + pagesPerView >= pageCount && next
+          ? { cid: next.id, side: 1 as const }
+          : pageIndex === 0 && prev
+            ? { cid: prev.id, side: -1 as const }
+            : null
+        : null;
+    if (!want) {
+      if (peek) setPeek(null);
+      return;
+    }
+    if (peek?.cid === want.cid && peek.side === want.side) return;
+    // Nothing to drag when nothing may move.
+    if (window.matchMedia?.('(prefers-reduced-motion: reduce)').matches) return;
+    let dead = false;
+    const show = (html: string) => {
+      if (!dead) setPeek({ cid: want.cid, side: want.side, html });
+    };
+    // A moment after the page settles: laying a whole chapter out is the same
+    // work opening it does, and doing it in the frame that lands on the last
+    // page would be felt as a hitch of the page that just arrived.
+    const timer = window.setTimeout(() => {
+      const cached = peekCache.current.get(want.cid);
+      if (cached) {
+        show(cached);
+        return;
+      }
+      api
+        .renderChapter(id, want.cid)
+        .then((r) => {
+          if (dead) return;
+          const clean = DOMPurify.sanitize(r.html, CHAPTER_PURIFY);
+          // Bounded: the cache exists for turning back and forth over a
+          // boundary, not for keeping the book in memory.
+          if (peekCache.current.size > 3) peekCache.current.clear();
+          peekCache.current.set(want.cid, clean);
+          show(clean);
+        })
+        .catch(() => {
+          /* no peek: the chapter turn falls back to the dissolve */
+        });
+    }, 160);
+    return () => {
+      dead = true;
+      window.clearTimeout(timer);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [
+    mode,
+    laidOut,
+    preview,
+    current,
+    pageIndex,
+    pageCount,
+    pagesPerView,
+    next?.id,
+    prev?.id,
+    id,
+    turnDrag,
+    peek,
+  ]);
 
   // Map each chapter document href -> Chapter, so a hierarchical TOC node can
   // resolve to the chapter id it opens.
@@ -1374,45 +2676,135 @@ export default function Reader() {
     const ch = byHref.get(docKey(href));
     return ch?.id;
   };
-  // The drawer's header counts chapters, so the list has to offer all of them.
-  // A nav can fail that promise in two ways:
+  // Which of the two lists the panel is showing. The choice is a preference
+  // (it survives a restart), not a property of the book, so it is stored once
+  // and shared by every book — the same drawer, the same two answers.
   //
-  //  * it names fewer documents than the spine holds. Converted EPUBs are the
-  //    usual offenders — calibre split this book into 28 files but wrote only
-  //    three labels ("Taboo", "Introduction", "Midpoint"), so the tree drew
-  //    three rows under a header reading "29 章" and the other 26 chapters
-  //    could not be reached from it at all;
-  //  * it is flat, one row per chapter and no nesting, in which case the
-  //    chapter list says the same thing and keeps the chapter numbers.
-  //
-  // The chapter list is complete by construction, so it wins both times; the
-  // outline is drawn only when it is hierarchical *and* reaches every chapter.
-  const tocShape = useMemo(() => {
-    const ids = new Set<string>();
-    let nested = false;
-    const walk = (es: TocEntry[]) => {
-      for (const e of es) {
-        if (e.href) {
-          const cid = byHref.get(docKey(e.href))?.id;
-          if (cid) ids.add(cid);
-        }
-        if (e.children?.length) {
-          nested = true;
-          walk(e.children);
-        }
-      }
-    };
-    walk(toc);
-    return { reached: ids.size, nested };
-  }, [toc, byHref]);
-  const useTocTree = toc.length > 0 && tocShape.nested && tocShape.reached >= chapters.length;
+  // When nothing has been chosen yet the nav wins, because it is the book's own
+  // outline. The exception is a nav that names fewer sections than the spine
+  // has documents: converted EPUBs are the usual offenders (calibre split a
+  // book into 28 files and wrote three labels), and three rows over 28 chapters
+  // is not an outline anyone can use. That is a *default*, not a merge — the
+  // nav is still one tap away and stays exactly as written.
+  const [tocPref, setTocPref] = useState<TocView | null>(readTocView);
+  const setTocView = (v: TocView) => {
+    setTocPref(v);
+    try {
+      localStorage.setItem(TOC_VIEW_KEY, v);
+    } catch {
+      // Private mode: the choice still applies to this session.
+    }
+  };
+  const navCount = useMemo(() => countTocEntries(toc), [toc]);
+  const hasNav = toc.length > 0;
+  const navView = hasNav && (tocPref ?? (navCount < chapters.length ? 'file' : 'nav')) === 'nav';
+  const tocView: TocView = navView ? 'nav' : 'file';
+  const tocCount = navView ? navCount : chapters.length;
+  const tocUnit = navView ? '节' : '章';
+
   const currentChapter = current ? (chapters.find((c) => c.id === current) ?? null) : null;
   const activeDoc = currentChapter?.href ?? null;
-  // Active highlight for the hierarchical TOC (no-op for flat-legacy books).
-  const activeSet = useMemo(
-    () => (activeDoc ? computeActiveHrefs(toc, activeDoc) : new Set<string>()),
-    [toc, activeDoc],
-  );
+
+  /* The media notification's contents. Published only when the widget would
+     actually look different: the session object is rebuilt on every sentence,
+     and one notification per sentence would be several hundred pointless
+     updates in a single chapter. */
+  useEffect(() => {
+    const np: NowPlaying = listen
+      ? {
+          active: true,
+          playing: listen.playing,
+          // The chapter is what the reader is following; the book goes under it.
+          title: currentChapter?.title || book?.title || '',
+          artist: book?.title || '',
+          canPrev: listen.index > 0 || !!prev,
+          canNext: listen.index < spansRef.current.length - 1 || !!next,
+        }
+      : INACTIVE_NOW_PLAYING;
+    const json = JSON.stringify(np);
+    if (json === nowPlayingRef.current) return;
+    nowPlayingRef.current = json;
+    publishNowPlaying(np);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [listen, currentChapter, book, prev, next]);
+
+  // Which section the reader is inside. A nav can name several sections inside
+  // one document — 邓小平时代's 第6章 and 第7章 both live in split_004 — so
+  // matching rows by document lit both of them, which is what made a chapter
+  // look duplicated. The section is the last entry of this document whose
+  // anchor has already passed the bottom edge of what is on screen, measured as
+  // a character offset so it means the same thing in both reading modes. Until
+  // it has been measured the first entry of the document stands in, so exactly
+  // one row is ever highlighted.
+  const [activeSection, setActiveSection] = useState<string | null>(null);
+  // A list has to be on screen for its highlight to matter: the paged reader's
+  // drawer and dock, or the scroll reader's aside — which CSS replaces with the
+  // drawer below 980px.
+  const [wideLayout, setWideLayout] = useState(() => !window.matchMedia(NARROW_QUERY).matches);
+  useEffect(() => {
+    const mq = window.matchMedia(NARROW_QUERY);
+    const onChange = () => setWideLayout(!mq.matches);
+    mq.addEventListener('change', onChange);
+    return () => mq.removeEventListener('change', onChange);
+  }, []);
+  const tocVisible = tocOpen || tocDocked || (mode === 'scroll' && wideLayout);
+  useEffect(() => {
+    if (!navView || !tocVisible || !activeDoc) {
+      setActiveSection(null);
+      return;
+    }
+    const hrefs = hrefsInDoc(toc, activeDoc);
+    if (hrefs.length <= 1) {
+      setActiveSection(hrefs[0] ?? null);
+      return;
+    }
+    const root = contentRef.current;
+    if (!root) {
+      setActiveSection(hrefs[0]);
+      return;
+    }
+    const pick = () => {
+      const pos = mode === 'paged' ? offsetAfterLastPage() : offsetAtViewportY(true);
+      let best = hrefs[0];
+      for (const href of hrefs) {
+        const el = anchorElement(root, anchorIdOf(href));
+        if (el && anchorOffset(root, el) <= pos) best = href;
+      }
+      setActiveSection(best);
+    };
+    if (mode !== 'scroll') {
+      pick();
+      return;
+    }
+    // Scroll mode has no page event to hang this on: the section changes when
+    // the reader scrolls past an anchor, and only then.
+    const scroller = mainRef.current;
+    if (!scroller) {
+      pick();
+      return;
+    }
+    let raf = 0;
+    const onScroll = () => {
+      cancelAnimationFrame(raf);
+      raf = requestAnimationFrame(pick);
+    };
+    scroller.addEventListener('scroll', onScroll, { passive: true });
+    pick();
+    return () => {
+      scroller.removeEventListener('scroll', onScroll);
+      cancelAnimationFrame(raf);
+    };
+    // `html` and `pageCount` stand in for "the chapter was laid out": the first
+    // render after a chapter change has no offset map yet, and measuring twice
+    // is cheaper than a highlight that never catches up.
+  }, [navView, tocVisible, activeDoc, toc, mode, pageIndex, pageCount, html]);
+
+  const activeSet = useMemo(() => {
+    if (!navView || !activeDoc) return new Set<string>();
+    const hrefs = hrefsInDoc(toc, activeDoc);
+    const one = activeSection && hrefs.includes(activeSection) ? activeSection : hrefs[0];
+    return new Set(one ? [one] : []);
+  }, [navView, toc, activeDoc, activeSection]);
 
   // Expand every ancestor group of the current chapter and (after render) scroll
   // the active node into view. If no TOC surface is showing, open the drawer.
@@ -1439,6 +2831,20 @@ export default function Reader() {
   }, [locateNonce]);
 
   /* ---- navigation ---- */
+  /** Consumes the pending TOC anchor if it belongs to this chapter and returns
+   *  the text offset it marks. The anchor only becomes a position once the
+   *  chapter's HTML is in the DOM, which is why this runs inside the measure /
+   *  scroll-restore pass rather than at click time. */
+  function takeAnchorOffset(cid: string | null): number | null {
+    const jump = anchorJumpRef.current;
+    if (!jump || !cid || jump.cid !== cid) return null;
+    anchorJumpRef.current = null;
+    const root = contentRef.current;
+    if (!root) return null;
+    const el = anchorElement(root, jump.anchor);
+    return el ? anchorOffset(root, el) : null;
+  }
+
   function openChapter(cid: string, intent: PageIntent = { type: 'first' }) {
     // A preview visit is pinned to its anchor: chapter hopping from the TOC
     // would drift through the book, and the mode exists precisely so that
@@ -1451,10 +2857,11 @@ export default function Reader() {
     setTocOpen(false);
     if (intent?.type === 'restore') {
       restoreOffsetRef.current = intent.offset ?? 0;
+      restoreCidRef.current = cid;
     } else if (intent?.type === 'last') {
-      pageIntentRef.current = { type: 'last' };
+      pageIntentRef.current = { type: 'last', cid };
     } else {
-      pageIntentRef.current = { type: 'first' };
+      pageIntentRef.current = { type: 'first', cid };
     }
     if (cid === current) {
       // Same chapter: setCurrent is a no-op, so force a re-measure to apply the
@@ -1464,8 +2871,35 @@ export default function Reader() {
     setCurrent(cid);
   }
 
+  /** A click in the outline: open the chapter the entry belongs to, then move
+   *  to the section it names. Most nav entries point inside their document
+   *  (`…html#filepos330338`) — the chapter is only the container. */
+  function pickToc(cid: string, href?: string) {
+    if (previewRef.current) return;
+    anchorJumpRef.current = null;
+    const anchor = href ? anchorIdOf(href) : '';
+    openChapter(cid, { type: 'first' });
+    if (anchor) anchorJumpRef.current = { cid, anchor };
+  }
+
   const turnStep = Math.max(1, pagesPerView);
-  const maxPageIndex = Math.max(0, pageCount - pagesPerView);
+  // The last spread starts at the largest page-aligned index that still has
+  // content. `pageCount - pagesPerView` would force every spread to be full:
+  // a 9-page chapter in two-page mode would stop at the 7/8 spread and turn
+  // straight into the next chapter, and page 9 would not exist for the reader.
+  // Odd page counts are the norm, not the exception, so the final spread may
+  // carry a single page, alone in its slot like a book's last page.
+  const maxPageIndex = Math.max(0, Math.floor((pageCount - 1) / turnStep) * turnStep);
+  // The numbers a gesture turn needs while it is running. They are read from a
+  // ref because the drag outlives the render that started it (a 210ms release
+  // slide, a re-measure in the middle of it): the closure that runs the ending
+  // may be older than the geometry it has to land on.
+  const turnGeomRef = useRef({ stride: 0, step: 1, max: 0 });
+  turnGeomRef.current = {
+    stride: turnStep * (sheetWidth + pageGap),
+    step: turnStep,
+    max: maxPageIndex,
+  };
 
   // Cross-dissolve page turn: fade the spread out, swap the page (or load the
   // next/previous chapter) while invisible, then fade back in. There is zero
@@ -1481,22 +2915,344 @@ export default function Reader() {
     window.setTimeout(apply, 130);
   }
 
+  // Long enough that only a badly stalled main thread can reach it; the band's
+  // own animationend normally ends the turn first. The timer exists because the
+  // band is display:none under prefers-reduced-motion, where no such event ever
+  // arrives.
+  const TURN_FX_MS = 600;
+
+  function slideTurn(dir: 1 | -1) {
+    turnFxSeq.current += 1;
+    setTurnFx({ id: turnFxSeq.current, dir });
+    window.clearTimeout(turnFxTimer.current);
+    turnFxTimer.current = window.setTimeout(() => setTurnFx(null), TURN_FX_MS);
+  }
+
+  // Ending on the band's animation rather than on a fixed delay is what keeps
+  // the turn honest: a running transition is not stopped by dropping the
+  // declaration that started it — it goes on holding the specified value until
+  // it is over — so a class removed on a timer would leave the page moving with
+  // nothing left to tell it had finished. The timer below only covers the case
+  // where the animation never runs at all (reduced motion).
+  function endTurnFx() {
+    window.clearTimeout(turnFxTimer.current);
+    setTurnFx(null);
+  }
+
+  /* ---- a page turn the finger owns ---- */
+  // The keyboard, the wheel and the page-edge clicks keep the fixed-duration
+  // slide above: no finger, nothing to synchronise with. A touch gesture is the
+  // opposite — the page has to be under the thumb at every instant, and where
+  // the turn ends is decided by where the finger lets go.
+  //
+  // Both endings run through the same slide, so a release never "resolves" a
+  // turn the reader has not already been shown: drag a third of the page, let
+  // go, and the page finishes the journey from exactly where it was left.
+  const TURN_SLIDE_MS = 210; // must match .reader-spread.turn-settle in styles.css
+
+  // The page's position during a turn, in px from the spread it belongs to.
+  // Written straight to the element: this runs on every touchmove.
+  //
+  // `cancelSlide` is the take-over case. A running CSS transition keeps winning
+  // over the specified value until it is over — dropping the class that declared
+  // it does not stop it, and neither does writing a new value (Chrome carries on
+  // to the old target). The only way to stop it where it stands is to take the
+  // transition out of the style and force a recalc before the value goes in;
+  // that recalc is never painted, so the jump it causes is not seen.
+  function placeDrag(px: number, cancelSlide = false) {
+    const el = dragLayerRef.current;
+    if (!el) return;
+    if (cancelSlide) {
+      el.style.transition = 'none';
+      void el.offsetWidth;
+    }
+    el.style.transform = px === 0 ? '' : `translate3d(${px}px, 0, 0)`;
+  }
+
+  // Where the page is right now. Only read when a new touch catches a page that
+  // is still sliding.
+  function dragLayerX(): number {
+    const el = dragLayerRef.current;
+    if (!el) return 0;
+    const tr = getComputedStyle(el).transform;
+    if (!tr || tr === 'none') return 0;
+    const m = tr.match(/matrix(?:3d)?\(([^)]+)\)/);
+    if (!m) return 0;
+    const v = m[1].split(',').map(Number);
+    return tr.startsWith('matrix3d') ? v[12] : v[4];
+  }
+
+  // The shadow rides the same progress as the page: off the right edge before
+  // the turn, off the left edge after it — so at any point of a drag it sits
+  // where the pulled page's edge is, instead of flying on its own schedule.
+  //
+  // The band's width is measured ONCE per veil: reading offsetWidth here would
+  // force a layout on every touchmove, which is exactly the cost a page turn
+  // must not pay. The veil is keyed per turn, so a new turn re-measures.
+  function placeBand(p: number, dir: 1 | -1) {
+    const band = veilRef.current?.firstElementChild as HTMLElement | null;
+    if (!band) return;
+    const w = viewWidth;
+    const cache = bandGeomRef.current;
+    if (!cache || cache.el !== band || cache.w !== w) {
+      bandGeomRef.current = { el: band, w, bw: band.offsetWidth };
+    }
+    const bw = bandGeomRef.current!.bw;
+    const travel = w + bw;
+    band.style.transform = `translate3d(${dir > 0 ? w - p * travel : p * travel - bw}px, 0, 0)`;
+  }
+
+  // The neighbour's page rides the same offset as the page leaving: one spread
+  // away at rest, home at a full stride. `px` is the live page's offset, so the
+  // two move as one gesture.
+  function placePeek(px: number, dir: 1 | -1) {
+    const el = peekRef.current;
+    if (!el) return;
+    const { stride } = turnGeomRef.current;
+    el.style.transform = `translate3d(${(dir > 0 ? stride : -stride) + px}px, 0, 0)`;
+  }
+
+  function dragAvailable(dir: 1 | -1) {
+    const { step, max } = turnGeomRef.current;
+    return dir > 0 ? pageIndex + step <= max : pageIndex - step >= 0;
+  }
+
+  // Is there a page to turn to past this chapter's edge? Only when the
+  // neighbour's page is already laid out in the peek: without it there would be
+  // nothing to drag in, and the cross-fade covers the load instead.
+  function chapterReachable(dir: 1 | -1) {
+    if (mode !== 'paged' || previewRef.current) return false;
+    const p = peekLive.current;
+    if (peekHandoffRef.current || !p || p.side !== dir) return false;
+    return dir > 0 ? !!next : !!prev;
+  }
+
+  // Returns whether the page took the gesture. A chapter edge takes it too, as
+  // long as the neighbour's page is ready: the peek is positioned exactly one
+  // spread away, so the same drag brings it in.
+  function beginDragTurn(dx: number): boolean {
+    if (previewRef.current) return false;
+    if (peekHandoffRef.current) return false;
+    // A chapter turn is a one-way journey with the next chapter loading behind
+    // the peek; there is nothing to catch and re-aim, so it refuses a new grip.
+    if (dragTurnRef.current?.kind === 'chapter') return false;
+    // Reduced motion is a request for no moving pictures, and a page sliding
+    // under the thumb is exactly that.
+    if (window.matchMedia?.('(prefers-reduced-motion: reduce)').matches) return false;
+    // A fast reader flicks again before the last page has finished sliding. The
+    // new touch catches the page where it is and drags on from there, instead
+    // of fighting the slide or waiting it out.
+    const carried = dragTurnRef.current?.settling ? dragLayerX() : 0;
+    const px = carried + dx;
+    const dir: 1 | -1 = px < 0 ? 1 : -1;
+    const kind: 'page' | 'chapter' = dragAvailable(dir) ? 'page' : 'chapter';
+    if (kind === 'chapter' && !chapterReachable(dir)) return false;
+    if (carried) {
+      window.clearTimeout(dragEndTimer.current);
+      dragTurnRef.current!.settling = false;
+      dragTurnRef.current!.commit = false;
+      // Pin the page where it was caught, before the class change reaches React.
+      placeDrag(carried, true);
+    }
+    dragTurnRef.current = { dir, px, origin: carried, commit: false, settling: false, kind };
+    setTurnDrag({ dir, phase: 'follow' });
+    followDrag(dx);
+    return true;
+  }
+
+  // 1:1 with the finger, but never past the neighbouring spread: the strip
+  // holds the whole chapter, so beyond that it would show the end of the paper
+  // rather than more book. There it stiffens instead.
+  function followDrag(dx: number) {
+    const d = dragTurnRef.current;
+    if (!d) return;
+    const stride = turnGeomRef.current.stride || 1;
+    // Measured from where this finger started, which is the page's own position
+    // on a fresh drag and wherever it was caught on one that interrupts a slide.
+    let px = d.origin + dx;
+    // The reader drags a page back and forth before deciding, so the direction
+    // is whatever side of the spread the finger is on now.
+    const want: 1 | -1 = px < 0 ? 1 : -1;
+    if (want !== d.dir) {
+      // A chapter turn has only its one neighbour waiting behind the spread, so
+      // it cannot reverse into that chapter. It can, however, hand the gesture
+      // back to the strip: the finger changed its mind and is now pulling a page
+      // of this chapter, and the neighbour's page simply goes home.
+      if (!dragAvailable(want)) {
+        d.px = 0;
+        placeDrag(0);
+        placeBand(0, d.dir);
+        if (d.kind === 'chapter') placePeek(0, d.dir);
+        return;
+      }
+      if (d.kind === 'chapter') {
+        placePeek(0, d.dir);
+        d.kind = 'page';
+      }
+      d.dir = want;
+    }
+    const mag = Math.abs(px);
+    px = mag <= stride ? mag : stride + (mag - stride) * 0.12;
+    d.px = -want * px;
+    placeDrag(d.px);
+    placeBand(Math.min(1, px / stride), d.dir);
+    if (d.kind === 'chapter') placePeek(d.px, d.dir);
+  }
+
+  // Let go. A flick counts even when it barely moved the page — the gesture
+  // said "next" — and a slow drag has to be carried the distance the reader's
+  // 翻页灵敏度 setting asks for (标准 = a third of the spread, the value this
+  // reader has always used).
+  // `interrupted` is the system taking the gesture back: nobody let go, so
+  // nothing was decided, and the page returns whatever it had travelled.
+  function releaseDragTurn(flick: number, interrupted = false) {
+    const d = dragTurnRef.current;
+    if (!d) return;
+    // Already decided: a settle in flight is not re-judged by a later touch,
+    // and a chapter turn is waiting for its chapter, not for another verdict.
+    if (d.settling) return;
+    const dist = Math.abs(d.px);
+    const { far, flickFloor } = turnThresholds(turnSensRef.current, turnGeomRef.current.stride);
+    d.commit = !interrupted && (dist >= far || (flick * d.dir < -0.5 && dist > flickFloor));
+    // The card points at a word on the page being left behind. It goes when the
+    // page is known to be going — not at touchstart, where unmounting the
+    // element under the finger makes the browser cancel the gesture — and not
+    // when the page is only being pulled at and let go again.
+    if (d.commit) {
+      cancelWordLookup();
+      setLookupCard(null);
+    }
+    d.settling = true;
+    setTurnDrag({ dir: d.dir, phase: 'settle' });
+    window.clearTimeout(dragEndTimer.current);
+    // Only a stalled main thread reaches this: the slide's own transitionend
+    // normally ends the turn first.
+    dragEndTimer.current = window.setTimeout(finishDragTurn, TURN_SLIDE_MS + 240);
+  }
+
+  function finishDragTurn() {
+    window.clearTimeout(dragEndTimer.current);
+    const d = dragTurnRef.current;
+    // A committed swipe is the reader turning the page themselves: from here
+    // the page is theirs and 听书 must stop paging it back. (A drag that was
+    // pulled back and abandoned is not a turn and changes nothing.)
+    if (d?.commit) pauseFollow();
+    if (d?.commit && d.kind === 'chapter') {
+      const target = d.dir > 0 ? next : prev;
+      if (target) {
+        // Everything stays exactly where the slide left it: the peek covers the
+        // page while the chapter loads, and measureAndLayout drops the offset in
+        // one frame once the new page is painted underneath (see the handoff).
+        peekHandoffRef.current = true;
+        openChapter(target.id, { type: d.dir > 0 ? 'first' : 'last' });
+        return;
+      }
+    }
+    dragTurnRef.current = null;
+    if (d?.commit) {
+      // The strip's base moves to the page the slide ended on, and the drag
+      // offset is dropped in the same commit — see the layout effect below.
+      const { step, max } = turnGeomRef.current;
+      setPageIndex((p) => Math.max(0, Math.min(max, p + d.dir * step)));
+    } else {
+      placeDrag(0);
+    }
+    setTurnDrag(null);
+  }
+
+  // The release target is written after React has put the settling class on the
+  // element: the transition must exist before the value it has to animate.
+  // During the drag this only places the band — and re-anchors a page that a
+  // new touch has just caught, in the same frame the transition comes off, so
+  // it stops where it was instead of snapping to the value it was heading for.
+  useLayoutEffect(() => {
+    const d = dragTurnRef.current;
+    if (!turnDrag || !d) return;
+    const stride = turnGeomRef.current.stride || 1;
+    if (turnDrag.phase === 'settle') {
+      // A page that was caught by hand has an inline `transition: none` on it
+      // from the take-over; this is where it goes back to the stylesheet's.
+      const el = dragLayerRef.current;
+      if (el) el.style.transition = '';
+      placeDrag(d.commit ? -d.dir * stride : 0);
+      placeBand(d.commit ? 1 : 0, d.dir);
+      if (d.kind === 'chapter') placePeek(d.commit ? -d.dir * stride : 0, d.dir);
+    } else {
+      placeDrag(d.px);
+      placeBand(Math.min(1, Math.abs(d.px) / stride), d.dir);
+      if (d.kind === 'chapter') placePeek(d.px, d.dir);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [turnDrag]);
+
+  // A committed turn: the base has just moved to the new page, so the offset
+  // goes now — one frame later and the same page would be shown twice.
+  useLayoutEffect(() => {
+    if (dragTurnRef.current) return;
+    placeDrag(0);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pageIndex]);
+
+  // A chapter turn with no finger on it — the keyboard, the wheel, a click on
+  // the page edge — plays the same slide as a gesture one whenever the
+  // neighbour's page is already laid out. Two frames, for the same reason a
+  // release needs them: the band has to be put at its start without a
+  // transition before the transition may carry it across.
+  function slideChapterTurn(dir: 1 | -1): boolean {
+    if (!chapterReachable(dir)) return false;
+    dragTurnRef.current = {
+      dir,
+      px: 0,
+      origin: 0,
+      commit: true,
+      settling: true,
+      kind: 'chapter',
+    };
+    setTurnDrag({ dir, phase: 'follow' });
+    requestAnimationFrame(() => {
+      const d = dragTurnRef.current;
+      if (!d || d.kind !== 'chapter') return;
+      setTurnDrag({ dir, phase: 'settle' });
+      window.clearTimeout(dragEndTimer.current);
+      // Only a stalled main thread reaches this; the drag layer's own
+      // transitionend normally ends the slide first.
+      dragEndTimer.current = window.setTimeout(finishDragTurn, TURN_SLIDE_MS + 240);
+    });
+    return true;
+  }
+
   function turn(delta: number) {
     // Preview visits do not turn pages: the position must stay on the anchor,
     // and every save guard aside, drifting would break the "temporary look"
     // model. Use the banner's two exits to leave the mode.
     if (previewRef.current) return;
+    // A chapter turn is already in flight, with its chapter loading behind the
+    // peek: another turn would have nowhere to land.
+    if (peekHandoffRef.current) return;
+    // A deliberate turn while the book is being read aloud: the page is the
+    // reader's from here, and 听书 keeps reading without taking it back. This
+    // is what made a swipe look broken — the next sentence start paged the
+    // reader to the voice a second later, so the turn appeared not to happen.
+    pauseFollow();
     // The card points at a word on the page being left behind.
     cancelWordLookup();
     setLookupCard(null);
     if (sel) clearSelectionUI();
     const step = turnStep;
     if (delta > 0) {
-      if (pageIndex + step <= maxPageIndex) setPageIndex(pageIndex + step);
-      else if (next) startTurn(() => openChapter(next.id, { type: 'first' }));
+      if (pageIndex + step <= maxPageIndex) {
+        slideTurn(1);
+        setPageIndex(pageIndex + step);
+      } else if (next) {
+        if (!slideChapterTurn(1)) startTurn(() => openChapter(next.id, { type: 'first' }));
+      }
     } else {
-      if (pageIndex - step >= 0) setPageIndex(pageIndex - step);
-      else if (prev) startTurn(() => openChapter(prev.id, { type: 'last' }));
+      if (pageIndex - step >= 0) {
+        slideTurn(-1);
+        setPageIndex(pageIndex - step);
+      } else if (prev) {
+        if (!slideChapterTurn(-1)) startTurn(() => openChapter(prev.id, { type: 'last' }));
+      }
     }
   }
 
@@ -1699,36 +3455,115 @@ export default function Reader() {
     // in this reader, and the card sits exactly where the thumb already is.
     const host = readerRef.current;
     if (!host) return;
+    // The swipe floor for the paths that never hand the page to the finger —
+    // preview mode, and reduced motion (a page sliding under the thumb is
+    // exactly what that setting asks not to see). Everything else decides on
+    // the drag itself, in releaseDragTurn. 40 px is the 标准 level; the others
+    // scale it so the setting is not silently ignored just because the reader
+    // prefers reduced motion.
     const MIN_TRAVEL = 40; // px before a drag counts as a page turn
     const MIN_RATIO = 1.2; // horizontal travel must beat vertical by this much
     const LP_MS = 450; // hold-to-select threshold, tuned like 微信读书
     const LP_SLOP = 10; // finger drift that cancels the hold
     const TAP_MS = 500; // holds longer than this are a press, not a tap
+    // Pulling the page down pulls a tag out of its top edge, and letting go past
+    // the arm point marks the page. The numbers are the ribbon's, not the
+    // finger's: the ribbon lags the finger (TAG_DAMP) so it reads as something
+    // being drawn out of the book rather than as a slider, and it stops growing
+    // at TAG_MAX_RAW so an enthusiastic pull cannot run it down the page.
+    const TAG_ARM = 70; // ribbon height at which a release marks the page
+    const TAG_DAMP = 0.7;
+    const TAG_MAX_RAW = 150;
     let startX = 0;
     let startY = 0;
     let startT = 0;
     let active = false;
     let horizontal = false;
+    let pulling = false;
+    let armed = false;
     let lpTimer = 0;
     // Set only when the hold actually produced a selection, so a held press on
     // blank paper still counts as a (chrome-toggling) tap on release.
     let lpFired = false;
+    // Recent finger positions of the current drag, for the release decision: a
+    // flick has to count even when it barely moved the page, and one frame of
+    // velocity is noise.
+    const samples: Array<{ x: number; t: number }> = [];
+
+    const flickVelocity = (): number => {
+      const now = Date.now();
+      const recent = samples.filter((s) => now - s.t < 120);
+      if (recent.length < 2) return 0;
+      const a = recent[0];
+      const b = recent[recent.length - 1];
+      const dt = b.t - a.t;
+      return dt > 0 ? (b.x - a.x) / dt : 0;
+    };
 
     const cancelLongPress = () => {
       window.clearTimeout(lpTimer);
       lpTimer = 0;
     };
 
+    // The ribbon is drawn at the finger's pace, and it says what letting go will
+    // do as soon as it is long enough to be a promise: armed is the moment the
+    // colour changes, not the moment anything is written.
+    const drawTag = (raw: number) => {
+      const el = tagRef.current;
+      if (!el) return;
+      const h = Math.round(Math.min(Math.max(raw, 0), TAG_MAX_RAW) * TAG_DAMP);
+      el.style.height = `${h}px`;
+      const next = h >= TAG_ARM;
+      if (next === armed) return;
+      armed = next;
+      if (tagWrapRef.current) tagWrapRef.current.dataset.armed = String(armed);
+      if (armed) {
+        // One tick, exactly where the gesture becomes a commitment.
+        try {
+          navigator.vibrate?.(8);
+        } catch {
+          /* no vibration on this device */
+        }
+      }
+    };
+
+    // Putting the ribbon down. Handing the height back to CSS IS the settle:
+    // `.page-tag` is shut and `.page-tag-wrap.on` is a resting height, so one
+    // deleted inline property covers both outcomes — and the reader's own state
+    // (the bookmark row) decides which of the two the page ends up showing.
+    const releaseTag = (cancel: boolean) => {
+      const el = tagRef.current;
+      const h = el ? parseFloat(el.style.height) || 0 : 0;
+      const fire = !cancel && h >= TAG_ARM;
+      pulling = false;
+      armed = false;
+      const wrap = tagWrapRef.current;
+      if (wrap) {
+        wrap.dataset.drag = 'false';
+        wrap.dataset.armed = 'false';
+      }
+      if (el) el.style.height = '';
+      if (fire) {
+        // The drag was ours end to end; no stray click can follow it.
+        turnedAtRef.current = Date.now();
+        bookmarkToggleRef.current();
+      }
+    };
+
     // Surfaces that keep native behaviour — their buttons, sliders and inputs
     // need real click events, and a drag inside them must never turn pages.
     // The floating cards are deliberately NOT listed: everything interactive
     // inside them is a button/input (matched below), and a swipe that starts
-    // on the word card must still turn the page.
+    // on the word card must still turn the page. The AI surfaces ARE listed:
+    // a bottom panel scrolled with a thumb, or a privacy dialog being read,
+    // has nothing to do with page turning.
     const isNativeTarget = (t: EventTarget | null): boolean =>
       !!(
         t instanceof Element &&
         (t.closest('.drawer-mask') ||
           t.closest('.sheet-mask') ||
+          t.closest('.ai-sheet') ||
+          t.closest('.modal-backdrop') ||
           t.closest('.reader-chrome') ||
           t.closest('.sel-handle') ||
           t.closest('button') ||
@@ -1739,6 +3574,7 @@ export default function Reader() {
 
     const onStart = (e: TouchEvent) => {
       lpFired = false;
+      samples.length = 0;
       // Multi-touch is never a page turn (pinch, or a stray second finger).
       if (e.touches.length !== 1) {
         active = false;
@@ -1755,6 +3591,8 @@ export default function Reader() {
       startT = Date.now();
       active = true;
       horizontal = false;
+      pulling = false;
+      armed = false;
       // Owning the gesture: no native long-press selection, no synthesized
       // click, no native text handles. Everything below is ours.
       if (e.cancelable) e.preventDefault();
@@ -1810,9 +3648,42 @@ export default function Reader() {
       const dx = t.clientX - startX;
       const dy = t.clientY - startY;
       if (Math.hypot(dx, dy) > LP_SLOP) cancelLongPress();
+      // A page already in this finger's hand follows it whatever it does next —
+      // it is off its mark, and freezing it mid-drag reads as a dropped gesture.
+      // A page still sliding home from the last flick is NOT in this hand yet:
+      // it is caught below, once this gesture has travelled far enough to be one.
+      const held = dragTurnRef.current;
+      if (held && !held.settling) {
+        if (e.cancelable) e.preventDefault();
+        samples.push({ x: t.clientX, t: Date.now() });
+        if (samples.length > 8) samples.shift();
+        followDrag(dx);
+        return;
+      }
       if (Math.abs(dx) > 12 && Math.abs(dx) > Math.abs(dy)) {
         horizontal = true;
         if (e.cancelable) e.preventDefault();
+        // From the first horizontal pixel the page belongs to the finger: it
+        // sits exactly where the drag has taken it, so the gesture is answered
+        // while it happens rather than after it has been judged.
+        samples.push({ x: t.clientX, t: Date.now() });
+        if (samples.length > 8) samples.shift();
+        beginDragTurn(dx);
+        return;
+      }
+      // Down, and downwards by more than sideways: the finger is pulling the
+      // page's tag. A hold that already selected a word is a selection, not a
+      // pull — dragging it is how you extend the selection.
+      if (pulling || (!lpFired && dy > 10 && dy > Math.abs(dx) * MIN_RATIO)) {
+        if (!pulling) {
+          pulling = true;
+          samples.length = 0;
+          if (tagWrapRef.current) tagWrapRef.current.dataset.drag = 'true';
+        }
+        // Non-passive: the WebView must not take a downward drag as its own
+        // overscroll while the ribbon is coming out.
+        if (e.cancelable) e.preventDefault();
+        drawTag(dy);
       }
     };
 
@@ -1821,27 +3692,48 @@ export default function Reader() {
       if (!active) return;
       active = false;
       const t = e.changedTouches[0];
-      if (!t) return;
+      if (!t) {
+        if (pulling) releaseTag(true);
+        else if (dragTurnRef.current) releaseDragTurn(0);
+        return;
+      }
       const dx = t.clientX - startX;
       const dy = t.clientY - startY;
+      // A pull is never a tap, however short: a thumb that settles 30px down
+      // the page and lets go there is not asking for the chrome.
+      if (pulling) {
+        releaseTag(false);
+        return;
+      }
       if (!horizontal) {
         // A tap: the native click was suppressed at touchstart, so route it
         // ourselves. A hold that produced a selection is not a tap.
         if (!lpFired && Date.now() - startT < TAP_MS) routeTapRef.current(t.clientX, t.clientY);
         return;
       }
-      if (Math.abs(dx) < MIN_TRAVEL) return;
-      if (Math.abs(dx) < Math.abs(dy) * MIN_RATIO) return;
-      // The gesture was ours end to end; no stray click can follow.
-      turnedAtRef.current = Date.now();
       // Dismiss whatever floats over the page only once the gesture is over.
       // Unmounting the element under the finger mid-drag makes the browser
       // cancel the touch sequence, and the page turn never happens — which is
       // how "swipe while the word card is open" stayed broken even after the
       // listener moved to the reader root.
-      setSel(null);
-      setPopover(null);
-      setChromeOpen(false);
+      const dismiss = () => {
+        setSel(null);
+        setPopover(null);
+        setChromeOpen(false);
+      };
+      // A page that was pulled in owns the release however far it went: it has
+      // to be put down somewhere, finished or returned.
+      if (dragTurnRef.current) {
+        turnedAtRef.current = Date.now();
+        dismiss();
+        releaseDragTurn(flickVelocity());
+        return;
+      }
+      if (Math.abs(dx) < MIN_TRAVEL * turnLevelFactor(turnSensRef.current)) return;
+      if (Math.abs(dx) < Math.abs(dy) * MIN_RATIO) return;
+      // The gesture was ours end to end; no stray click can follow.
+      turnedAtRef.current = Date.now();
+      dismiss();
       turn(dx < 0 ? 1 : -1);
     };
 
@@ -1849,6 +3741,14 @@ export default function Reader() {
       cancelLongPress();
       active = false;
       horizontal = false;
+      // The system took the gesture back (a notification shade pulled down, an
+      // app switch): nobody let go, so the page must not be left standing half
+      // turned — and must not be turned on a decision no finger made. A page
+      // still sliding from an earlier flick is not this gesture's to interrupt.
+      // The same goes for a ribbon half out of the book: it goes back, unwritten.
+      if (pulling) releaseTag(true);
+      const held = dragTurnRef.current;
+      if (held && !held.settling) releaseDragTurn(0, true);
     };
 
     host.addEventListener('touchstart', onStart, { passive: false });
@@ -1861,6 +3761,20 @@ export default function Reader() {
       host.removeEventListener('touchmove', onMove);
       host.removeEventListener('touchend', onEnd);
       host.removeEventListener('touchcancel', onCancel);
+      // A re-registration (page change, mode switch, rotation) mid-gesture
+      // orphans the drag: put the page back rather than leave it half turned.
+      // Not while a chapter turn is handing over, though — that drag is the
+      // chapter load's, and the handoff drops it when the new page is painted.
+      if (dragTurnRef.current && !peekHandoffRef.current) {
+        dragTurnRef.current = null;
+        window.clearTimeout(dragEndTimer.current);
+        // No transition here: the offset is being abandoned, not settled, and a
+        // slide running on while the sheet changes under it would be seen.
+        placeDrag(0, true);
+        setTurnDrag(null);
+      }
+      // Same for a pull caught by the re-registration: retract, write nothing.
+      if (pulling) releaseTag(true);
     };
   }, [mode, pageIndex, pageCount, pagesPerView, prev, next]);
 
@@ -1911,6 +3825,7 @@ export default function Reader() {
     }
     if (mode === 'paged') {
       restoreOffsetRef.current = origin.positionOffset;
+      restoreCidRef.current = current; // same chapter, but stamp it anyway
       scheduleMeasure();
       return;
     }
@@ -1924,7 +3839,18 @@ export default function Reader() {
   // deliberate exit must never be resurrectable by the back button.
   function goUp(fallback: string) {
     const st = window.history.state as { idx?: number } | null;
-    if (st && typeof st.idx === 'number' && st.idx > 0) nav(-1);
+    const idx = st && typeof st.idx === 'number' ? st.idx : 0;
+    // An open overlay must not turn this button into a no-op: the pop would be
+    // swallowed by the overlay guard and the reader would stay on screen, which
+    // reads as a dead button. Close the overlays and step over them as well, so
+    // one press still means one level.
+    //
+    // Capped at what actually exists: `idx` counts the entries ABOVE the root,
+    // so this page plus everything behind it is idx+1, and asking for more is a
+    // silent no-op that leaves the button looking dead.
+    const depth = Math.min(navigationDepth(), idx + 1);
+    closeForNavigation();
+    if (idx > 0) nav(-depth);
     else nav(fallback, { replace: true });
   }
 
@@ -2167,7 +4093,12 @@ export default function Reader() {
       bottom: rect.bottom,
       start: offs.start,
       end: offs.end,
-      text: selection.toString(),
+      // `text` is TEXT from here on — it becomes a highlight's label, an AI
+      // prompt, a notebook context — so the invisible marks a print conversion
+      // left inside words are dropped at this boundary, exactly like the ones
+      // the sentence and lookup paths already drop. The offsets keep counting
+      // the characters that are really in the document.
+      text: stripInvisible(selection.toString()),
       firstRect: rects ? snapRect(rects.first) : undefined,
       lastRect: rects ? snapRect(rects.last) : undefined,
     });
@@ -2189,7 +4120,9 @@ export default function Reader() {
       bottom: rects.last.bottom,
       start: offs.start,
       end: offs.end,
-      text: range.toString(),
+      // Same boundary rule as syncSelectionFromDom: a reshaped selection is
+      // still text leaving the reader.
+      text: stripInvisible(range.toString()),
       firstRect: snapRect(rects.first),
       lastRect: snapRect(rects.last),
     });
@@ -2396,7 +4329,13 @@ export default function Reader() {
     setLookupBusy(true);
     try {
       const res = await api.lookupWord(id, current, start, word, context);
-      setLookupCard({ ...at, res, offset: start, context });
+      setLookupCard({
+        ...at,
+        res,
+        offset: start,
+        context,
+        surface: word.replace(/[\u00AD\u200B-\u200D\uFEFF]/g, ''),
+      });
     } catch (e) {
       toastError(e);
     } finally {
@@ -2456,9 +4395,9 @@ export default function Reader() {
         if (!ch || !ch.trim()) continue;
         probe.setStart(node, i);
         probe.setEnd(node, i + 1);
-        const r = probe.getBoundingClientRect();
-        if (r.width <= 0) continue;
-        if (x >= r.left - 3 && x <= r.right + 3 && y >= r.top - 5 && y <= r.bottom + 5) {
+        // Fragment by fragment: the character after a hyphenation break unions
+        // its glyph with the end of the previous line (see fragmentAt).
+        if (fragmentAt(probe.getClientRects(), x, y, 3, 5)) {
           idx = i;
           break;
         }
@@ -2507,7 +4446,9 @@ export default function Reader() {
             const r2 = document.createRange();
             r2.setStart(s.node, Math.min(s.offset, (s.node.textContent || '').length));
             r2.setEnd(e.node, Math.min(e.offset + 1, (e.node.textContent || '').length));
-            const rect2 = r2.getBoundingClientRect();
+            // Prefer the fragment under the finger; a word broken across
+            // inline boundaries can still report a union box.
+            const rect2 = fragmentAt(r2.getClientRects(), x, y, 4, 4) ?? r2.getBoundingClientRect();
             if (rect2.width > 0) {
               return { word: rspan.word, offset: rspan.start, rect: rect2, range: r2 };
             }
@@ -2518,20 +4459,13 @@ export default function Reader() {
     const range = document.createRange();
     range.setStart(node, span.start);
     range.setEnd(node, span.end);
-    const rect = range.getBoundingClientRect();
-    if (rect.width <= 0) return null;
-    // Trust the snap only when the point actually sits on the word's box (a
-    // little slack for glyph edges). A word wrapped across lines yields the
-    // union box, so either of its lines accepts the tap — which is correct.
-    const SLACK = 4;
-    if (
-      x < rect.left - SLACK ||
-      x > rect.right + SLACK ||
-      y < rect.top - SLACK ||
-      y > rect.bottom + SLACK
-    ) {
-      return null;
-    }
+    // Trust the snap only when the point actually sits on the word (a little
+    // slack for glyph edges) — and on the FRAGMENT of it that was tapped. A
+    // word wrapped across lines has one fragment per line, and the union of
+    // them is not a place any glyph is painted: anchoring the card to it put
+    // the card over the wrong line.
+    const rect = fragmentAt(range.getClientRects(), x, y, 4, 4);
+    if (!rect) return null;
     return { word: span.word, offset: charOffset(root, node, span.start), rect, range };
   }
 
@@ -2601,8 +4535,15 @@ export default function Reader() {
   }
 
   /* ---- annotation / bookmark actions ---- */
-  async function createAnnotation(color: string) {
+  // A highlight without a note is the common case, and both live in the same
+  // popover. 批注 marks the range and hands the cursor to the note field: the
+  // thought is written while the sentence is still on screen, instead of
+  // marking now and coming back later to a page where the reader no longer
+  // remembers why they marked it.
+  async function createAnnotation(color: string, withNote = false) {
     if (!sel || !current) return;
+    // clearSelectionUI drops `sel`, so the anchor has to be snapshotted first.
+    const at = { x: sel.x, y: sel.bottom + 6 };
     try {
       const a = await api.addAnnotation(
         id,
@@ -2615,8 +4556,14 @@ export default function Reader() {
         '',
       );
       setAnnotations((prev) => [...prev, a]);
+      setMarkColor(color);
       clearSelectionUI();
-      toast('已划线', 'success');
+      if (withNote) {
+        setNoteDraft('');
+        setPopover({ ...at, ann: a, fresh: true });
+      } else {
+        toast('已划线', 'success');
+      }
     } catch (e) {
       toastError(e);
     }
@@ -2665,7 +4612,9 @@ export default function Reader() {
       // map, so the anchor is whatever text sits at the top of the pane.
       const off = mode === 'paged' ? offsetForPage(pageIndex) : offsetAtViewportTop();
       const b = await api.addBookmark(id, current, off, '');
-      setBookmarks((prev) => [...prev, b]);
+      // Marking a spot that is already marked comes back as the row that was
+      // there, so this merges rather than appending a twin of it.
+      setBookmarks((prev) => (prev.some((x) => x.id === b.id) ? prev : [...prev, b]));
       toast('已添加书签', 'success');
     } catch (e) {
       toastError(e);
@@ -2677,38 +4626,62 @@ export default function Reader() {
   const contentStyle: CSSProperties = { fontSize };
   if (readFont !== 'default') contentStyle.fontFamily = `'${CUSTOM_FONT_FAMILY}', Georgia, serif`;
 
-  async function removeBookmark(bid: string) {
+  async function removeBookmarks(ids: string[]) {
+    if (ids.length === 0) return;
     try {
-      await api.deleteBookmark(bid);
-      setBookmarks((prev) => prev.filter((x) => x.id !== bid));
-      toast('已删除书签', 'success');
+      await Promise.all(ids.map((bid) => api.deleteBookmark(bid)));
+      setBookmarks((prev) => prev.filter((x) => !ids.includes(x.id)));
+      toast(ids.length > 1 ? `已删除 ${ids.length} 个书签` : '已删除书签', 'success');
     } catch (e) {
       toastError(e);
     }
   }
 
-  // The bookmark standing for "this page" (phone: the star in the top bar).
-  // Paged mode matches exactly via the offset->page map; scrolling compares
-  // against the offset at the top of the pane with slack, because the pane
-  // moves in pixel steps the map does not model.
-  function currentPageBookmark(): Bookmark | null {
-    if (!current) return null;
+  const removeBookmark = (bid: string) => removeBookmarks([bid]);
+
+  // Every bookmark standing for "this page". Paged mode matches exactly via the
+  // offset->page map; scrolling compares against the offset at the top of the
+  // pane with slack, because the pane moves in pixel steps the map does not
+  // model. Plural on purpose: a page can carry more than one mark (the drawer
+  // used to add a new one on every press), and the star has to be able to turn
+  // all of them off.
+  function pageBookmarks(): Bookmark[] {
+    if (!current) return [];
     if (mode === 'paged') {
-      return (
-        bookmarks.find(
-          (b) => b.chapterId === current && pageIndexForOffset(b.anchor) === pageIndex,
-        ) ?? null
+      return bookmarks.filter(
+        (b) => b.chapterId === current && pageIndexForOffset(b.anchor) === pageIndex,
       );
     }
     const top = offsetAtViewportTop();
-    return bookmarks.find((b) => b.chapterId === current && Math.abs(b.anchor - top) < 500) ?? null;
+    return bookmarks.filter((b) => b.chapterId === current && Math.abs(b.anchor - top) < 500);
   }
 
-  async function togglePageBookmark() {
-    const existing = currentPageBookmark();
-    if (existing) await removeBookmark(existing.id);
-    else await addBookmarkNow();
+  // The bookmark standing for "this page" (phone: the star in the top bar).
+  function currentPageBookmark(): Bookmark | null {
+    return pageBookmarks()[0] ?? null;
   }
+
+  // Bookmarking is one action with one meaning, and it has to be safe to press
+  // twice: the star and the drawer's button both call this, and a double tap —
+  // or a tap that lands while the first request is still in flight — must not
+  // mark the page twice. Whoever gets through owns the interaction; the second
+  // press is dropped instead of queued behind the first.
+  const bookmarkBusyRef = useRef(false);
+
+  async function togglePageBookmark() {
+    if (bookmarkBusyRef.current) return;
+    bookmarkBusyRef.current = true;
+    try {
+      const marks = pageBookmarks();
+      if (marks.length > 0) await removeBookmarks(marks.map((b) => b.id));
+      else await addBookmarkNow();
+    } finally {
+      bookmarkBusyRef.current = false;
+    }
+  }
+  // The pull gesture was registered before this function existed (it is created
+  // once per page), so it reaches the current one through a ref.
+  bookmarkToggleRef.current = togglePageBookmark;
 
   function jumpBookmark(b: Bookmark) {
     openChapter(b.chapterId, { type: 'restore', offset: b.anchor });
@@ -2728,12 +4701,29 @@ export default function Reader() {
 
   /* ---- mobile chrome (微信读书 / 番茄 style) ----
      Top bar: back + chapter title + a page-bookmark star. Bottom: (paged) a
-     chapter slider between 上一章/下一章, a percentage caption, and a five-slot
-     action row (目录 · 书签 · 划线 · 整理 · 设置). The desktop keeps its own
-     bars — the two never render together, gated on touchPrimary. */
+     chapter slider between 上一章/下一章, a percentage caption, and a four-slot
+     action row (目录 · 书签 · 划线 · 设置). The desktop keeps its own bars —
+     the two never render together, gated on touchPrimary.
+
+     整理 is deliberately not one of them. It is chapter tooling — reorder a
+     dragged chapter, publish an HTML editor, split a volume — and every one of
+     those wants a mouse and a wide pane; on a phone it opened a desktop layout
+     behind a reading session nobody meant to leave. The phone's book-level edit
+     (title / author / tags / cover) lives on the shelf instead, behind a
+     long-press, which is the whole of what a thumb can usefully do here. */
   // Only measured while the mobile chrome is actually up: in scroll mode the
   // helper walks text nodes, and doing that on every desktop render is waste.
   const pageBookmark = touchPrimary && chromeOpen ? currentPageBookmark() : null;
+  // The drawer's button says the same thing as the star, so it needs the same
+  // answer — and it must have one on desktop too, where the star does not exist.
+  // Guarded on bmOpen so a closed drawer costs nothing.
+  const pageMarked = pageBookmark !== null || (bmOpen && currentPageBookmark() !== null);
+
+  // The tag on the page itself. It is shown whether or not the chrome is open —
+  // it is the page's own state, and it is what a downward pull moves — so it is
+  // computed unconditionally in paged mode. Scrolling has no page for a tag to
+  // hang from (and no pull gesture: the touch effect only runs when paged).
+  const pageTagged = mode === 'paged' && currentPageBookmark() !== null;
 
   const iconBack = (
     <svg
@@ -2791,22 +4781,22 @@ export default function Reader() {
       <path d="M16.5 3.5a2.12 2.12 0 013 3L7 19l-4 1 1-4z" />
     </svg>
   );
-  const iconEdit = (
+  const iconListen = (
     <svg
       viewBox="0 0 24 24"
       width="20"
       height="20"
       fill="none"
       stroke="currentColor"
-      strokeWidth="2"
+      strokeWidth="1.9"
       strokeLinecap="round"
       strokeLinejoin="round"
     >
-      <path d="M11 4H4v16h16v-7" />
-      <path d="M17.5 3.5a2.12 2.12 0 013 3L13 14l-4 1 1-4z" />
+      <path d="M4 15v-3a8 8 0 0116 0v3" />
+      <path d="M4 15a2 2 0 012-2h1v5H6a2 2 0 01-2-2z" />
+      <path d="M20 15a2 2 0 00-2-2h-1v5h1a2 2 0 002-2z" />
     </svg>
   );
-
   const mTabsRow = (
     <div className="m-tabs">
       <button className="m-tab" onClick={() => setTocOpen(true)}>
@@ -2821,9 +4811,14 @@ export default function Reader() {
         {iconPen}
         <span>划线</span>
       </button>
-      <button className="m-tab" onClick={() => nav(`/books/${id}/edit`)}>
-        {iconEdit}
-        <span>整理</span>
+      {/* 听书 starts where the reader is, not where the chapter starts — the
+          natural way to pick it up is "read this to me" from the page I am on. */}
+      <button
+        className={`m-tab${listen ? ' listening' : ''}`}
+        onClick={() => (listen ? setChromeOpen(false) : startListen())}
+      >
+        {iconListen}
+        <span>{listen ? '听书中' : '听书'}</span>
       </button>
       <button className="m-tab" onClick={() => setSettingsOpen(true)}>
         <span className="m-aa">Aa</span>
@@ -2848,6 +4843,13 @@ export default function Reader() {
         {iconBack}
       </button>
       <div className="m-title">{currentChapter?.title || book.title}</div>
+      <button
+        className="chrome-icon text ai-guide-btn"
+        onClick={openGuide}
+        title="让 AI 读一遍本章，生成导读"
+      >
+        ✦AI
+      </button>
       <button
         className={`chrome-icon star${pageBookmark ? ' on' : ''}`}
         onClick={togglePageBookmark}
@@ -2882,6 +4884,8 @@ export default function Reader() {
             setLookupCard(null);
             setSel(null);
             setPopover(null);
+            // Dragging the slider is a deliberate move through the chapter.
+            pauseFollow();
             setPageIndex(Number(e.target.value));
           }}
           aria-label="阅读进度"
@@ -2894,8 +4898,23 @@ export default function Reader() {
           下一章
         </button>
       </div>
-      <div className="m-slider-pct">
-        {Math.round(progressPct)}% · 第 {pageIndex + 1}/{pageCount} 页
+      {/* The footer splits what used to be one centred string: page number at
+          the left edge, whole-book progress at the right — both under a thumb,
+          neither in the dead centre of the screen. 全书 has to be spelled out:
+          the two numbers have different denominators (this chapter's pages vs
+          the whole book), and an unlabelled "38%" beside "第 3/12 页" invites
+          reading one as a restatement of the other. The percentage is
+          continuous — chapter index plus the position inside the chapter, with
+          every chapter counted as if it were the same length — so it moves a
+          point or two per page and is an estimate, not a measurement. */}
+      <div className="m-foot">
+        <span className="m-foot-page">
+          {pageCount ? `第 ${pageIndex + 1}/${pageCount} 页` : ''}
+        </span>
+        <span className="m-foot-pct">
+          <span className="m-foot-pct-lb">全书</span>
+          {Math.round(progressPct)}%
+        </span>
       </div>
       {mTabsRow}
     </div>
@@ -2908,8 +4927,86 @@ export default function Reader() {
   // Overlays live outside both reading layouts: they are viewport-anchored, and
   // keeping one copy is what makes "select a word, look it up" work while
   // scrolling as well as while paging.
+
+  // A failed AI ask is very often a settings problem, so the error state offers
+  // a way there — which first has to close the panel, or it would cover the
+  // settings page it just navigated to.
+  const goAISettings = () => {
+    setAIPanel(null);
+    nav('/settings');
+  };
+  // "查看对话" — every grounded answer is filed as a transcript, so the answer
+  // in front of the reader has a page where it can be read in full and
+  // continued (system prompt and all). The panel closes first: this leaves the
+  // reader, and a sheet left open would still be mounted over the next page.
+  const openChat = (convId: string) => {
+    if (!convId) return;
+    setAIPanel(null);
+    setLookupCard(null);
+    nav(`/ai/${convId}`);
+  };
+  // One way into the AI for a word, shared by the card's ✦ and by the "not in
+  // the dictionary" state — where the model is the only answer there is, so the
+  // entry has to be as easy to find there as on a word that was found.
+  //
+  // Opening the panel closes the card: the card is the smaller answer to the
+  // question the panel answers in full, and leaving it up would park a
+  // duplicate over the page the panel is meant to leave readable.
+  const explainThis = () => {
+    if (!lookupCard) return;
+    // The dictionary's headword when it found one (a lemma explains better than
+    // an inflected form), otherwise the word as printed — which is also what
+    // the card shows, so the panel and the tap agree.
+    const word = lookupCard.res.entry?.word || lookupCard.surface || lookupCard.res.query;
+    const sentence = lookupCard.context;
+    setLookupCard(null);
+    setAIPanel({ kind: 'explain', word, sentence });
+  };
+  // The word as the reader sees it on the page. Falls back to the dictionary's
+  // normalised query for an older card state.
+  const cardWord = lookupCard ? lookupCard.surface || lookupCard.res.query : '';
+  // Where the cached gloss's conversation lives, if it has one (it does unless
+  // the answer predates the transcript store).
+  const cardChatId = cardAI?.conversationId ?? '';
+  // The cached gloss itself is fetched by the effect near the state
+  // declarations (before the loading return); this block only draws it.
+
+  // The cached AI gloss as the card shows it — the same block in both the
+  // dictionary-miss state (where it replaces "未收录") and the found state
+  // (where it sits under the dictionary entry).
+  const cardAIGloss = cardAI && (
+    <div className="dict-ai">
+      <div className="dict-ai-head">
+        <span className="dict-ai-star" aria-hidden="true">
+          ✦
+        </span>
+        AI 解释 · 本句
+        {cardAI.pos && <span className="ai-pos">{cardAI.pos}</span>}
+      </div>
+      {cardAI.meaning && <div className="dict-ai-meaning">{cardAI.meaning}</div>}
+      {cardAI.translation && <div className="dict-ai-trans">整句：{cardAI.translation}</div>}
+      {cardAI.note && <div className="dict-ai-note">{cardAI.note}</div>}
+      {cardChatId && (
+        <button className="dict-ai-open" onClick={() => openChat(cardChatId)}>
+          查看对话 <span aria-hidden="true">›</span>
+        </button>
+      )}
+    </div>
+  );
+
   const overlayLayer = (
     <>
+      {/* 听书 sentence band. One absolutely-positioned box per line fragment of
+          the sentence being spoken — drawn on a fixed layer, never as a span
+          injected into the chapter, because that DOM belongs to React and
+          unwrapping it later is how a reader ends up with a black screen. */}
+      {listenMarks.length > 0 && (
+        <div className="listen-marks" aria-hidden="true">
+          {listenMarks.map((m, i) => (
+            <span key={i} style={{ left: m.left, top: m.top, width: m.width, height: m.height }} />
+          ))}
+        </div>
+      )}
       {/* selection toolbar — stays up while a handle is dragged: the drag is
           how you make the selection you are about to look up, and hiding the
           menu mid-gesture read as "the menu is gone" (it only came back once
@@ -2928,8 +5025,49 @@ export default function Reader() {
           >
             {lookupBusy ? '查询中' : '查词'}
           </button>
+          {/* Read from here: the paragraph you selected is the paragraph you
+              want read, not the top of the page. */}
+          <button
+            className="sel-listen"
+            title="从这里开始朗读"
+            onClick={() => {
+              const at = sel.start;
+              clearSelectionUI();
+              startListen(at);
+            }}
+          >
+            朗读
+          </button>
+          {/* Translation and breakdown share one view (0.4 裁决): the sentence
+              is already on screen, so the panel echoes it and adds meaning
+              around it rather than opening a second page. */}
+          <button
+            className="ai-chip"
+            title="AI 翻译并拆解这个句子"
+            onClick={() => {
+              // The panel takes over the screen: leaving the selection toolbar
+              // and the highlighted range up would park a floating strip of
+              // buttons over the chapter heading while the reader reads the
+              // answer (seen on the phone).
+              setAIPanel({ kind: 'parse', sentence: sel.text });
+              clearSelectionUI();
+            }}
+          >
+            ✦ AI
+          </button>
           {/* Highlights are painted by the paginated view only, so offering
-              colours while scrolling would promise something invisible. */}
+              colours while scrolling would promise something invisible. 批注
+              goes with them for the same reason: a note hangs off a highlight,
+              and there is no highlight to hang it on in scroll mode. */}
+          {mode === 'paged' && (
+            <button
+              className="sel-note"
+              title="划线并添加批注"
+              onClick={() => createAnnotation(markColor, true)}
+            >
+              批注
+            </button>
+          )}
           {mode === 'paged' &&
             COLORS.map((c) => (
               <button
@@ -2970,18 +5108,49 @@ export default function Reader() {
             ×
           </button>
           {!lookupCard.res.found || !lookupCard.res.entry ? (
-            <div className="dict-miss">
-              {!dictReady ? (
-                <>
-                  词库未安装
-                  <div className="dict-miss-hint">在「我的 → 查词词库」可在线下载</div>
-                </>
-              ) : (
-                <>
-                  词库未收录 <b>{lookupCard.res.query}</b>
-                </>
-              )}
-            </div>
+            cardAI ? (
+              <>
+                {cardAIGloss}
+                <div className="dict-miss-hint">
+                  这是之前 AI 对「{cardWord}」的解释。词库未收录此词。
+                </div>
+                <button className="ai-fallback" onClick={explainThis}>
+                  <span className="ai-fallback-star" aria-hidden="true">
+                    ✦
+                  </span>
+                  重新问 AI
+                </button>
+              </>
+            ) : (
+              <div className="dict-miss">
+                {!dictReady ? (
+                  <>
+                    <div className="dict-miss-title">词库未安装</div>
+                    <div className="dict-miss-hint">在「我的 → 查词词库」可在线下载</div>
+                  </>
+                ) : (
+                  <>
+                    <div className="dict-miss-title">
+                      词库未收录 <b>{cardWord}</b>
+                    </div>
+                    {/* A word the dictionary does not have is usually a name, a
+                      coinage or a domain term — which is exactly the word a
+                      reader needs help with. Ending the answer at "未收录" is
+                      the least useful thing the card could do, so the model is
+                      offered right here, at full size. */}
+                    <div className="dict-miss-hint">
+                      人名、地名、专业词常不在词库里。AI 可以结合这一句解释它，并把整句翻成中文。
+                    </div>
+                  </>
+                )}
+                <button className="ai-fallback" onClick={explainThis}>
+                  <span className="ai-fallback-star" aria-hidden="true">
+                    ✦
+                  </span>
+                  让 AI 解释「{cardWord}」
+                </button>
+              </div>
+            )
           ) : (
             <>
               <div className="dict-head">
@@ -3016,6 +5185,9 @@ export default function Reader() {
                   )}
                 </div>
               )}
+              {/* Asked the AI about this word in this sentence before? The
+                  answer is already on the device — show it without a tap. */}
+              {cardAIGloss}
               <div className="dict-foot">
                 {lookupCard.res.recorded ? (
                   <span className="dict-saved">已在生词本</span>
@@ -3029,6 +5201,16 @@ export default function Reader() {
                     </button>
                   </>
                 )}
+                {/* Always offered: the model explains the word from the
+                    sentence, so it does not need the dictionary to have found
+                    anything. */}
+                <button
+                  className="ai-chip"
+                  title="结合当前句子，让 AI 解释这个词，并翻译整句"
+                  onClick={explainThis}
+                >
+                  ✦ AI
+                </button>
               </div>
             </>
           )}
@@ -3038,6 +5220,10 @@ export default function Reader() {
       {/* annotation popover */}
       {popover && (
         <div className="ann-popover" ref={popPos.ref} style={overlayStyle(popPos.pos)}>
+          {/* The marked sentence, echoed back: on a phone the popover sits over
+              the line it belongs to, and once the keyboard is up that line is
+              covered — a note written without it is a note about nothing. */}
+          <div className="ann-quote">{popover.ann.text}</div>
           <div className="ann-pop-colors">
             {COLORS.map((c) => (
               <button
@@ -3048,6 +5234,7 @@ export default function Reader() {
             ))}
           </div>
           <textarea
+            ref={noteRef}
             className="ann-note"
             placeholder="添加批注…"
             value={noteDraft}
@@ -3093,6 +5280,31 @@ export default function Reader() {
                 </button>
               </div>
             </div>
+            {/* How far a horizontal drag has to go. The number shown is the
+                one the gesture actually uses, measured against this spread, so
+                a reader can pick a level and see what it means in pixels
+                instead of guessing what "灵敏" is worth. */}
+            <div className="rd-set-row">
+              <span className="rd-set-label">
+                翻页灵敏度
+                <small className="rd-set-desc">
+                  拖过约 {Math.round(turnThresholds(turnSens, turnGeomRef.current.stride).far)} px
+                  翻页
+                </small>
+              </span>
+              <div className="rd-seg tight">
+                {TURN_SENSITIVITY_LEVELS.map((l) => (
+                  <button
+                    key={l.id}
+                    className={turnSens === l.id ? 'on' : ''}
+                    aria-pressed={turnSens === l.id}
+                    onClick={() => setTurnSens(l.id)}
+                  >
+                    {l.label}
+                  </button>
+                ))}
+              </div>
+            </div>
             {/* Reading font: 默认 plus the open-source catalogue (download on
                 first tap). Shared with the Me→设置 page. */}
             <div className="rd-set-row rd-font-row">
@@ -3130,6 +5342,276 @@ export default function Reader() {
                   >
                     <span className="rd-theme-dot" />
                     <span>{t.label}</span>
+                  </button>
+                ))}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Per-send privacy confirmation (0.4 裁决：每次问). The chapter text is
+          about to leave the device, so this says exactly what goes where before
+          anything is sent — and 6000 mirrors the backend's prompt budget.
+          Nothing configured yet? Then there is nothing to consent to: the same
+          dialog turns into a door to settings rather than a send that would
+          come back as an error. */}
+      {guideAsk && (
+        <div className="modal-backdrop" onClick={() => setGuideAsk(null)}>
+          <div className="modal ai-confirm" onClick={(e) => e.stopPropagation()}>
+            <div className="modal-body">
+              {guideAsk.configured ? (
+                <>
+                  <p>
+                    本章导读由 AI 生成：需要把本章正文（约 <b>{guideAsk.chars.toLocaleString()}</b>{' '}
+                    字{guideAsk.chars > 6000 ? '，较长章节仅发送开头部分' : ''}）发送到「
+                    {guideAsk.model || 'AI 服务'}」。
+                  </p>
+                  <p>回答由模型生成，可能不准确，请以原文为准。</p>
+                </>
+              ) : (
+                <>
+                  <p>还没有配置 AI 服务，暂时无法生成导读。</p>
+                  <p>填写接口地址与模型（以及密钥）后即可使用；查词释义、句子拆解同样需要它。</p>
+                </>
+              )}
+            </div>
+            <div className="ai-confirm-actions">
+              <button className="btn sm" onClick={() => setGuideAsk(null)}>
+                取消
+              </button>
+              {guideAsk.configured ? (
+                <button
+                  className="btn sm primary"
+                  onClick={() => {
+                    setGuideAsk(null);
+                    setAIPanel({ kind: 'summary' });
+                  }}
+                >
+                  生成导读
+                </button>
+              ) : (
+                <button
+                  className="btn sm primary"
+                  onClick={() => {
+                    setGuideAsk(null);
+                    goAISettings();
+                  }}
+                >
+                  去设置
+                </button>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* The AI panel: one surface, three callers. Each `run` is the grounded
+          ask — the word card's word + sentence + dictionary senses, the
+          selection's sentence, the chapter behind the reader. */}
+      {aiPanel?.kind === 'explain' && (
+        <AIPanel<ExplainResult>
+          title="✦ AI 释义"
+          run={() => api.explainInContext(aiPanel.word, aiPanel.sentence)}
+          render={(r) => (
+            <>
+              {r.cached && <span className="ai-cache-badge">缓存结果</span>}
+              <AISentence text={aiPanel.sentence}>
+                {highlightWord(aiPanel.sentence, aiPanel.word)}
+              </AISentence>
+              {r.meaning && (
+                <>
+                  <div className="ai-label">
+                    在本句中
+                    {r.pos && <span className="ai-pos">{r.pos}</span>}
+                  </div>
+                  <p className="ai-explain">{r.meaning}</p>
+                </>
+              )}
+              {r.note && <p className="ai-note">{r.note}</p>}
+              {r.translation && (
+                <>
+                  <div className="ai-label">整句翻译</div>
+                  <p className="ai-trans">{r.translation}</p>
+                </>
+              )}
+            </>
+          )}
+          onClose={() => setAIPanel(null)}
+          onGoSettings={goAISettings}
+          chatId={(r) => r.conversationId}
+          onOpenChat={openChat}
+        />
+      )}
+
+      {aiPanel?.kind === 'parse' && (
+        <AIPanel<ParseResult>
+          title="✦ AI 拆句"
+          run={() => api.parseSentence(aiPanel.sentence)}
+          render={(r) => (
+            <>
+              {r.cached && <span className="ai-cache-badge">缓存结果</span>}
+              <AISentence text={aiPanel.sentence}>{aiPanel.sentence}</AISentence>
+              {r.translation && <p className="ai-trans">{r.translation}</p>}
+              {r.segments.length > 0 && (
+                <>
+                  <div className="ai-label">句子拆解</div>
+                  {r.segments.map((s, i) => (
+                    <div className="ai-seg" key={i}>
+                      <span className="ai-seg-text">{s.text}</span>
+                      <span className="ai-seg-role">{s.role}</span>
+                      <span className="ai-seg-gloss">{s.gloss}</span>
+                    </div>
+                  ))}
+                </>
+              )}
+              {r.notes.length > 0 && (
+                <>
+                  <div className="ai-label">语法注释</div>
+                  <div className="ai-notes">
+                    <ul>
+                      {r.notes.map((n, i) => (
+                        <li key={i}>{n}</li>
+                      ))}
+                    </ul>
+                  </div>
+                </>
+              )}
+            </>
+          )}
+          onClose={() => setAIPanel(null)}
+          onGoSettings={goAISettings}
+          chatId={(r) => r.conversationId}
+          onOpenChat={openChat}
+        />
+      )}
+
+      {aiPanel?.kind === 'summary' && current && (
+        <AIPanel<SummaryResult>
+          title="✦ AI 导读"
+          run={() => api.summarizeChapter(id, current)}
+          render={(r) => (
+            <>
+              {r.cached && <span className="ai-cache-badge">缓存结果</span>}
+              {r.truncated && <p className="ai-trunc">本章较长，导读基于开头部分生成。</p>}
+              <p className="ai-summary">{r.summary}</p>
+              {r.points.length > 0 && (
+                <>
+                  <div className="ai-label">本章要点</div>
+                  <div className="ai-points">
+                    <ul>
+                      {r.points.map((p, i) => (
+                        <li key={i}>{p}</li>
+                      ))}
+                    </ul>
+                  </div>
+                </>
+              )}
+              {r.terms.length > 0 && (
+                <>
+                  <div className="ai-label">值得记住的词</div>
+                  <div className="ai-term-row">
+                    {r.terms.map((t, i) => (
+                      <span className="ai-term" key={i}>
+                        <b>{t.term}</b>
+                        <em>{t.gloss}</em>
+                      </span>
+                    ))}
+                  </div>
+                </>
+              )}
+            </>
+          )}
+          onClose={() => setAIPanel(null)}
+          onGoSettings={goAISettings}
+          chatId={(r) => r.conversationId}
+          onOpenChat={openChat}
+        />
+      )}
+
+      {/* 听书 bar. A control, not a dialog: it rides above the page and below
+          every sheet, and it stays mounted for as long as the session lives
+          (the reader may turn the chrome off and still want pause). */}
+      {listen && (
+        <ListenBar
+          title={currentChapter?.title || book.title}
+          playing={listen.playing}
+          rate={listen.rate}
+          index={listen.index}
+          total={spansRef.current.length}
+          following={following}
+          voiceLabel={listen.engine === 'online' ? listenVoiceLabel() : undefined}
+          onToggle={toggleListen}
+          onPrev={() => jumpListen(-1)}
+          onNext={() => jumpListen(1)}
+          onFollow={resumeFollow}
+          onRate={changeListenRate}
+          onSettings={() => setListenSheet(true)}
+          onClose={stopListen}
+          // Clear of the bottom chrome while it is up (the detour bar uses the
+          // same two numbers), flush to the edge when it is not.
+          style={{ bottom: chromeOpen ? (touchPrimary ? 158 : 58) : 14 }}
+        />
+      )}
+
+      {listenSheet && (
+        <div className="sheet-mask" onClick={() => setListenSheet(false)}>
+          <div className="sheet rd-sheet" onClick={(e) => e.stopPropagation()}>
+            {/* Two engines, one switch. 系统 is the phone's own TTS: free,
+                offline, unlimited, and a bit robotic. 在线 is a neural voice
+                that needs the network and is not an official API — the note
+                under the switch says so rather than pretending otherwise. */}
+            <div className="rd-set-row">
+              <span className="rd-set-label">
+                音色来源
+                <small className="rd-set-desc">
+                  {listenEngine === 'online'
+                    ? '在线音色需联网，音质接近真人'
+                    : '系统引擎：离线可用，不限量，声音偏机械'}
+                </small>
+              </span>
+              <div className="rd-seg tight">
+                <button
+                  className={listenEngine === 'system' ? 'on' : ''}
+                  onClick={() => switchListenEngine('system')}
+                >
+                  系统
+                </button>
+                <button
+                  className={listenEngine === 'online' ? 'on' : ''}
+                  onClick={() => switchListenEngine('online')}
+                >
+                  在线
+                </button>
+              </div>
+            </div>
+            {listenEngine === 'online' && (
+              <div className="rd-set-row rd-voice-row">
+                <span className="rd-set-label">音色</span>
+                <div className="rd-voices">
+                  {(edgeVoices || []).map((v) => (
+                    <button
+                      key={v.name}
+                      className={`rd-voice${listenVoice === v.name ? ' on' : ''}`}
+                      onClick={() => switchListenVoice(v.name)}
+                    >
+                      {v.label}
+                    </button>
+                  ))}
+                  {!edgeVoices?.length && <span className="rd-set-desc">载入中…</span>}
+                </div>
+              </div>
+            )}
+            <div className="rd-set-row last">
+              <span className="rd-set-label">语速</span>
+              <div className="rd-seg tight">
+                {LISTEN_RATES.map((r) => (
+                  <button
+                    key={r}
+                    className={listenRate === r ? 'on' : ''}
+                    onClick={() => setListenRateTo(r)}
+                  >
+                    {r}×
                   </button>
                 ))}
               </div>
@@ -3179,51 +5661,25 @@ export default function Reader() {
       <div className="reader">
         <aside className="toc">
           <div className="toc-head">
-            目录 · {chapters.length} 章
-            <button
-              className="toc-locate"
-              title="定位到当前章节"
-              onClick={locateCurrent}
-              aria-label="定位到当前章节"
-            >
-              <svg
-                viewBox="0 0 24 24"
-                width="15"
-                height="15"
-                fill="none"
-                stroke="currentColor"
-                strokeWidth="2"
-                strokeLinecap="round"
-                strokeLinejoin="round"
-              >
-                <circle cx="12" cy="12" r="3" />
-                <path d="M12 2v3M12 19v3M2 12h3M19 12h3" />
-              </svg>
-            </button>
+            {hasNav ? <TocSeg view={tocView} onChange={setTocView} /> : <span>目录</span>}
+            <span className="toc-n">
+              {tocCount} {tocUnit}
+            </span>
+            <TocLocate onClick={locateCurrent} />
           </div>
-          {useTocTree ? (
-            <TocTree
-              entries={toc}
-              itemClass="toc-item"
-              activeSet={activeSet}
-              resolve={resolveTocHref}
-              onPick={openChapter}
-              collapsed={tocCollapsed}
-              onToggle={toggleToc}
-            />
-          ) : (
-            chapters.map((c, i) => (
-              <button
-                key={c.id}
-                className={`toc-item${c.id === current ? ' active' : ''}`}
-                onClick={() => openChapter(c.id)}
-                title={c.title}
-              >
-                <span className="num">{String(i + 1).padStart(2, '0')}</span>
-                {c.title}
-              </button>
-            ))
-          )}
+          <TocList
+            view={tocView}
+            toc={toc}
+            chapters={chapters}
+            itemClass="toc-item"
+            activeSet={activeSet}
+            resolve={resolveTocHref}
+            onPick={pickToc}
+            current={current}
+            openChapter={openChapter}
+            collapsed={tocCollapsed}
+            onToggle={toggleToc}
+          />
         </aside>
 
         <div className="reader-main" ref={mainRef}>
@@ -3248,9 +5704,19 @@ export default function Reader() {
               <button className="btn sm" onClick={() => setMode('paged')}>
                 翻页模式
               </button>
+              <button
+                className="btn sm ai-guide-btn"
+                onClick={openGuide}
+                title="让 AI 读一遍本章，生成导读"
+              >
+                ✦ AI 导读
+              </button>
               <Link className="btn sm" to={`/books/${id}/edit`}>
                 整理
               </Link>
+              <button className="btn sm" onClick={() => (listen ? stopListen() : startListen())}>
+                {listen ? '停止朗读' : '听书'}
+              </button>
               <button
                 className="btn sm"
                 onClick={() => (preview ? goUp(PREVIEW_SOURCE[preview.source].back) : goUp('/'))}
@@ -3328,55 +5794,29 @@ export default function Reader() {
       {tocDocked && (
         <aside className="toc-dock">
           <div className="toc-head">
-            目录 · {chapters.length} 章
-            <button
-              className="toc-locate"
-              title="定位到当前章节"
-              onClick={locateCurrent}
-              aria-label="定位到当前章节"
-            >
-              <svg
-                viewBox="0 0 24 24"
-                width="15"
-                height="15"
-                fill="none"
-                stroke="currentColor"
-                strokeWidth="2"
-                strokeLinecap="round"
-                strokeLinejoin="round"
-              >
-                <circle cx="12" cy="12" r="3" />
-                <path d="M12 2v3M12 19v3M2 12h3M19 12h3" />
-              </svg>
-            </button>
+            {hasNav ? <TocSeg view={tocView} onChange={setTocView} /> : <span>目录</span>}
+            <span className="toc-n">
+              {tocCount} {tocUnit}
+            </span>
+            <TocLocate onClick={locateCurrent} />
             <button className="btn sm" onClick={() => setTocDocked(false)} title="取消固定目录">
               ✕
             </button>
           </div>
           <div className="toc-dock-body">
-            {useTocTree ? (
-              <TocTree
-                entries={toc}
-                itemClass="toc-item"
-                activeSet={activeSet}
-                resolve={resolveTocHref}
-                onPick={openChapter}
-                collapsed={tocCollapsed}
-                onToggle={toggleToc}
-              />
-            ) : (
-              chapters.map((c, i) => (
-                <button
-                  key={c.id}
-                  className={`toc-item${c.id === current ? ' active' : ''}`}
-                  onClick={() => openChapter(c.id)}
-                  title={c.title}
-                >
-                  <span className="num">{String(i + 1).padStart(2, '0')}</span>
-                  {c.title}
-                </button>
-              ))
-            )}
+            <TocList
+              view={tocView}
+              toc={toc}
+              chapters={chapters}
+              itemClass="toc-item"
+              activeSet={activeSet}
+              resolve={resolveTocHref}
+              onPick={pickToc}
+              current={current}
+              openChapter={openChapter}
+              collapsed={tocCollapsed}
+              onToggle={toggleToc}
+            />
           </div>
         </aside>
       )}
@@ -3390,7 +5830,9 @@ export default function Reader() {
         onMouseLeave={onStageMouseUp}
       >
         <div
-          className={`reader-spread${fxOut ? ' fx-out' : ''}`}
+          className={`reader-spread${fxOut ? ' fx-out' : ''}${turnFx ? ' turning' : ''}${
+            turnDrag ? (turnDrag.phase === 'follow' ? ' turn-drag' : ' turn-settle') : ''
+          }`}
           ref={spreadRef}
           style={{
             width: Math.max(0, viewWidth),
@@ -3423,7 +5865,13 @@ export default function Reader() {
           {geometryReady &&
             Array.from({ length: visibleSheets }).map((_, j) => {
               const i = pageIndex + j;
-              const isLeft = i % 2 === 0;
+              // Which side of the spread the sheet sits on. For a full spread
+              // this matches page parity (even page on the left), but the last
+              // spread of an odd-page chapter holds one page in the left slot:
+              // by parity it would take a right-hand sheet's rounding and page
+              // number, backwards for a page whose gutter is on its right. The
+              // slot is the truth; parity was only ever its shortcut.
+              const isLeft = pagesPerView === 1 ? i % 2 === 0 : j === 0;
               // Like a real book: the page number sits in the outer bottom
               // corner. A single page uses the right corner; in a spread the
               // left sheet uses the left corner and the right sheet the right.
@@ -3461,21 +5909,95 @@ export default function Reader() {
               height: Math.max(0, sheetHeight),
             }}
           >
+            {/* The drag layer carries nothing but a gesture turn's offset. It is
+                a wrapper rather than a second transform on the strip because the
+                strip's own transform is rewritten by every measure, restore and
+                1<->2 page switch: an offset mixed into it would have to be
+                re-applied by hand after each of them. */}
             <div
-              className="reader-columns"
-              ref={columnsRef}
-              style={{
-                left: marginPx,
-                top: marginPx,
-                width: pageCount > 0 ? pageCount * contentWidth + (pageCount - 1) * columnGap : 0,
-                height: Math.max(0, contentHeight),
-                transform: `translate3d(-${pageIndex * (sheetWidth + pageGap)}px, 0, 0)`,
-                columnWidth: contentWidth,
-                columnGap: columnGap,
+              className="reader-drag"
+              ref={dragLayerRef}
+              onTransitionEnd={(e) => {
+                if (e.target !== e.currentTarget || e.propertyName !== 'transform') return;
+                if (dragTurnRef.current?.settling) finishDragTurn();
               }}
             >
-              <div className="reader-content" ref={contentRef} style={contentStyle} />
+              <div
+                className="reader-columns"
+                ref={columnsRef}
+                style={{
+                  left: marginPx,
+                  top: marginPx,
+                  width: stripCols > 0 ? stripCols * contentWidth + (stripCols - 1) * columnGap : 0,
+                  height: Math.max(0, contentHeight),
+                  transform: `translate3d(-${pageIndex * (sheetWidth + pageGap)}px, 0, 0)`,
+                  columnWidth: contentWidth,
+                  columnGap: columnGap,
+                }}
+              >
+                <div className="reader-content" ref={contentRef} style={contentStyle} />
+              </div>
             </div>
+            {/* The neighbouring chapter's page, one spread off-screen. Inside
+                the clip, so at rest it is not on screen at all; a chapter turn
+                drags it in exactly the way a page turn drags the next column
+                in, and the two move on one gesture. */}
+            {geometryReady && peek && (
+              <TurnPeek
+                key={peek.cid}
+                layerRef={peekRef}
+                html={peek.html}
+                side={peek.side}
+                contentStyle={contentStyle}
+                geom={{
+                  margin: marginPx,
+                  contentWidth,
+                  contentHeight,
+                  columnGap,
+                  pageStride: sheetWidth + pageGap,
+                  stride: turnStep * (sheetWidth + pageGap),
+                  pagesPerView,
+                }}
+              />
+            )}
+          </div>
+          {/* The shadow of the turning sheet, sweeping in the direction the page
+              travels. Keyed on the turn so every turn restarts the animation;
+              it is a shadow over static text, so nothing has to re-layout for
+              it to move. A gesture turn drives it by hand instead, matching the
+              page: see placeBand. */}
+          {geometryReady && (turnDrag || turnFx) && (
+            <div
+              key={turnDrag ? 'drag' : `sweep-${turnFx!.id}`}
+              ref={veilRef}
+              className={`turn-veil ${
+                turnDrag
+                  ? turnDrag.phase === 'follow'
+                    ? 'drag'
+                    : 'settle'
+                  : `sweep ${turnFx!.dir > 0 ? 'fwd' : 'back'}`
+              }`}
+              onAnimationEnd={turnDrag ? undefined : endTurnFx}
+              style={{
+                width: Math.max(0, viewWidth),
+                height: Math.max(0, sheetHeight),
+              }}
+            >
+              <span className="turn-veil-band" />
+            </div>
+          )}
+          {/* The tag hanging out of the page's top edge. It lives on the sheet
+              rather than in the chrome on purpose: bookmark state has to be
+              readable with the bars closed, and this is the thing a downward
+              pull drags out. `height` is the only property the gesture writes,
+              so React's class can own the resting state without a fight. */}
+          <div
+            className={`page-tag-wrap${pagesPerView === 2 ? ' left' : ''}${pageTagged ? ' on' : ''}`}
+            ref={tagWrapRef}
+            aria-hidden="true"
+          >
+            <div className="page-tag" ref={tagRef} />
+            <span className="page-tag-label">{pageTagged ? '松手删除书签' : '松手添加书签'}</span>
           </div>
         </div>
       </div>
@@ -3521,6 +6043,13 @@ export default function Reader() {
                 </span>
                 <button className="btn sm" onClick={() => setFontSize((f) => Math.min(26, f + 1))}>
                   A+
+                </button>
+                <button
+                  className="btn sm ai-guide-btn"
+                  onClick={openGuide}
+                  title="让 AI 读一遍本章，生成导读"
+                >
+                  ✦ AI 导读
                 </button>
                 <button className="btn sm" onClick={() => setTocOpen(true)}>
                   目录
@@ -3568,54 +6097,29 @@ export default function Reader() {
         <div className="drawer-mask" onClick={() => setTocOpen(false)}>
           <aside className="drawer" onClick={(e) => e.stopPropagation()}>
             <div className="drawer-head">
-              目录 · {chapters.length} 章
-              <button
-                className="toc-locate"
-                title="定位到当前章节"
-                onClick={locateCurrent}
-                aria-label="定位到当前章节"
-              >
-                <svg
-                  viewBox="0 0 24 24"
-                  width="15"
-                  height="15"
-                  fill="none"
-                  stroke="currentColor"
-                  strokeWidth="2"
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                >
-                  <circle cx="12" cy="12" r="3" />
-                  <path d="M12 2v3M12 19v3M2 12h3M19 12h3" />
-                </svg>
-              </button>
+              {hasNav ? <TocSeg view={tocView} onChange={setTocView} /> : <span>目录</span>}
+              <span className="toc-n">
+                {tocCount} {tocUnit}
+              </span>
+              <TocLocate onClick={locateCurrent} />
               <button className="btn sm" onClick={() => setTocOpen(false)}>
                 ✕
               </button>
             </div>
             <div className="drawer-body">
-              {useTocTree ? (
-                <TocTree
-                  entries={toc}
-                  itemClass="drawer-item"
-                  activeSet={activeSet}
-                  resolve={resolveTocHref}
-                  onPick={openChapter}
-                  collapsed={tocCollapsed}
-                  onToggle={toggleToc}
-                />
-              ) : (
-                chapters.map((c, i) => (
-                  <button
-                    key={c.id}
-                    className={`drawer-item${c.id === current ? ' active' : ''}`}
-                    onClick={() => openChapter(c.id)}
-                  >
-                    <span className="num">{String(i + 1).padStart(2, '0')}</span>
-                    {c.title}
-                  </button>
-                ))
-              )}
+              <TocList
+                view={tocView}
+                toc={toc}
+                chapters={chapters}
+                itemClass="drawer-item"
+                activeSet={activeSet}
+                resolve={resolveTocHref}
+                onPick={pickToc}
+                current={current}
+                openChapter={openChapter}
+                collapsed={tocCollapsed}
+                onToggle={toggleToc}
+              />
             </div>
           </aside>
         </div>
@@ -3627,8 +6131,12 @@ export default function Reader() {
           <aside className="drawer" onClick={(e) => e.stopPropagation()}>
             <div className="drawer-head">
               书签
-              <button className="btn sm primary" onClick={addBookmarkNow}>
-                ＋ 添加当前页
+              <button
+                className={`btn sm${pageMarked ? '' : ' primary'}`}
+                onClick={togglePageBookmark}
+                title={pageMarked ? '取消当前页的书签' : '给当前页加一个书签'}
+              >
+                {pageMarked ? '移除本页书签' : '＋ 添加当前页'}
               </button>
               <button className="btn sm" onClick={() => setBmOpen(false)}>
                 ✕

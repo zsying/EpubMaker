@@ -52,7 +52,7 @@ func TestDictSourcesCatalog(t *testing.T) {
 		if s.ID == "" || s.Name == "" {
 			t.Fatalf("source missing id/name: %+v", s)
 		}
-		if len(s.URL) < 8 || (s.URL[:4] != "http" ) {
+		if len(s.URL) < 8 || (s.URL[:4] != "http") {
 			t.Fatalf("source %s has a non-http url: %q", s.ID, s.URL)
 		}
 		if seen[s.ID] {

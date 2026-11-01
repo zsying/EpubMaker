@@ -184,6 +184,37 @@ func RewriteResourceUrls(htmlStr, fromFile string, resolver func(string) string)
 	return b.String()
 }
 
+// anchorIdRe matches a real `id` attribute: whitespace before the name, so
+// `data-id` and `xml:id` (preceded by '-' and ':') are left alone. RE2 has no
+// backreferences, so the two quotes are captured separately.
+var anchorIdRe = regexp.MustCompile(`(\s)id\s*=\s*(["'])([^"']+)(["'])`)
+
+// IdsToAnchors renames `id="x"` to `data-anc="x"` throughout a chapter body.
+//
+// The reader purifies chapter HTML with DOMPurify, which forbids `id`: an epub
+// is free to ship id="root" or id="app" and hijack the host page's own
+// selectors. But those ids are exactly what a table of contents points at
+// (`#filepos330338`), so dropping them left every nav entry for a section
+// inside a document landing on the top of that document. A data attribute
+// carries the same anchor without the collision: DOMPurify keeps data-*
+// untouched, and the reader looks anchors up by that name.
+func IdsToAnchors(s string) string {
+	var b strings.Builder
+	last := 0
+	for _, idx := range anchorIdRe.FindAllStringSubmatchIndex(s, -1) {
+		ws, q1 := s[idx[2]:idx[3]], s[idx[4]:idx[5]]
+		val, q2 := s[idx[6]:idx[7]], s[idx[8]:idx[9]]
+		if q1 != q2 {
+			continue
+		}
+		b.WriteString(s[last:idx[2]])
+		b.WriteString(ws + `data-anc=` + q1 + val + q1)
+		last = idx[1]
+	}
+	b.WriteString(s[last:])
+	return b.String()
+}
+
 // CollectReferences returns the set of internal resource paths referenced by
 // src/href/poster/data and xlink:href attributes in htmlStr.
 func CollectReferences(htmlStr, fromFile string) []string {

@@ -38,6 +38,7 @@ import androidx.appcompat.app.AppCompatActivity;
 import androidx.core.content.FileProvider;
 import androidx.webkit.WebViewAssetLoader;
 
+import org.json.JSONArray;
 import org.json.JSONObject;
 
 import java.io.File;
@@ -62,6 +63,8 @@ public class MainActivity extends AppCompatActivity {
 
     private WebView webView;
     private WailsBridge bridge;
+    /** 听书: kept so onDestroy can stop the engine and drop the notification. */
+    private TtsBridge ttsBridge;
     // Battery: system-event receivers are registered only while the activity is
     // in the foreground (onStart) and torn down in onStop, so background battery/
     // network/screen broadcasts don't wake the app.
@@ -117,48 +120,127 @@ public class MainActivity extends AppCompatActivity {
         handleSendIntent(intent);
     }
 
-    /** Queue an EPUB that arrived via ACTION_SEND / ACTION_VIEW. */
+    /**
+     * Queues the EPUBs an intent carries: ACTION_SEND (one file),
+     * ACTION_SEND_MULTIPLE (a file manager's "分享 2 项") or ACTION_VIEW
+     * ("用其他应用打开"). Deal in lists throughout — a share is not always one.
+     */
     private void handleSendIntent(@Nullable Intent intent) {
         if (intent == null) return;
         String action = intent.getAction();
-        Uri uri = null;
-        if (Intent.ACTION_SEND.equals(action)) {
-            uri = intent.getParcelableExtra(Intent.EXTRA_STREAM);
-        } else if (Intent.ACTION_VIEW.equals(action)) {
-            uri = intent.getData();
+        if (DEBUG) {
+            Log.d(TAG, "handleSendIntent: action=" + action + " type=" + intent.getType()
+                    + " data=" + intent.getData()
+                    + " hasStream=" + intent.hasExtra(Intent.EXTRA_STREAM));
         }
-        if (uri == null) return;
-        final Uri u = uri;
+        List<Uri> uris = new ArrayList<>();
+        try {
+            if (Intent.ACTION_SEND.equals(action)) {
+                Uri uri = streamOf(intent);
+                if (uri != null) uris.add(uri);
+            } else if (Intent.ACTION_SEND_MULTIPLE.equals(action)) {
+                ArrayList<Uri> many = null;
+                try {
+                    many = intent.getParcelableArrayListExtra(Intent.EXTRA_STREAM);
+                } catch (Exception ignored) {
+                    // Some senders put a single Uri where the contract asks for
+                    // a list; the fallback below still imports it.
+                }
+                if (many != null) {
+                    for (Uri u : many) {
+                        if (u != null) uris.add(u);
+                    }
+                }
+                if (uris.isEmpty()) {
+                    Uri one = streamOf(intent);
+                    if (one != null) uris.add(one);
+                }
+            } else if (Intent.ACTION_VIEW.equals(action)) {
+                Uri uri = intent.getData() != null ? intent.getData() : streamOf(intent);
+                if (uri != null) uris.add(uri);
+            }
+        } catch (Exception e) {
+            // A malformed extra must not take the app down on launch.
+            Log.e(TAG, "handleSendIntent: bad intent", e);
+        }
+        if (uris.isEmpty()) return;
         // Copy off the main thread: the stream can be several MB.
         new Thread(() -> {
-            String path = copyUriToCache(u);
-            if (path != null) {
-                queueSharedImport(path);
+            for (Uri u : uris) {
+                String path = copyUriToCache(u);
+                if (path != null) {
+                    queueSharedImport(path);
+                }
             }
         }).start();
     }
 
-    // An EPUB path waiting for the webview to mount its event listeners
-    // (cold-start shares land before onPageFinished). Guarded by itself.
-    private volatile String pendingSharedPath;
-
-    private synchronized void queueSharedImport(String path) {
-        pendingSharedPath = path;
-        runOnUiThread(this::flushPendingSharedImport);
+    /** EXTRA_STREAM is a Uri whatever the sender claims; ask for the type. */
+    @SuppressWarnings("deprecation")
+    private static Uri streamOf(Intent intent) {
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                return intent.getParcelableExtra(Intent.EXTRA_STREAM, Uri.class);
+            }
+            return intent.getParcelableExtra(Intent.EXTRA_STREAM);
+        } catch (Exception e) {
+            return null;
+        }
     }
 
-    /** Deliver the queued shared path to JS, if the page is ready to listen. */
-    private void flushPendingSharedImport() {
-        String path = pendingSharedPath;
-        if (path == null || bridge == null) return;
-        pendingSharedPath = null;
-        try {
-            String json = new JSONObject().put("path", path).toString();
-            bridge.emitEvent("common:sharedImport", json);
-            Log.d(TAG, "sharedImport emitted: " + json);
-        } catch (Exception e) {
-            Log.e(TAG, "flushPendingSharedImport failed", e);
+    // ---- share inbox -------------------------------------------------------
+    //
+    // A share that cold-starts the app is copied into the cache long before the
+    // page exists: measured on the phone, the path was ready 410 ms before
+    // onPageFinished and 560 ms before runtime.js ran. Emitting the path then
+    // (the old behaviour) handed it to a WebView with no listener yet *and*
+    // emptied the queue in the same breath, so "分享到 EpubMaker" opened the
+    // shelf and did nothing while "用其他应用打开" (usually a warm start)
+    // imported fine.
+    //
+    // So the queue is pulled, not pushed: JS asks for it through
+    // EpubMakerNative.takePendingShared() the moment it mounts, and the event
+    // is only a nudge. Nothing is consumed by emitting, so an event that lands
+    // too early costs one no-op instead of the import.
+    private final List<String> pendingSharedImports = new ArrayList<>();
+    /** True from onPageFinished until the next onPageStarted. */
+    private volatile boolean pageReady;
+    /** A "share 20 files" gesture still gets a shelf, not a flood. */
+    private static final int MAX_PENDING_SHARES = 12;
+
+    private synchronized void queueSharedImport(String path) {
+        while (pendingSharedImports.size() >= MAX_PENDING_SHARES) {
+            pendingSharedImports.remove(0);
         }
+        pendingSharedImports.add(path);
+        notifySharedImport();
+    }
+
+    /** Nudges the page; the paths stay queued until the page pulls them. */
+    private void notifySharedImport() {
+        if (!pageReady || bridge == null) return;
+        runOnUiThread(() -> {
+            if (!pageReady || bridge == null) return;
+            try {
+                bridge.emitEvent("common:sharedImport",
+                        new JSONObject().put("pending", true).toString());
+            } catch (Exception e) {
+                Log.e(TAG, "sharedImport emit failed", e);
+            }
+        });
+    }
+
+    synchronized String takePendingSharedImports() {
+        if (pendingSharedImports.isEmpty()) return "[]";
+        JSONArray out = new JSONArray();
+        try {
+            for (String p : pendingSharedImports) out.put(p);
+        } catch (Exception e) {
+            Log.e(TAG, "takePendingSharedImports failed", e);
+            return "[]";
+        }
+        pendingSharedImports.clear();
+        return out.toString();
     }
 
     @SuppressLint("SetJavaScriptEnabled")
@@ -292,11 +374,32 @@ public class MainActivity extends AppCompatActivity {
                         return serveFileFromDir(fontsDir, rel, request, mime);
                     }
 
-                    // For regular assets, use the asset loader
-                    return assetLoader.shouldInterceptRequest(request.getUrl());
+                    // For regular assets, use the asset loader. A client-side
+                    // route (/llm) has no file behind it either: Go answers it
+                    // with index.html (see internal/webassets), which is the
+                    // only way this request can be answered without falling
+                    // through to the network. The MIME type is guessed from the
+                    // path's extension, so an extension-less route would arrive
+                    // as application/octet-stream and Chromium would download
+                    // the app shell instead of rendering it — and the main
+                    // frame is only ever the shell.
+                    WebResourceResponse response = assetLoader.shouldInterceptRequest(request.getUrl());
+                    if (response != null && request.isForMainFrame()) {
+                        response.setMimeType("text/html");
+                        response.setEncoding("utf-8");
+                    }
+                    return response;
                 }
 
                 return super.shouldInterceptRequest(view, request);
+            }
+
+            @Override
+            public void onPageStarted(WebView view, String url, Bitmap favicon) {
+                super.onPageStarted(view, url, favicon);
+                // Between a reload's start and its finish there is no page to
+                // nudge; the queue keeps whatever arrives in that window.
+                pageReady = false;
             }
 
             @Override
@@ -307,13 +410,25 @@ public class MainActivity extends AppCompatActivity {
                 // Now that JS listeners are mounted, push a snapshot of the
                 // current battery / network / theme so the UI starts populated.
                 emitSystemSnapshot();
-                // A share that cold-started the app can only be delivered now.
-                flushPendingSharedImport();
+                pageReady = true;
+                // A share that cold-started the app is still queued: nudge it
+                // now that pulling is possible. The page also pulls on mount,
+                // so this is belt and braces, not the only route.
+                notifySharedImport();
             }
         });
 
         // Add JavaScript interface for Go communication
         webView.addJavascriptInterface(new WailsJSBridge(bridge, webView), "wails");
+
+        // The v3 runtime overwrites window.wails once it loads, shadowing every
+        // @JavascriptInterface on the bridge above — so 导出 gets its own name.
+        webView.addJavascriptInterface(new ExportShareBridge(this), "EpubMakerNative");
+
+        // 听书 speaks through the phone's own TTS engine, which no web API here
+        // can reach (the WebView ships SpeechSynthesis without any voices).
+        ttsBridge = new TtsBridge(this, webView);
+        webView.addJavascriptInterface(ttsBridge, "EpubMakerTts");
 
         // A WebChromeClient is required for HTML <input type="file"> elements to
         // work; without onShowFileChooser the WebView silently ignores clicks on
@@ -582,6 +697,35 @@ public class MainActivity extends AppCompatActivity {
     }
 
     /**
+     * Hand a built EPUB to the system share sheet (导出). The file is written
+     * by the Go ExportBookFile binding into the app's export staging dir, which
+     * the FileProvider covers; the reader then sends it anywhere — another
+     * reader app, a cloud drive, "save to files". Called by WailsJSBridge on a
+     * JS thread; starting an activity must happen on the UI thread.
+     */
+    public void shareExportFile(String path, String filename) {
+        try {
+            File file = new File(path);
+            if (!file.exists() || !file.isFile()) {
+                Toast.makeText(this, "导出失败：文件不存在", Toast.LENGTH_SHORT).show();
+                return;
+            }
+            Uri uri = FileProvider.getUriForFile(this, getPackageName() + ".fileprovider", file);
+            Intent send = new Intent(Intent.ACTION_SEND);
+            send.setType("application/epub+zip");
+            send.putExtra(Intent.EXTRA_STREAM, uri);
+            if (filename != null && !filename.isEmpty()) {
+                send.putExtra(Intent.EXTRA_SUBJECT, filename);
+            }
+            send.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+            startActivity(Intent.createChooser(send, "导出 EPUB"));
+        } catch (Exception e) {
+            Log.e(TAG, "shareExportFile failed", e);
+            Toast.makeText(this, "导出失败：" + e.getMessage(), Toast.LENGTH_SHORT).show();
+        }
+    }
+
+    /**
      * Launch the system document picker. Results are copied into the app's
      * cache directory so Go receives real filesystem paths. Called by
      * WailsBridge on the main thread.
@@ -705,7 +849,7 @@ public class MainActivity extends AppCompatActivity {
      */
     @Nullable
     private String copyUriToCache(Uri uri) {
-        String name = "document";
+        String name = null;
         try (Cursor cursor = getContentResolver().query(uri, null, null, null, null)) {
             if (cursor != null && cursor.moveToFirst()) {
                 int idx = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME);
@@ -715,6 +859,16 @@ public class MainActivity extends AppCompatActivity {
             }
         } catch (Exception ignored) {
         }
+        if (name == null || name.isEmpty()) {
+            // A file:// URI — an older app's "用其他应用打开" — has no
+            // OpenableColumns to query, so the copy used to be called
+            // "document" with no extension, and the importer rejected it as
+            // "not an EPUB" without saying why. The path's last segment is the
+            // file name the caller meant.
+            String last = uri.getLastPathSegment();
+            if (last != null && !last.isEmpty()) name = new File(last).getName();
+        }
+        if (name == null || name.isEmpty()) name = "document";
 
         try {
             File dir = new File(getCacheDir(), "wails-picker/" + System.nanoTime());
@@ -1019,6 +1173,10 @@ public class MainActivity extends AppCompatActivity {
     protected void onDestroy() {
         super.onDestroy();
         unregisterSystemEventReceivers();
+        if (ttsBridge != null) {
+            ttsBridge.shutdown();
+            ttsBridge = null;
+        }
         if (bridge != null) {
             bridge.shutdown();
         }
@@ -1031,18 +1189,36 @@ public class MainActivity extends AppCompatActivity {
     // tells the reader what happened, the second (within 2s) really leaves.
     private long lastBackAt = 0;
 
-    @Override
-    public void onBackPressed() {
-        if (webView != null && webView.canGoBack()) {
-            webView.goBack();
-            return;
-        }
+    /** Nothing left to go back to: ask twice before leaving, as Android does. */
+    private void leaveOrWarn() {
         long now = System.currentTimeMillis();
         if (now - lastBackAt < 2000) {
-            super.onBackPressed();
+            MainActivity.super.onBackPressed();
         } else {
             lastBackAt = now;
             Toast.makeText(this, "再按一次退出 EpubMaker", Toast.LENGTH_SHORT).show();
         }
+    }
+
+    @Override
+    public void onBackPressed() {
+        if (webView == null) {
+            leaveOrWarn();
+            return;
+        }
+        // canGoBack() is not usable here. On Huawei's WebView (JEF-AN00,
+        // HarmonyOS 4.2) it reports false for every same-document history
+        // entry, so the native side believes nothing is behind it while the
+        // page has four levels of pushState history -- and the back gesture
+        // left the app from anywhere. The page knows how deep it is, so ask
+        // it: true means it stepped back one level itself.
+        webView.evaluateJavascript(
+                "(function(){try{return !!(window.__wailsBack&&window.__wailsBack())}catch(e){return false}})()",
+                value -> {
+                    if ("true".equals(value)) {
+                        return;
+                    }
+                    leaveOrWarn();
+                });
     }
 }

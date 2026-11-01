@@ -1,8 +1,12 @@
 // Package app holds the Wails application bindings. Two structs are bound to
-// the frontend:
-//   - App:          native OS integrations (file dialogs, startup, file association)
-//   - Backend:      the entire data surface, exposed as direct in-process calls
-//                  (window.go.app.Backend.*) — no HTTP, no ports.
+// the frontend, both through the host's own runtime since 0.4:
+//
+//   - App:     native OS integrations — the file dialogs (SelectEpubFiles,
+//     SelectCoverFile, SelectDictFile). Window creation, the file association
+//     and command-line parsing live in main.go, not here.
+//   - Backend: the entire data surface, exposed as direct in-process calls:
+//     Call.ByName('epubmaker-desktop/internal/app.Backend.<Method>') — no
+//     HTTP, no ports.
 //
 // This replaces the old HTTP /api mux. Binary responses (cover images, chapter
 // render, exported EPUB) are inlined as base64 data URLs / data strings so the
@@ -41,10 +45,54 @@ func (b *Backend) Paths() (map[string]string, error) {
 	}, nil
 }
 
+/* ----------------------------- shelves ----------------------------- */
+
+func (b *Backend) ListShelves() ([]library.ShelfDTO, error) {
+	return library.ListShelves()
+}
+
+func (b *Backend) CreateShelf(name string) (*library.ShelfDTO, error) {
+	return library.CreateShelf(name)
+}
+
+func (b *Backend) RenameShelf(id, name string) (*library.ShelfDTO, error) {
+	return library.RenameShelf(id, name)
+}
+
+func (b *Backend) DeleteShelf(id string) (map[string]any, error) {
+	moved, err := library.DeleteShelf(id)
+	if err != nil {
+		return nil, err
+	}
+	return map[string]any{"moved": moved}, nil
+}
+
+// MoveBooks is both "move this book" and "move these thirty books": one
+// statement, one answer, and the only thing that changes is books.shelf_id.
+func (b *Backend) MoveBooks(bookIDs []string, shelfID string) (int, error) {
+	return library.MoveBooks(bookIDs, shelfID)
+}
+
+func (b *Backend) SetShelfLock(id, oldPassword, newPassword string) (*library.ShelfDTO, error) {
+	return library.SetShelfLock(id, oldPassword, newPassword)
+}
+
+func (b *Backend) UnlockShelf(id, password string) (library.UnlockResult, error) {
+	return library.UnlockShelf(id, password)
+}
+
+func (b *Backend) LockShelf(id string) error {
+	return library.LockShelf(id)
+}
+
+func (b *Backend) LockAllShelves() error {
+	return library.LockAllShelves()
+}
+
 /* ----------------------------- books ----------------------------- */
 
-func (b *Backend) ListBooks(keyword string) ([]library.BookDTO, error) {
-	return library.ListBooks(keyword)
+func (b *Backend) ListBooks(keyword, shelfID string) ([]library.BookDTO, error) {
+	return library.ListBooks(keyword, shelfID)
 }
 
 func (b *Backend) GetBook(id string) (*library.BookDTO, error) {
@@ -85,7 +133,7 @@ func (b *Backend) DeleteBook(id string) (map[string]any, error) {
 // book is already on the shelf (same file bytes, or same epub identifier for
 // books imported before hashing) are skipped and reported as duplicates, not
 // failures.
-func (b *Backend) ImportPaths(paths []string) (map[string]any, error) {
+func (b *Backend) ImportPaths(paths []string, shelfID string) (map[string]any, error) {
 	created := []library.BookDTO{}
 	errorsOut := []string{}
 	duplicates := []string{}
@@ -94,7 +142,7 @@ func (b *Backend) ImportPaths(paths []string) (map[string]any, error) {
 			errorsOut = append(errorsOut, fmt.Sprintf("%s: 不是 EPUB 文件", p))
 			continue
 		}
-		book, err := library.ImportEpub(p, filepath.Base(p))
+		book, err := library.ImportEpub(p, filepath.Base(p), shelfID)
 		if errors.Is(err, library.ErrDuplicate) {
 			// "duplicate:已有书名" — surface the shelf copy, skip quietly.
 			duplicates = append(duplicates, fmt.Sprintf("%s（已有《%s》）",
@@ -331,7 +379,7 @@ func (b *Backend) WebdavList(conn map[string]any, dirPath string) ([]webdav.Entr
 	return webdav.ListWebDav(c, dirPath)
 }
 
-func (b *Backend) WebdavImport(conn map[string]any, items []map[string]any) (map[string]any, error) {
+func (b *Backend) WebdavImport(conn map[string]any, items []map[string]any, shelfID string) (map[string]any, error) {
 	c, err := webdav.NormalizeConn(conn)
 	if err != nil {
 		return nil, err
@@ -353,7 +401,7 @@ func (b *Backend) WebdavImport(conn map[string]any, items []map[string]any) (map
 			errorsOut = append(errorsOut, name+": "+e.Error())
 			continue
 		}
-		book, e := library.ImportEpub(tmp, name)
+		book, e := library.ImportEpub(tmp, name, shelfID)
 		_ = os.Remove(tmp)
 		if e != nil {
 			errorsOut = append(errorsOut, name+": "+e.Error())

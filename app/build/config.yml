@@ -1,0 +1,16 @@
+# Build metadata for both hosts.
+#
+# `productIdentifier` is the Android package name (com.wails.app) and must match
+# the Java host under cmd/mobile/build/android; `version` is the single source of
+# truth for the release number — build-windows.ps1 renders it into the Windows
+# version resource, and the installer gets it on the makensis command line.
+version: '3'
+
+info:
+  companyName: "EpubMaker" # The name of the company
+  productName: "EpubMaker" # The name of the application
+  productIdentifier: "com.wails.app" # The unique product identifier
+  description: "EPUB reader and English learning" # The application description
+  copyright: "Copyright (c) 2026 john" # Copyright text
+  comments: "EPUB ebook editor and reader (local desktop app)" # Comments
+  version: "0.4.0" # The application version

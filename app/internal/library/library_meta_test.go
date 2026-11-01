@@ -230,7 +230,7 @@ func TestImportEpubDuplicate(t *testing.T) {
 
 	path := buildEpubFile(t, "Duplicate Target", "urn:uuid:test-dup-1")
 
-	first, err := ImportEpub(path, filepath.Base(path))
+	first, err := ImportEpub(path, filepath.Base(path), DefaultShelfID)
 	if err != nil {
 		t.Fatalf("first import: %v", err)
 	}
@@ -238,12 +238,12 @@ func TestImportEpubDuplicate(t *testing.T) {
 		t.Fatal("first import returned nil")
 	}
 
-	_, err = ImportEpub(path, filepath.Base(path))
+	_, err = ImportEpub(path, filepath.Base(path), DefaultShelfID)
 	if !errors.Is(err, ErrDuplicate) {
 		t.Fatalf("second import should be ErrDuplicate, got %v", err)
 	}
 
-	books, err := ListBooks("")
+	books, err := ListBooks("", DefaultShelfID)
 	if err != nil {
 		t.Fatalf("ListBooks: %v", err)
 	}
@@ -260,7 +260,7 @@ func TestImportEpubDuplicate(t *testing.T) {
 		time.Now().UTC().Format(time.RFC3339), first.ID); err != nil {
 		t.Fatalf("trash book: %v", err)
 	}
-	re, err := ImportEpub(path, filepath.Base(path))
+	re, err := ImportEpub(path, filepath.Base(path), DefaultShelfID)
 	if err != nil {
 		t.Fatalf("re-import after trash should succeed, got %v", err)
 	}
@@ -270,7 +270,10 @@ func TestImportEpubDuplicate(t *testing.T) {
 }
 
 // Books imported before hashing existed carry no file_hash; their epub
-// identifier is the fallback dedupe key.
+// identifier is the fallback dedupe key — but only with a matching title:
+// z-library epubs reuse identifiers across unrelated books, and the bare
+// identifier once refused a Kissinger set because a 150-book erotica bundle
+// happened to carry the same urn:uuid.
 func TestFindDuplicateByIdentifier(t *testing.T) {
 	resetLibraryTables(t)
 	insertBookRow(t, "bk-legacy", "Legacy Book")
@@ -282,13 +285,36 @@ func TestFindDuplicateByIdentifier(t *testing.T) {
 		t.Fatalf("set identifier: %v", err)
 	}
 
-	title, found, err := findDuplicate("deadbeef", "urn:uuid:legacy-1")
+	title, found, err := findDuplicate("deadbeef", "urn:uuid:legacy-1", "Legacy Book")
 	if err != nil || !found || title != "Legacy Book" {
 		t.Fatalf("identifier match failed: title=%q found=%v err=%v", title, found, err)
 	}
 
+	// Case and whitespace noise between rips of the same book still match.
+	if _, found, err := findDuplicate("deadbeef", "urn:uuid:legacy-1", "  legacy   BOOK "); err != nil || !found {
+		t.Fatalf("loose title match failed: found=%v err=%v", found, err)
+	}
+
 	// An empty identifier must never match (every legacy row has one).
-	if _, found, err := findDuplicate("deadbeef", ""); err != nil || found {
+	if _, found, err := findDuplicate("deadbeef", "", "Legacy Book"); err != nil || found {
 		t.Fatalf("empty identifier must not match, found=%v err=%v", found, err)
+	}
+}
+
+// The z-library collision: same identifier, different book. The identifier
+// alone must not veto the import — only a title match may.
+func TestFindDuplicateIdentifierCollision(t *testing.T) {
+	resetLibraryTables(t)
+	insertBookRow(t, "bk-other", "TABOO: MEGA Bundle 150 BOOKS")
+	d, err := db.Open()
+	if err != nil {
+		t.Fatalf("db.Open: %v", err)
+	}
+	if _, err := d.Exec(`UPDATE books SET identifier = ? WHERE id = ?`, "urn:uuid:shared-1", "bk-other"); err != nil {
+		t.Fatalf("set identifier: %v", err)
+	}
+
+	if _, found, err := findDuplicate("deadbeef", "urn:uuid:shared-1", "基辛格作品：论中国+世界秩序（套装共2册）"); err != nil || found {
+		t.Fatalf("identifier collision with a different title must not match: found=%v err=%v", found, err)
 	}
 }
