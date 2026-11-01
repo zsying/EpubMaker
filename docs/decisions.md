@@ -1933,3 +1933,67 @@ next]`，于是一张图片加载完 → `setPageCount` → effect 重挂 → cl
 **证据。** `mobile.cjs`（tap / swipe / 长按选区 / 下拉标签）+ `tap-hold.cjs`（本次新增：空白处
 长按松手开工具条、图片异步加载不打断手势、收起键盘后仍按新视口重排）+ `scroll-tap.cjs`
 （滚动模式：中间点开合、左 1/3 不开、点词查词、关卡片那一下不再查词）。
+
+---
+
+## ADR-44 安全区先交给宿主：`viewport-fit=cover` 要等真机条件成熟再开
+
+**问题。** `styles.css` 里有 20 处 `env(safe-area-inset-*)`（2 处 top、18 处 bottom），底部工具行、
+弹层、吸底 dock 都按"让开手势条"写过。但 `web/index.html` 的 viewport 只有
+`width=device-width, initial-scale=1.0`，没有 `viewport-fit=cover`——按 CSS 规范，没声明 cover
+时这些 env 恒为 0，20 处全部等价于 `calc(x + 0)`。
+
+**实测（2026-11-01，JEF-AN00 / Android 12，360 CSS px、dpr 3）。**
+
+| 量 | 值 |
+| --- | --- |
+| `window.innerHeight` | 758 |
+| `screen.height` | 800 |
+| 状态栏（`dumpsys window`） | 127 物理 px ÷ 3 ≈ 42 CSS px |
+| `env(safe-area-inset-*)` 四项 | 全为 `0px`（注入探针读 `getComputedStyle`） |
+| 宿主主题 | `Theme.MaterialComponents.NoActionBar` + `statusBarColor` / `navigationBarColor` |
+
+758 = 800 − 42：WebView 的窗口本来就被系统顶到了状态栏下面，窗口内没有"更靠外"的空间。所以
+cover 在这台机器上即使生效也读不到值——**它不是没写，而是写到没条件**。
+
+**为什么 targetSdk 35 也不改结论。** `targetSdk 35` 确实会让应用在 **Android 15+** 被强制
+edge-to-edge（此时 `statusBarColor` 变 no-op），那时 inset 才会变成真数。而这台设备是
+Android 12，永远到不了那个分支。
+
+**模拟 edge-to-edge 之后看到的东西**（把 2 处 top 换成 42px、18 处 bottom 换成 24px 重新构建，
+再用 `probe-edges.cjs` 列出落进 inset 带的可见文字与控件）：
+
+| 界面 | 落进 42px 状态栏带的元素 |
+| --- | --- |
+| 书架 | `书架 1 本` 药丸（top 21）、搜索/排序/添加（top 20） |
+| 我的 | `H1 我的`（top 20）、`本地 · 离线可用`（top 27） |
+| 生词本 | `H1 生词本`（top 23）、搜索 / 查词历史（top 20） |
+| AI | `H1 AI 对话`（top 23）、新对话（top 23） |
+| 阅读器（scroll） | `.reader-head` / `.reader-toolbar`（**top 0**，没有 inset-top） |
+| 阅读器（paged） | 正文 `h1` / `p`（top 22）；`.m-top` 已正确让位（padTop 50） |
+
+也就是说全 app 的顶部一直依赖"系统已经让开"，**只有 `.m-top` 与 `.sub-head` 两处自己做了这件事**。
+
+**决定：现在不加 `viewport-fit=cover`。** 三条理由：
+
+1. **不改不会坏。** Android 15+ 上 WebView 处于 `viewport-fit=contain`（默认）时会自己把内容
+   缩进安全区，代价只是上下各一条应用底色带，内容不会被遮挡。加了 cover 才需要 CSS 全面接管。
+2. **加了就得一次性接管全部，漏一处就出事。** 上表 6 个界面都得重排；而阅读器底色 `--rd-bg`
+   与应用底色 `--bg` 是两套，若图省事在 `.app` 上加 padding，padding 区露出的是 `body` 的底色
+   ——暗色/纸色阅读主题下就是一条肉眼可见的色带。
+3. **没有能验证它的设备。** 现有真机 inset 恒 0，改完只能靠推理判定"应该对了"。推错的后果
+   （全 app 顶部被状态栏压住）比现状（上下各一条背景带）更糟。
+
+**将来要开 cover 时的前置条件**（缺一条就先别开）：
+
+- 一台 Android 15+ 真机，或 iOS 真机（iOS 上 cover 是立刻见效的，见 `docs/platforms.md`）；
+- 顶部让位收敛到一处（`.app` 或各页面共同的 shell），并移除 `.m-top` / `.sub-head` 自己的
+  inset-top，避免双重让位；底部 18 处是叠加关系，要逐个确认不会出现双份留白；
+- 阅读器的底色要跟着铺到 padding 区，不能露出 `--bg`；
+- 验收用 `D:\tmp\epub-verify\shot-inset.cjs`（四个贴边界面截图）与 `probe-edges.cjs`
+  （程序化列出仍落进 inset 带的元素），再加 `mobile.cjs` 全量。
+
+**顺带修掉的一处过期假设。** `mobile.cjs` 里"长标题保持单行"那条断言用的是 `barH < 70`，
+即把安全区让位的高度也算进了工具栏。模拟 inset 后它报红，而 `sameRow` / `fits` 都是 `true`
+——布局是对的，是断言把 `padding-top` 误当成"换行撑高了"。改为 `barH - paddingTop < 70`：
+它问的是这一行本身的高度，与宿主是否 edge-to-edge 无关。

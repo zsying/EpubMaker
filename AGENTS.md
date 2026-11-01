@@ -6,7 +6,7 @@
 | --- | --- |
 | `README.md` | 能做什么、怎么跑、数据存在哪、目录怎么分 |
 | 本文件 | 怎么改才不出错：模块职责、红线、提交前门禁 |
-| `docs/decisions.md` | 当初为什么这么选（ADR-1…43），以及被否决的方案 |
+| `docs/decisions.md` | 当初为什么这么选（ADR-1…44），以及被否决的方案 |
 | `docs/troubleshooting.md` | 按现象查：症状 → 原因 → 处理 |
 | `docs/platforms.md` | 多平台兼容现状、风险清单、新增平台检查表 |
 | `app/README-mobile.md` | Android 工具链、构建参数、真机调试 |
