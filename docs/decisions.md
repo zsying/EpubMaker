@@ -2101,4 +2101,4 @@ DOM 矩形互相换算的五个纯函数、贴着锚点定位浮层的 hook。�
 `mobile` 193/193、`pageturn-chapter` 29/29、`pageturn-drag` 31/31、`turn-sensitivity` 28/28、
 `tap-hold` 6/6、`scroll-tap` 7/7、`progress-hide` 4/4、`shelves` 54/54、`pull-mark` 26/26、
 `organize-mobile` 12/12、`listen-native` 16/16、`sentence-window` 4/4、`hyphen-hit` 10/10；
-`tsc` 与 `prettier --check` 干净。`Reader.tsx` 5719 → 5180 行。
+`tsc` 与 `prettier --check` 干净。`Reader.tsx` 5719 → 5186 行。
