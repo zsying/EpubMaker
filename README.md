@@ -8,12 +8,19 @@ EPUB 电子书维护与生成工具。本地运行的**桌面应用**（Wails v3
 
 - **导入** —— 拖入 epub，自动解析元数据、目录、章节与全部资源
 - **在线书库** —— OPDS 目录浏览：内置 Project Gutenberg，也可添加 Calibre-Web / 私有书库，挑书后下载导入
+- **书架** —— 可以建多个书架，标题处一键切换；单个书架可设密码，锁上后不列书、不可写，书签与批注
+  也不再出现在全局列表；书籍可批量迁到别的书架（只改归属，文件、进度、书签、批注原地不动）
 - **阅读** —— 侧栏目录 + 干净的排版，记住上次读到哪一章；滚动 / 分页两种模式，横向拖动多长才翻页可调（灵敏 / 标准 / 稳重）
+- **朗读** —— 系统 TTS 或在线音色逐句朗读，熄屏继续；通知栏有上一句 / 播放暂停 / 下一句
 - **查词** —— 划选单词即时查本地词库：音标、中文释义、原型、发音（离线）
 - **生词本** —— 查过的词自动沉淀（跨书），带原句与出处，可跳回原文
+- **AI 辅助** —— 划词解释、句子拆解、章节导读、多轮对话；自带 API Key（BYOK），不经任何中转
+- **标注** —— 划线批注，按书或跨书检索，点一下回到原文
 - **整理** —— 改书名/作者/简介/封面，改章节标题与正文 HTML，拖拽排序，新增、删除、合并章节
 - **拆分** —— 按章节把一本书切成多本，每卷只携带真正引用到的图片、样式与字体
 - **导出** —— 生成符合 EPUB 3 规范的文件（同时带 nav + ncx，兼容老阅读器）
+- **传书与备份** —— 从 WebDAV 目录拉书；开一个局域网页面，在电脑浏览器里把 epub 传到手机；
+  删掉的书先进回收站
 
 ## 技术栈
 
@@ -54,11 +61,8 @@ cd app && ./build-windows.ps1          # 等价于 wails build：go build + wail
 cd app && ./build-windows.ps1 -Installer
 ```
 
-> `wails3 build|dev|package` 不用：它们通过 go-task 驱动 Taskfile，在 Windows 上跑不了本仓库的脚本。
-> Wails CLI 只用来生成资源（`generate syso` / `android overlay:gen`）。
-
-> 涉及 SQLite 的测试在沙箱环境里会卡住，需要放开沙箱运行。
-> `npm run dev:web` 单独跑前端时没有宿主（`/wails/runtime.js` 拿不到），业务功能不可用。
+> 构建一律走 `run.ps1`。Wails CLI 只用来生成资源（`generate syso` / `android overlay:gen`），
+> 不用它的 `build|dev|package` 子命令（原因见 [`AGENTS.md`](AGENTS.md)）。
 
 ## 词库
 
@@ -81,7 +85,7 @@ cd app && go run ./cmd/dictimport /path/to/ecdict.csv
 ~/.epubmaker/
 ├── config.json          # 首次启动自动生成
 ├── data/
-│   ├── epubmaker.db     # SQLite：书目、章节、标注、书签、生词本
+│   ├── epubmaker.db     # SQLite：书目、书架、章节、标注、书签、生词本
 │   └── books/<bookId>/
 │       ├── content/     # 解包后的章节 XHTML、图片、CSS、字体（保持 zip 内原路径）
 │       └── original.epub
@@ -113,45 +117,34 @@ cd app && go run ./cmd/dictimport /path/to/ecdict.csv
 EpubMaker/
 ├── app/
 │   ├── main.go              # 唯一宿主入口：窗口、服务绑定、.epub 命令行、拖放
-│   ├── platform_android.go  # Android 专属的 HOME/trace（desktop 侧是同名空实现）
-│   ├── platform_desktop.go
+│   ├── platform_{android,desktop}.go   # 仅有的两处平台分支（HOME/trace 与空实现）
 │   ├── build-windows.ps1    # 生产构建：web bundle → 版本资源 → go build →（可选）NSIS
 │   ├── dev-windows.ps1      # 开发循环：vite + 反向代理 + Go 改动自动重编重启
 │   ├── build/config.yml     # 版本号与产品信息的唯一来源（桌面 + Android 共用）
-│   ├── build/               # 构建资产：图标、manifest、info.json、NSIS 模板
 │   ├── frontend/dist/       # 构建时由 scripts/sync-frontend-dist.js 镜像，再被 //go:embed 打包
-│   ├── cmd/dictimport/      # 命令行词库安装器
-│   ├── cmd/mobile/          # Android 构建脚本 + Gradle 工程
-│   └── internal/
-│       ├── app/             # Wails 绑定（Backend / App / learning）
-│       ├── webassets/       # 静态资源 + SPA 深链接回退（桌面与 Android 共用）
-│       ├── epub/            # OCF/OPF/NCX/NAV 解析与流式构建
-│       ├── library/         # 导入 / 渲染 / 导出 / 封面 / 拆分
-│       ├── dict/            # ECDICT 词库
-│       ├── vocab/           # 生词本
-│       ├── storage/         # 内容文件映射 + 回收站
-│       ├── db/ config/ html/ mime/ webdav/ opds/
-│       └── go.mod
+│   ├── cmd/{dictimport,mobile}/        # 命令行词库安装器 / Android 构建脚本 + Gradle 工程
+│   └── internal/            # 后端。各包职责见 AGENTS.md 的模块表
 ├── web/src/
-│   ├── pages/               # Library Reader Editor Split Bookmarks Annotations Trash WebDav Opds
+│   ├── pages/               # 每页一个文件：Library Reader Editor Split Bookmarks
+│   │                        # Annotations Trash WebDav Opds Vocab Review AIChats …
 │   ├── api.ts               # 绑定的唯一封装层（含测试用的注入缝）
 │   ├── overlay.ts           # 浮层定位（保证不越出视窗）
 │   └── styles.css
-├── docs/                    # 排查手册、设计取舍
+├── docs/                    # 设计取舍（decisions）、排查手册、多平台、书架设计稿与原型
 ├── scripts/sync-frontend-dist.js
 └── run.ps1
 ```
 
-## 实现上的几个取舍
+## 设计取向
 
-- **路径策略**：资源以「原 zip 内完整路径」为主键存盘，导入导出保持一致，章节间相对引用天然可用。
-  导出时生成的 `epubmaker.opf` / `epubmaker-nav.xhtml` / `epubmaker-toc.ncx` 放在包根，避免与原书重名。
-- **阅读排版**：不加载原书 CSS，统一一套干净排版；正文经 DOMPurify 净化后渲染。
-- **翻页**：章内瞬时切换，不做动画；章节切换 130ms 淡入淡出只为盖住加载空窗。
-- **拆分带资源**：按正文引用递归收集（含 CSS 里的 `url()`），样式表与封面始终携带。
-- **删除章节**：只从目录移除，正文文件保留在磁盘。
-- **查词**：词卡是 `position: fixed` 独立图层，永不进入文档流——分页按内容高度算页数，
-  进入流会改变页数导致跳页。
+三条能一眼看见的后果。为什么这么定见文末的 `docs/decisions.md`，不许怎么改见 `AGENTS.md`：
+
+- **路径保持原样** —— 资源以「原 zip 内完整路径」为键存盘，导入导出前后一致，章节间相对引用天然可用；
+  导出包把生成物统一叫 `epubmaker.opf` / `epubmaker-nav.xhtml` / `epubmaker-toc.ncx`，不跟原书重名。
+- **排版统一、翻页瞬时** —— 不加载原书 CSS，正文净化后套一套干净排版；章内翻页不做动画。
+- **拆分带资源、删除留文件** —— 按正文引用递归收集（含 CSS 里的 `url()`）；删章节只从目录移除，
+  正文文件留在磁盘。
 
 更多「为什么这样设计」见 [`docs/decisions.md`](docs/decisions.md)，踩坑排查见
-[`docs/troubleshooting.md`](docs/troubleshooting.md)，改代码前的约定见 [`AGENTS.md`](AGENTS.md)。
+[`docs/troubleshooting.md`](docs/troubleshooting.md)，多平台兼容与风险见
+[`docs/platforms.md`](docs/platforms.md)，改代码前的约定见 [`AGENTS.md`](AGENTS.md)。

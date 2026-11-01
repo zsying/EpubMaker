@@ -1,19 +1,31 @@
 # AGENTS.md
 
-改这个项目前必读。README 讲**能做什么、怎么跑**；本文件只讲**怎么改才不出错**。
-更细的排查步骤见 `docs/troubleshooting.md`，设计取舍的历史原因见 `docs/decisions.md`，
-多平台（Windows/macOS/Linux/Android/iOS）的兼容性现状、风险清单与新增平台检查表见 `docs/platforms.md`。
+改这个项目前必读。文档各管一段，**同一件事只写一处**：
+
+| 文件 | 只回答 |
+| --- | --- |
+| `README.md` | 能做什么、怎么跑、数据存在哪、目录怎么分 |
+| 本文件 | 怎么改才不出错：模块职责、红线、提交前门禁 |
+| `docs/decisions.md` | 当初为什么这么选（ADR-1…42），以及被否决的方案 |
+| `docs/troubleshooting.md` | 按现象查：症状 → 原因 → 处理 |
+| `docs/platforms.md` | 多平台兼容现状、风险清单、新增平台检查表 |
+| `app/README-mobile.md` | Android 工具链、构建参数、真机调试 |
+
+加一条新规则前先想它属于哪一格：能写成「症状 → 处理」的进 troubleshooting，能写成「当初为什么」的
+进 decisions，**只有「改坏了会出事」才配进下面的红线**。红线只写结论和一句为什么，**低频机制的
+细节（某个平台为什么不支持、某段握手怎么算）一律写进另一份文件再指过去**——红线是"改之前必看"的
+清单，不是手册。
 
 ## 是什么
 
 本地桌面 / 安卓应用（Wails v3，Go 后端 + React/TS 前端，WebView2 / Android WebView）：EPUB 的导入 → 阅读 → 整理 → 拆分 → 导出，
-外加英文阅读学习（划词查词 + 生词本）。后端全 Go，**无 Node 服务、无 HTTP、无端口**。
+外加英文阅读学习（划词查词 + 生词本）与 AI 辅助。后端全 Go，**无 Node 服务、无 HTTP、无端口**。
 
 | 路径 | 职责 |
 | --- | --- |
 | `app/internal/app` | Wails 绑定。`Backend` = 全部数据操作；`App` = 原生集成（文件对话框、命令行 .epub）；`learning.go` = 查词/生词本 |
 | `app/internal/epub` | OCF/OPF/NCX/NAV 解析与流式构建（零依赖，手写 XML） |
-| `app/internal/library` | 导入 / 渲染 / 导出 / 封面 / 拆分 |
+| `app/internal/library` | 导入 / 渲染 / 导出 / 封面 / 拆分 / 书架 |
 | `app/internal/dict` | 本地 ECDICT 词库：CSV 导入、归一化、词形还原、频率分级（独立 SQLite） |
 | `app/internal/vocab` | 生词本 + 查词信号 |
 | `app/internal/storage` | zip 内路径 ↔ 磁盘映射、回收站（软删除） |
@@ -24,224 +36,186 @@
 
 ## 红线（改代码别破坏）
 
+### 数据与资源
+
 1. **资源主键 = 原 zip 内完整路径**。落盘 `books/<id>/content/<原路径>`，导出原样还原，章节间相对引用
    （`../images/x.png`）因此永远有效。禁止扁平化命名。
-2. **没有 HTTP、没有端口**。前端只用进程内绑定（`web/src/api.ts` 的 `Call.ByName`，运行时由宿主自己的
-   `/wails/runtime.js` 提供）；二进制（封面/图片/渲染章节/导出）一律内联 base64。禁止引入 `/api` 路由、
-   TCP 监听、multipart 上传。
-   **出站请求是另一回事**：`internal/webdav`、`internal/opds` 和 `internal/dict/online.go` 确实会主动
-   GET 外部服务。新加出站请求必须同时满足三条——(a) 由用户的显式动作触发，不在打开页面时偷偷发；
-   (b) 有超时，且失败不阻塞 UI；(c) 结果落到本地（`dictcache` 那张表），同一个词不重复问。生词本的
-   「联网补全」是现成模板，`FillVocabGlosses` 的墓碑逻辑（查过了没有 → 记一笔空结果）也别漏掉，
-   否则按钮会永远提示还有 N 个词没解决。**OPDS 的边界是「目录 + epub 文件」**：只读 catalog XML 和
-   `application/epub+zip`，不做网页正文抓取、不解析盗版站、不内置书源规则引擎。`opds.PickEpub` 是
-   选版本的唯一实现，别在 TypeScript 里再写一份。**在线书库的一行只有一个动作**：书行点了就下载，
-   目录行点了就进去，行里不要再塞第二个按钮；条目不自带 epub 时由前端看一次 `navHref`（只有那一页
-   恰好一条可下载条目才当场下载，其余情况当目录进，并把这一页交给页面复用）。后端仍然只收
-   acquisition 链接——没有「把一个目录解析成一本书」的入口。**下载前一定先弹确认框**：`›` 分不出
-   书和目录，这一句才是读者知道「刚才那一下是什么」的地方，别用符号去猜、也别为了猜而对整页列表
-   逐个发请求。**下载按行记状态**（`busyRows`），允许并发：一本书在传时列表必须还能点，后台靠
-   `webdav.TempPath` 的唯一临时文件名 + 单连接 SQLite 保证安全，不要加「一次只能一个」的锁。
+2. 所有 content 目录内的文件访问走 `storage.ContentPath()`（含路径穿越防护），别自己拼路径。
 3. **SQLite 层只用位置参数 `?`**，事务手写 `BEGIN`/`COMMIT`，`SetMaxOpenConns(1)`。别用命名参数或驱动特有的封装。
-4. **正文渲染后必须 DOMPurify 净化**，且只经 `library.RenderChapter` 改写资源链接。
-5. **分页阅读器翻页不做动画**：章内翻页是一次 `setPageIndex` + `translate3d`，禁止 3D 翻页/卷曲/投影；
-   一次翻页只允许一个活动图层，**绝不能复制整章 HTML**。章节切换保留 130ms 淡入淡出（盖住异步加载空窗）。
-5b. **触摸设备没有 hover，每个靠悬停的入口都要有 tap 等价物**。`Reader.tsx` 的 `touchPrimary`
-   （`pointer: coarse` / `hover: none`，且 `any-pointer: fine` 为假）是唯一判定，别用
-   `maxTouchPoints > 0`——带触摸屏的笔记本会因此丢掉桌面行为。手机上的点击分工（顺序即优先级）：
-   顶部/底部**正文边距带**（`marginPx`，不是桌面的 64px `CHROME_EDGE`）= 开合工具条 → 左右边 = 翻页
-   → 落在单词上 = 查词 → 其余空白 = 开合工具条。边带宽度**必须等于正文上/下边距**：满屏后正文从
-   22px 处开始，用 64px 会把第一行整行吞掉，点它就永远开不出词典。
-   横向 swipe 翻页由原生非 passive 监听实现（`touchmove` 必须能 `preventDefault`，配合
-   `.reader-paged .reader-stage { touch-action: pan-y }`，**不要**改成 React 的 onTouchMove，
-   那是 passive 的）。
-5c. **划词工具栏由"选区"驱动，不由"手势"驱动**。`mouseup` 和 `selectionchange`（140ms 防抖）
-   都走 `syncSelectionFromDom()`：手机长按只产生选区、永远没有 `mouseup`，只监听 mouseup 等于
-   触摸下划词失效。
-5d. **下拉贴标签：只在 paged 模式，且"松手"才是写入**（ADR-39）。几条别改坏的边界：
-   - 手势只存在于 paged。`整理`（scroll）模式里向下拖本来就是滚动，别再挂一个 pull-to-mark。
-   - **跨过阈值不发请求**，只改外观（`.page-tag-wrap[data-armed]` + 一次 `vibrate(8)`）；
-     真正写库发生在 `touchend`，`touchcancel` / 重新注册（换页、旋转）一律回缩不写。
-   - **短拖不是点击**：`pulling` 一旦为真，`onEnd` 直接返回，不能落到 `routeTap`（否则 40px 的
-     一次下沉会开出词典或工具条）。
-   - 标签的高度只有两个写入者：CSS 的 `.on`（React，来自书签行）与手势的 inline `height`。
-     松手就是**删掉那个 inline height**，把丝带交回 CSS——"挂住"和"缩回去"因此是同一行代码。
-     别用 React state 驱动拖动：每个 touchmove 一次渲染是全项目禁止的（同 5/翻页红线）。
-   - 真相只有一份：`AddBookmark`/`DeleteBookmark` 那一行。标签、顶栏星标、书签抽屉都读
-     `pageBookmarks()`，别给标签另建状态或字段，否则三处会各说各话。
-   - 门禁：`D:\tmp\epub-verify\pull-mark.cjs`（26 项，含"臂起不写""短拖不写""取消不写""横滑仍翻页"）。
-5d. **触摸端书页 = 屏幕，不是纸**。`measureAndLayout` 的 `fill` 分支（`touchPrimary`）放弃
-   `PAGE_RATIO`/`OUTER_PAD`，sheet 直接取满视口，`MARGIN` 22px，并且：
-   - 竖屏永远单页；横屏可用宽度超过 `MAX_COL_W` 才分两列（否则一行 40 多个汉字）。
-   - `.reader-fill` 下 **不画任何"书"的装饰**：圆角、投影、书脊内阴影（`.page-sheet::after`）、
-     `book-edge` 页堆全部去掉。它们表达的是"书躺在桌上"，屏幕铺满时只会变成两条灰边。
-   - 翻页带收窄到 14px（`turnZoneAt`）：边距只有 22px，带宽超过它就会让点首字变成翻页。
-   - 触屏一律不固定目录（268px 侧栏在 390px 屏上只剩 122px 正文），`tocDocked` 会被强制复位。
-   改这块之前先跑 `D:\tmp\epub-verify\mobile.cjs`，其中"sheet 占满视口 / 边缘无渐变"几条
-   就是钉这个行为的；桌面回归跑 `verify|esc|drop|shelf|vocab-schedule`。
-5e. **尺寸来源是 `readViewport()`（visualViewport 优先），监听挂在阅读区根节点上**。三条铁律：
-   - `measureAndLayout` 与 `useAnchoredOverlay` 都读 `readViewport()`，不要直接用
-     `window.innerHeight`——软键盘弹出时布局视口和可视视口不一致，浮层会落到键盘下面。
-     横向缩放（`vv.scale !== 1`）时退回布局视口，否则捏合缩放会触发重排。
-   - **键盘弹出不许重排正文**：`readViewport().keyboard` 为真且高度变小时直接 return。重排会让
-     写批注时页数变化、关键盘又变回来，正文跳两次。浮层自己跟着键盘走（vv 的 resize/scroll）。
-   - 注册 resize / touch 监听的 effect 依赖里**必须带上 `html`**：paged 的 DOM 是章节渲染后才有
-     的，只在 `[mode]` 上跑时 `stageRef.current` 还是 null，监听器会永久缺失——2026-10-23 修的
-     就是这个，此前桌面拉窗口也从不重排。
-5f. **浮层不能吞掉手势**。swipe 监听挂在 `.reader` 根上（不是 `.reader-stage`）：词卡和工具条是
-   stage 的兄弟节点，touchstart 到不了 stage，于是"查完词想翻页"完全没反应。且**只在手势结束后
-   关闭浮层**（`onEnd`），在 `touchmove` 里卸载手指下的元素会让浏览器取消整个触摸序列（touchcancel），
-   翻页照样不发生。抽屉（`.drawer-mask`）是模态，手势要排除。
-5g. **目录只有两种视图，各自忠实于自己的来源，不做拼接**。`目录` = 书自带的 nav/NCX 原样
-   （它知道小节叫什么、可能一份文档里有两个小节、也可能漏掉封面这类文档）；`文件` = spine 一份文档
-   一行（它知道每份文档、不知道它们叫什么）。切换在面板头部（`epubmaker.tocView` 记在本地）。
-   **不要**再把 nav 没点名的章节「织回」树里（ADR-31 已废弃）：`邓小平时代` 的最后一篇文档标题是
-   英文书名，织进去就是凭空多出一行「书名」；一份文档里两个小节还会同时高亮。高亮永远只有一行，
-   取「锚点已越过当前屏底」的最后一个（`offsetAfterLastPage()` / `offsetAtViewportY(true)`）。
+4. 删除章节只从目录移除，正文文件保留（可能被别处引用）。
+5. **生词是跨书资产**：`vocab.book_id/chapter_id` 只是指针，**不加外键**。书删了词还在。
 6. **标注定位靠字符偏移**（`startOffset/endOffset`），高亮只包裹文本、不改文本。任何改变正文长度的做法
    （内联注音、往正文插入节点）都会让历史标注集体错位。浮层必须 `position: fixed`，
    任何进入文档流的元素都会改变 `contentHeight` → 页数变化 → 读者被莫名翻页。
-7. **生词是跨书资产**：`vocab.book_id/chapter_id` 只是指针，**不加外键**。书删了词还在。
-7b. **书架是一对多的容器，锁的边界在后端**（ADR-40）。`shelves` 表 + `books.shelf_id`，与
-   `books.tags`（多对多、纯字符串）**正交**：别拿标签当书架——标签挂不了密码、也表达不了唯一归属。
-   - **迁移只改一行 `shelf_id`**：书文件在 `<books>/<bookID>/`，与书架无关。别改成"按书架分目录
-     存放"，那会把一次 `UPDATE` 变成搬文件 + 断掉所有相对引用。
-   - **过滤在 SQL 层**：`ListBooks`、`GetBook`、`GetChapterRow`、`ListAllBookmarks`、
-     `ListAllAnnotations`、`ListTrash`。前端过滤只是化妆，一条 `/books/:id/read` 就能绕过。
-     锁状态只存在 `library` 包的内存里（`map[string]bool` + mutex），**不落库**——重启即全部上锁。
-   - **解锁只对这一次访问有效**：`unlocked` 标记活在进程里，与"页面还在不在这个书架"无关。离开书架
-     （`applyShelf` 切走）必须 `LockShelf(旧 id)`，否则设完密码后切走再切回不需要密码，看起来像
-     "密码要重启才生效"。`leaveLockRef` 存着这次锁的 promise，`pickShelf` 切换前先 `await` 它。
-   - 锁定书架**也不能写**（改名 / 设改密码 / 删除 / 迁入都要先解锁）。前端的 `locked` 可能是上一次
-     会话的，判断前先 `loadShelves()` 拿新鲜的（`pickShelf` / `chooseMoveTarget` 已经是 async）。
-   - 系统分享与 Wi-Fi 分享没有"当前书架"，一律落默认书架（`resolveImportShelf` 兜空 id / 未知 id
-     / 锁定 id）。
-   - 忘记密码**没有自助恢复**。逃生口是 `UPDATE shelves SET pw_hash='' WHERE id='…'`（写在这里给
-     技术支持，不放进界面）。
-   - `shelfCache` 必须按 `shelfId` 键控，否则切书架会先闪出上一个书架的书——那是泄密，不是闪一下。
-   - 门禁：`D:\tmp\epub-verify\shelves.cjs`（53 项）+ `app/internal/library/shelves_test.go`（9 个）。
-7c. **一次只开一个底部弹层**（ADR-40 补充）。`.sheet-mask` 全是 `inset:0` + `align-items:flex-end` +
-   同一个 `z-index`，所以 DOM 里靠后的那层收点击。叠两层的结果不是"上面盖住下面"，而是**下层抢走
-   上层输入框的点击** —— 表现成"点输入框没有键盘"（`document.activeElement` 压根不是那个 `input`）。
-   换层要把来处写进状态（`ShelfDialog.returnTo: 'shelf' | 'move'`），取消时再放回去；别指望
-   "下面那层还开着"能自动恢复。
-8. 所有 content 目录内的文件访问走 `storage.ContentPath()`（含路径穿越防护），别自己拼路径。
-9. 删除章节只从目录移除，正文文件保留（可能被别处引用）。
-10. **导入只认文件路径，不接受上传**。拖放由原生处理（`main.go` 的 `WebviewWindowOptions.EnableFileDrop`
-    收到 `WindowFilesDropped` 后把路径转成 `epub:dropped` 事件，`web/src/filedrop.ts` 订阅它），
-    **不要**改用 `e.dataTransfer.files` 读文件：webview 给的 `File` 没有路径，而且缺了原生监听连默认行为
-    都拦不住（拖进来会把 webview 导航到那个文件）。
 
-## 移动端（Android）
+### 宿主与传输
 
-**只有一个宿主、一份 main**：`app/main.go` 同时是桌面和安卓的入口 —— 桌面 `go build` 出 exe，手机
-`go build -buildmode=c-shared`，由 `wails3 android overlay:gen` 生成的 `main_android.gen.go` 在
-`init()` 里注册 `main()`。平台差异只落在两个文件：`platform_android.go`（`EPUBMAKER_HOME` 与
-`trace.log`）和 `platform_desktop.go`（空实现）。业务层、`web/dist`、传输层都只有一份。
+7. **没有 HTTP、没有端口**。前端只用进程内绑定（`web/src/api.ts` 的 `Call.ByName`，运行时由宿主自己的
+   `/wails/runtime.js` 提供）；二进制（封面/图片/渲染章节/导出）一律内联 base64。禁止引入 `/api` 路由、
+   TCP 监听、multipart 上传。
+   **出站请求是另一回事**（现存三个实现：`internal/webdav`、`internal/opds`、`internal/dict/online.go`），
+   新加一个必须同时满足三条——(a) 由用户的显式动作触发，不在打开页面时偷偷发；(b) 有超时，失败不阻塞
+   UI；(c) 结果落本地（`dictcache` 那张表），同一个词不重复问。**OPDS 只读目录 XML 与 epub 文件，不做书源
+   引擎**——边界、`PickEpub` 唯一实现、生词本补全的墓碑逻辑见 ADR-42；在线书库「一行一个动作」「下载前
+   先确认」「`busyRows` 按行记状态、允许并发」见 ADR-26 / ADR-27。
+8. **导入只认文件路径，不接受上传**。拖放走原生（`EnableFileDrop` → `WindowFilesDropped` →
+   `epub:dropped` 事件，`web/src/filedrop.ts` 订阅），**不要**读 `e.dataTransfer.files`：webview 给的
+   `File` 没有路径，缺了原生监听连默认行为都拦不住。为什么见 ADR-9。
 
-构建：桌面 `app/build-windows.ps1`（`run.ps1 build|nsis` 转发），手机 `app/cmd/mobile/build-android.ps1`。
-**两个脚本都不走 `wails3 build|dev|package`**——它们只是壳，实际跑 go-task 的 Taskfile，而 go-task 在
-本仓库需要的 shell wrapper 上跑不通（`gradlew` 无扩展名、`gradlew.bat` 也被拒；见
-`app/README-mobile.md`）。wails3 CLI 只用在两处：`generate syso`（图标/manifest/版本资源）与
-`android overlay:gen`。
+### 正文渲染
 
-**CLI 与模块版本必须钉在同一版**（`go.mod` 的 `github.com/wailsapp/wails/v3 v3.0.0` ↔
-`go install github.com/wailsapp/wails/v3/cmd/wails3@v3.0.0`）：那两件事生成的东西是给这个版本的库
-用的，只升一半会得到"编译过、链接炸"的错位。当前是 v3.0.0（2026-10-26 转正式版；桌面三平台在稳定
-承诺内，Android/iOS 仍是 experimental）。
+9. **正文渲染后必须 DOMPurify 净化**，且只经 `library.RenderChapter` 改写资源链接。清理时
+   `FORBID_ATTR: ['class','id']`——epub 自带的 `id="root"` 会抢宿主的 `#root`。因此**章节 HTML 里永远
+   不要指望 `id`**：nav 指向的 `#filepos…` 由 `RenderChapter` 改写成 `data-anc`（`data-*` 默认放行），
+   前端用 `[data-anc="…"]` 查、`sentence.ts` 的 `anchorOffset()` 换成文本偏移再落页。
 
-11. **只能用 arm64 真机验证，x86_64 模拟器必崩**。`modernc.org/sqlite` 经 `modernc.org/libc`
-    访问文件，libc 在 amd64 上照 musl 的做法，`fstatat` 先试已废弃的 `stat`/`lstat`（系统调用
-    4/6），拿不到 `ENOSYS` 才降级 `newfstatat`。Android x86_64 的 seccomp 对这两条回
-    `SECCOMP_RET_TRAP`，进程直接 `SIGSYS` 死掉——**第一次碰 SQLite 就崩**，tombstone 里是
-    `seccomp prevented call to disallowed x86_64 system call 6`。libc v1.74.4 / v1.79.0 都一样，
-    升级解决不了。arm64 上根本没有 `lstat`/`stat`，同一条 shim 发的是 `fstatat`(79)/`fstat`(80)，
-    都在白名单，所以真机没事。想改前端样式可以在 x86_64 镜像上看（资源能加载、窗口能开），
-    但**任何碰数据库的功能都别在这个镜像上测**。
-    c-shared 进程的 `log` 输出**进不了 logcat**，启动崩溃是静默的：`cmd/mobile/main.go` 的
-    `trace()` 往 `files/trace.log` 写启动标记（含 `db.Open` 失败原因），用
-    `adb shell run-as com.wails.app cat files/trace.log` 读，别指望 logcat。
+### 阅读器
 
-12. **路由必须由 `internal/webassets` 回退到 `index.html`，别换回 `application.AssetFileServerFS`**。
-    两个宿主都只把 `/` 与 `/index.html` 当外壳，其它路径交给用户 handler；而安卓的
-    `WailsPathHandler` 把「这个路径没有字节」映射成 `null`——对 Chromium 来说 `null` 不是 404，
-    是「不归我管，去问网络」。`https://wails.localhost` 是 loopback:443，没人监听，于是一张
-    整页 `net::ERR_CONNECTION_REFUSED`。任何整页导航到深链接（WebView 解冻后的第一次点击、
-    空闲后被回收的渲染进程恢复、reload）都会中招，而且因为不产生 `nav` 日志看起来像随机故障。
-    Java 侧还要把**主框架**的 MIME 强制成 `text/html`：类型是按扩展名猜的，无扩展名的路由
-    会被当成 `application/octet-stream` 下载而不是渲染。
+10. **分页阅读器翻页不做动画**：章内翻页是一次 `setPageIndex` + `translate3d`，禁止 3D 翻页/卷曲/投影；
+    一次翻页只允许一个活动图层，**绝不能复制整章 HTML**。章节切换保留 130ms 淡入淡出（盖住异步加载空窗）。
+11. **触摸设备没有 hover，每个靠悬停的入口都要有 tap 等价物**。`Reader.tsx` 的 `touchPrimary`
+    （`pointer: coarse` / `hover: none`，且 `any-pointer: fine` 为假）是唯一判定，别用
+    `maxTouchPoints > 0`——带触摸屏的笔记本会因此丢掉桌面行为。手机上的点击分工（顺序即优先级）：
+    顶部/底部**正文边距带**（`marginPx`，不是桌面的 64px `CHROME_EDGE`）= 开合工具条 → 左右边 = 翻页
+    → 落在单词上 = 查词 → 其余空白 = 开合工具条。边带宽度**必须等于正文上/下边距**：满屏后正文从
+    22px 处开始，用 64px 会把第一行整行吞掉，点它就永远开不出词典。
+    横向 swipe 翻页由原生非 passive 监听实现（`touchmove` 必须能 `preventDefault`，配合
+    `.reader-paged .reader-stage { touch-action: pan-y }`，**不要**改成 React 的 onTouchMove，
+    那是 passive 的）。
+12. **划词工具栏由"选区"驱动，不由"手势"驱动**。`mouseup` 和 `selectionchange`（140ms 防抖）
+    都走 `syncSelectionFromDom()`：手机长按只产生选区、永远没有 `mouseup`，只监听 mouseup 等于
+    触摸下划词失效。
+13. **下拉贴标签：只在 paged 模式，"松手"才是写入**（ADR-39）。三条最容易改坏的：跨过阈值只改外观
+    （`.page-tag-wrap[data-armed]` + 一次 `vibrate(8)`），写库发生在 `touchend`，`touchcancel` /
+    换页 / 旋转一律回缩不写；**短拖不是点击**（`pulling` 为真时 `onEnd` 直接返回，不能落到
+    `routeTap`）；标签高度只有 CSS 的 `.on` 与手势的 inline `height` 两个写入者，松手就是删掉那个
+    inline height。真相只有 `AddBookmark`/`DeleteBookmark` 那一行，别给标签另建状态或字段。
+    门禁：`D:\tmp\epub-verify\pull-mark.cjs`（26 项）。
+14. **触摸端书页 = 屏幕，不是纸**。`measureAndLayout` 的 `fill` 分支（`touchPrimary`）放弃
+    `PAGE_RATIO`/`OUTER_PAD`，sheet 直接取满视口，`MARGIN` 22px，并且：
+    - 竖屏永远单页；横屏可用宽度超过 `MAX_COL_W` 才分两列（否则一行 40 多个汉字）。
+    - `.reader-fill` 下 **不画任何"书"的装饰**：圆角、投影、书脊内阴影（`.page-sheet::after`）、
+      `book-edge` 页堆全部去掉。它们表达的是"书躺在桌上"，屏幕铺满时只会变成两条灰边。
+    - 翻页带收窄到 14px（`turnZoneAt`）：边距只有 22px，带宽超过它就会让点首字变成翻页。
+    - 触屏一律不固定目录（268px 侧栏在 390px 屏上只剩 122px 正文），`tocDocked` 会被强制复位。
+15. **尺寸来源是 `readViewport()`（visualViewport 优先），监听挂在阅读区根节点上**。三条铁律：
+    - `measureAndLayout` 与 `useAnchoredOverlay` 都读 `readViewport()`，不要直接用
+      `window.innerHeight`——软键盘弹出时布局视口和可视视口不一致，浮层会落到键盘下面。
+      横向缩放（`vv.scale !== 1`）时退回布局视口，否则捏合缩放会触发重排。
+    - **键盘弹出不许重排正文**：`readViewport().keyboard` 为真且高度变小时直接 return。重排会让
+      写批注时页数变化、关键盘又变回来，正文跳两次。浮层自己跟着键盘走（vv 的 resize/scroll）。
+    - 注册 resize / touch 监听的 effect 依赖里**必须带上 `html`**：paged 的 DOM 是章节渲染后才有
+      的，只在 `[mode]` 上跑时 `stageRef.current` 还是 null，监听器会永久缺失——2026-10-23 修的
+      就是这个，此前桌面拉窗口也从不重排。
+16. **浮层不能吞掉手势**。swipe 监听挂在 `.reader` 根上（不是 `.reader-stage`）：词卡和工具条是
+    stage 的兄弟节点，touchstart 到不了 stage，于是"查完词想翻页"完全没反应。且**只在手势结束后
+    关闭浮层**（`onEnd`），在 `touchmove` 里卸载手指下的元素会让浏览器取消整个触摸序列（touchcancel），
+    翻页照样不发生。抽屉（`.drawer-mask`）是模态，手势要排除。
+17. **目录只有两种视图，各自忠实于自己的来源，不做拼接**：`目录` = 书自带的 nav/NCX 原样，`文件` =
+    spine 一份文档一行。**不要**再把 nav 没点名的章节「织回」树里（ADR-31 已废弃：会凭空多出一行
+    「书名」、一份文档里两个小节同时高亮）。两种粒度别混：`chapters` 是 spine 文档，`books.toc` 是
+    nav 小节，`flattenTOC` 的键必须 `docKey()`（去 `#fragment`）。高亮永远只有一行，取「锚点已越过
+    当前屏底」的最后一个（`offsetAfterLastPage()`）。详见 ADR-36。
 
-13. **朗读只能走原生 `EpubMakerTts`，别指望 `speechSynthesis`**。本机 WebView 的
+### 界面
+
+18. **一次只开一个底部弹层**（ADR-40）。`.sheet-mask` 全是 `inset:0` + `align-items:flex-end` +
+    同一个 `z-index`，所以 DOM 里靠后的那层收点击。叠两层的结果不是"上面盖住下面"，而是**下层抢走
+    上层输入框的点击** —— 表现成"点输入框没有键盘"（`document.activeElement` 压根不是那个 `input`）。
+    换层要把来处写进状态（`ShelfDialog.returnTo: 'shelf' | 'move'`），取消时再放回去；别指望
+    "下面那层还开着"能自动恢复。
+19. **书架是一对多的容器，锁的边界在后端**（ADR-40）。`shelves` 表 + `books.shelf_id`，与
+    `books.tags`（多对多、纯字符串）**正交**：别拿标签当书架——标签挂不了密码、也表达不了唯一归属。
+    - **迁移只改一行 `shelf_id`**，别改成"按书架分目录存放"（会把一次 `UPDATE` 变成搬文件 + 断掉
+      所有相对引用）。
+    - **过滤必须在 SQL 层**：`ListBooks`、`GetBook`、`GetChapterRow`、`ListAllBookmarks`、
+      `ListAllAnnotations`、`ListTrash`。前端过滤只是化妆。锁状态只在 `library` 包内存里、不落库。
+    - **解锁只对这一次访问有效**：离开书架（`applyShelf` 切走）必须 `LockShelf(旧 id)`，`leaveLockRef`
+      存着这次的 promise，`pickShelf` 切换前先 `await` 它。否则表现成"密码要重启才生效"。
+    - 锁定书架**也不能写**；前端的 `locked` 可能是上一次会话的，判断前先 `loadShelves()`。
+    - 系统分享 / Wi-Fi 分享一律落默认书架（`resolveImportShelf` 兜空、未知、锁定 id）。
+    - 忘记密码**没有自助恢复**：逃生口是 `UPDATE shelves SET pw_hash='' WHERE id='…'`（不放进界面）。
+    - `shelfCache` 必须按 `shelfId` 键控，否则切书架会先闪出上一个书架的书——那是泄密。
+    - 门禁：`D:\tmp\epub-verify\shelves.cjs`（54 项）+ `app/internal/library/shelves_test.go`（9 个）。
+
+### Android
+
+20. **只能用 arm64 真机验证，x86_64 模拟器一碰 SQLite 就死**。`modernc.org/libc` 在 amd64 上先试
+    已废弃的 `stat`/`lstat`，Android x86_64 的 seccomp 回 `SECCOMP_RET_TRAP`，进程直接 `SIGSYS`；
+    升级 libc 解决不了（v1.74.4 / v1.79.0 都一样）。只改前端样式可以在 x86_64 镜像上看，**任何碰
+    数据库的功能都别在这个镜像上测**。另外 c-shared 进程的 `log` 进不了 logcat，启动标记在
+    `files/trace.log`。两项细节见 `app/README-mobile.md`。
+21. **路由必须由 `internal/webassets` 回退到 `index.html`，别换回 `application.AssetFileServerFS`**，
+    且 Java 侧要把**主框架**的 MIME 强制成 `text/html`——缺任何一半，安卓整页导航到深链接就是
+    `net::ERR_CONNECTION_REFUSED`（宿主把"没有字节"映射成 `null`，Chromium 不当 404 而是去问网络）。
+    为什么见 ADR-41。
+22. **朗读只能走原生 `EpubMakerTts`，别指望 `speechSynthesis`**。本机 WebView 的
     `getVoices()` 返回空数组，Web 端再怎么写都是静音。桥在
     `app/cmd/mobile/build/android/app/src/main/java/com/wails/app/TtsBridge.java`
     （`@JavascriptInterface`，`MainActivity` 里 `addJavascriptInterface(..., "EpubMakerTts")`），
     事件从 `UtteranceProgressListener` 回到 `window.__epubTts`。改这里要连着 `styles.css` 的
     `.listen-marks` / `Reader.tsx` 的 `pumpListen` 一起想：**熄屏后 JS 会冻结**，所以系统引擎
     一次把整章入队，靠 `start` 回调推进，`done` 不翻页。
+23. **听书会话的所有权在阅读器手上，不在引擎手上**（ADR-38）。三条：会话由
+    `setNowPlaying({active,...})` 声明，**别把 `startSession()` 挪回 `speakNow()` 里**——在线音色
+    （`TtsEdge` + `<audio>`）根本不经过原生 TTS，挪回去就熄屏即死；通知栏按钮只把
+    `window.__epubListen('toggle'|'prev'|'next'|'stop')` 交回 JS（`TtsBridge.dispatchCommand`），
+    Java 不判断播放状态，加按钮 = 加 action 常量 + `Reader.tsx` 的 `onListenCommand` 分支；队列
+    见底**不等于**会话结束，`finished()` 只排一个 90 秒 `drainGrace`（换章那几秒全靠它保护），只有
+    没人再说话或 `clear()` 才真正收掉。通知只在看得见的变化上更新，别往 payload 里塞"第 n 句"。
+    门禁：`listen-native.cjs`（桌面跑桥的上下行）+ 真机 `listen-device.mjs`。
+24. **Edge 音色的握手是 `Sec-MS-GEC` v2，别自己改算法**。`app/internal/app/edge_token.go` 是
+    `edge-tts` 7.3.1 `drm.py` 的逐行移植，`tts_test.go` 钉着三组上游向量。403 了就照新版重新对照
+    移植并重钉，不是"清理"成普通 SHA-256——旧算法早被拒了。私有接口，不在稳定承诺内。
+25. **在线音色一个播放器只许有一个 `<audio>`，`stop()` 必须先结算在途 promise**；缓存是双上限
+    （24 条 **且** 4 MB base64），退出阅读器清空；听书日志（cat=`tts`）只记异常与每 20 句的统计，
+    逐句一条会在十分钟内把 300 条环形缓冲刷满。为什么见 ADR-33。
 
-13b. **听书会话的所有权在阅读器手上，不在引擎手上**（ADR-38）。两件事必须一起看：
-    - 会话由 `setNowPlaying({active,...})` 声明：`active:true` 起前台服务 + 唤醒锁 + MediaSession，
-      `active:false` 全收。**别把 `startSession()` 挪回 `speakNow()` 里**——在线音色（`TtsEdge` +
-      `<audio>`）根本不经过原生 TTS，那样它就没有任何保护，熄屏即死（这就是 2026-11-01 那条
-      "听一阵子自己停"的真因）。
-    - 通知栏按钮由 `WailsForegroundService` 的 `MediaSession`/`PendingIntent` 收，**它不知道
-      读到第几句**，所以只把 `window.__epubListen('toggle'|'prev'|'next'|'stop')` 交回 JS
-      （`TtsBridge.dispatchCommand`），回话是下一条 now-playing。加按钮 = 加一个 action 常量 +
-      `Reader.tsx` 的 `onListenCommand` 分支，别在 Java 里自己判断播放状态。
-    - 队列见底**不等于**会话结束：`finished()` 只排一个 90 秒 `drainGrace`，换章那几秒的保护
-      全靠它。只有在"没人再说话"或 `clear()` 时才真正收掉。
-    - 通知只在"看得见的变化"上更新（前端按整条记录的 JSON 签名比较），所以别往 payload 里塞
-      "第 n 句"这种每句都变的东西——那是每章几百次 `notify()`。
-    - 门禁脚本：`D:\tmp\epub-verify\listen-native.cjs`（上行 now-playing + 下行 `__epubListen`，
-      桌面 Edge 跑）；真机侧用 `D:\tmp\listen-device.mjs`（CDP 读 `.lb-play` 的 aria-label）+
-      `dumpsys media_session`/`cmd statusbar expand-notifications`，别只看截图猜。
+## 移动端（Android）
 
-14. **Edge 音色的握手是 `Sec-MS-GEC` v2，别自己改算法**。`app/internal/app/edge_token.go` 是
-    `edge-tts` 7.3.1 `drm.py` 的逐行移植（加盐 SHA-256 + CS64 折叠，5 分钟取整），
-    `tts_test.go` 里钉了三组上游生成的向量。它哪天 403 了，正确做法是拿新版 `edge-tts` 重新对照
-    移植并重钉向量，不是"清理"成普通 SHA-256——旧算法早就被拒了。这是私有接口，不在稳定承诺内。
+**只有一个宿主、一份 main**：`app/main.go` 同时是桌面和安卓的入口，平台差异只落在
+`platform_android.go`（`EPUBMAKER_HOME` 与 `trace.log`）与 `platform_desktop.go`（空实现）两个文件。
+工具链、`build-android.ps1` 的各个开关、真机调试手法全在 **`app/README-mobile.md`**，这里只留两条会
+改坏的：
 
-15. **在线音色一个播放器只许有一个 `<audio>`，`stop()` 必须先结算在途 promise**。每句
-    `new Audio(url)` 在 WebView 上就是每句一个 MediaPlayer 加一份 base64 mp3（data URL 里装的
-    是整个文件），长听书直接涨内存；而 `pause()` 一个 `play()` 已 resolve 的元素不会让
-    `await play()` 返回，挂起的 pump 帧会一直引用 player、队列和元素。缓存是双上限（24 条
-    **且** 4 MB base64），退出阅读器清空。听书日志（cat=`tts`）**只记异常与每 20 句的统计**：
-    逐句一条会在十分钟内把 300 条环形缓冲刷满，其他分类再也查不到。
+- **CLI 与模块版本必须钉在同一版**（`app/go.mod` 的 `github.com/wailsapp/wails/v3 v3.0.0` ↔
+  `go install …/cmd/wails3@v3.0.0`）：`generate syso` 与 `android overlay:gen` 生成的东西是给这个版本
+  的库用的，只升一半会得到"编译过、链接炸"的错位。当前 v3.0.0（桌面三平台在稳定承诺内，
+  Android/iOS 仍是 experimental）。
+- **不要走 `wails3 build|dev|package`**：它们只是 go-task 的壳，本仓库需要的 shell wrapper 在 Windows
+  上跑不通（`gradlew` 无扩展名、`gradlew.bat` 也被拒）。用 `run.ps1`，CLI 只留上面那两条生成命令。
 
 ## 开发约定
 
-- **首选入口 `.\run.ps1`**（无参数打印帮助）：`dev` / `build` / `nsis` / `mobile` / `mobile-install`
-  / `test` / `clean` / `web` / `install`。它只做转发：`build` → `app/build-windows.ps1`，
+- **首选入口 `.\run.ps1`**（`dev` / `build` / `nsis` / `mobile` / `mobile-install` / `test` / `clean`
+  / `web` / `install`；各子命令做什么见 README）。它只做转发：`build` → `app/build-windows.ps1`，
   `dev` → `app/dev-windows.ps1`，`mobile` → `app/cmd/mobile/build-android.ps1`。
-  `web` 模式**没有 Go 后端**（宿主的 `/wails/runtime.js` 不存在），只能调样式。
-  **不要用 `wails3 build|dev|package`**，理由见下面的移动端一节。
-- 改后端必须过：`cd app && go build ./... && go vet ./... && go test ./...`；
-  改前端必须过 `cd web && npx tsc --noEmit`。改了前端还要 `cd web && npm run build &&
-  node ../scripts/sync-frontend-dist.js` 才会进入二进制（`//go:embed all:frontend/dist`）——
-  这个脚本按 `path.resolve('dist')` 找产物，**必须在 `web/` 下跑**，在仓库根直接跑会报
-  `frontend dist not found`。
-- **格式化前端只用 `npm run format`**（= `prettier --write web/src`，配置在仓库根的
-  `.prettierrc.json`：单引号、`printWidth: 100`、LF）。它已经对齐过基线，是幂等的：
-  跑完只会改动你手写的那几行，`npm run format:check` 永远应该全绿。
-  **不要裸跑 `npx prettier --write`**：没有配置时 npx 会拉最新版 + 默认双引号 + 80 宽，
-  把 40 个文件整体重写，功能 diff 直接淹没（2026-10-25 踩过一次，花了半天还原）。
-  同理 **prettier 版本 pin 死**（`devDependencies` 里是精确版本，不是 `^`）：升级必须单独
-  一个 commit 并同时跑一遍基线，否则格式漂移会混进下一次功能提交。
-  `.prettierignore` 只管 `web/src`——Markdown 的手工折行和 CHANGELOG 的措辞比换行重要，
-  `package-lock.json` 是生成物，都不该被格式化。
-- **行尾统一 LF**（`.gitattributes`：`* text=auto eol=lf`，只有 `.ps1`/`.bat`/`.cmd` 是
-  CRLF）。不要改成 CRLF，否则 gofmt/prettier 每写一次文件 git 就警告一次。
-- **涉及 SQLite 的测试在沙箱里会卡死**，运行时要关沙箱。
+- **提交前门禁**：改后端 `cd app && go build ./... && go vet ./... && go test ./...`；改前端
+  `cd web && npx tsc --noEmit`。改了前端还要 `cd web && npm run build && node ../scripts/sync-frontend-dist.js`
+  才会进入二进制（`//go:embed all:frontend/dist`）——这个脚本按 `path.resolve('dist')` 找产物，
+  **必须在 `web/` 下跑**，在仓库根直接跑会报 `frontend dist not found`。
 - **交互回归脚本在 `D:\tmp\epub-verify`（仓库外）**：`web/dist` 起 `vite preview --port 4173`，
   用系统 Edge（`channel: 'msedge'`，**必须 `--no-proxy-server`，地址用 `localhost` 而不是 127.0.0.1**）。
-  `mobile.cjs` 是 390×844 触摸用例（tap / swipe / 长按选区），`verify.cjs` `esc.cjs` `drop.cjs`
-  `shelf.cjs` `vocab-schedule.cjs` 是桌面用例，`shelves.cjs` 是多书架（切换/密码/多选/迁移/弹层
-  不叠，自带状态化 mock，51 项）；`pull-mark.cjs`、`listen-native.cjs` 见各自红线。**动 Reader.tsx 就要两边都跑一遍。**
-- **真机验"输入框"之前先看默认输入法**：`adb shell settings get secure default_input_method`。测试机
-  JEF-AN00 的默认输入法一度是 `com.tencent.wetype/.plugin.hld.WxHldService`（微信键盘的插件服务），
-  它 `mInputShown=true` 却不绘制（IME 窗口 `fmt=TRANSPARENT`、`mViewVisibility=0x0`），**系统设置的
-  搜索框也一样没键盘**——那是设备状态，不是应用 bug。临时换 `adb shell ime enable/set
-  com.baidu.input_huawei/.ImeService` 即可区分，验完记得 `ime disable` 还原。
+  桌面向：`verify` `esc` `drop` `shelf` `vocab-schedule`；触摸向：`mobile.cjs`（390×844，tap / swipe /
+  长按选区）；按功能：`shelves`（多书架）、`pull-mark`（下拉贴标签）、`listen-native`（听书桥）、
+  `barfit`（听书条形不省略）。**动 Reader.tsx 就要桌面向与触摸向都跑一遍**，具体条数与要钉住的断言
+  写在各条红线里。
+- **格式化前端只用 `npm run format`**（= `prettier --write web/src`，配置在仓库根的
+  `.prettierrc.json`：单引号、`printWidth: 100`、LF；已对齐基线，幂等，跑完只动手写的那几行，
+  `npm run format:check` 永远应该全绿）。**不要裸跑 `npx prettier --write`**：没有配置时 npx 会拉
+  最新版 + 默认双引号 + 80 宽，把 40 个文件整体重写，功能 diff 直接淹没（2026-10-25 花了半天还原）。
+  prettier 版本因此**pin 死**（`devDependencies` 里是精确版本），升级要单独一个 commit 并跑一遍基线。
+  `.prettierignore` 只管 `web/src`：Markdown 的手工折行、CHANGELOG 的措辞、生成的
+  `package-lock.json` 都不该被格式化。
+- **行尾统一 LF**（`.gitattributes`：`* text=auto eol=lf`，只有 `.ps1`/`.bat`/`.cmd` 是
+  CRLF）。不要改成 CRLF，否则 gofmt/prettier 每写一次文件 git 就警告一次。
+- **涉及 SQLite 的测试在沙箱里会卡死**，运行时要关沙箱（细节见 `docs/troubleshooting.md`）。
+- **版本号单一来源 = `app/build/config.yml` 的 `info.version`**，两个构建脚本注入 `-X …AppVersion`；
+  仍需手工同步：根 `package.json`、`web/package.json`、`package-lock.json`（顶层 + `packages[""]` +
+  `packages.web`）、`app/internal/app/version.go` 的 `AppVersion`（裸 `go run` 用的兜底）。**新分支开工即升版本**。
+  发版：日常开发在 `v<YYYYMMDD>_<目标版本>` 分支上，合并到 `main` 才发布（tag 打 `main` 的合并点）；
+  `gh release create <tag>` 的正文从 CHANGELOG 抽当前版本段落（**不要** `--notes-file CHANGELOG.md`），
+  发布前按 `git log <上个 tag>..HEAD` 补齐 Unreleased。
 - 新增依赖克制：标准库 + Wails + modernc.org/sqlite。不要为 XML/WebDAV/EPUB 引第三方库。
 - **git commit 信息用英文**，Conventional Commits（`feat:` / `fix:` / `refactor:` / `docs:`）。
   一个逻辑改动一个 commit，不要攒着一起提交。
@@ -249,6 +223,5 @@
 
 ## 数据位置
 
-`~/.epubmaker/`：`data/epubmaker.db`、`data/books/<id>/content/`、`data/trash/`、
-`dict/dict.db`（词库，约 98MB / 77 万条）、`exports/`、`logs/`、`tmp/`。
-`EPUBMAKER_HOME` 可整体改根路径。完整字段见 README。
+`~/.epubmaker/`（`EPUBMAKER_HOME` 可整体改根）：`data/epubmaker.db`、`data/books/<id>/content/`、
+`data/trash/`、`dict/dict.db`、`exports/`、`logs/`、`tmp/`。目录树与 `config.json` 字段见 README。

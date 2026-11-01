@@ -31,6 +31,13 @@
   （实测 `rmdir app/installer` 把整个 `app/` 挪进了回收站）。已跟踪文件用 `git checkout -- <dir>` 恢复；
   未跟踪文件去 `D:\$RECYCLE.BIN\<SID>\` 找 `$R*` 载荷拷回（`$I*` 是元数据，内含原路径）。
 
+## 真机（Android）
+
+| 现象 | 原因 | 处理 |
+| --- | --- | --- |
+| 点输入框不出键盘，但 `mInputShown=true` | **设备输入法坏了，不是应用**：测试机 JEF-AN00 默认的 `com.tencent.wetype/.plugin.hld.WxHldService`（微信键盘的插件服务）IME 窗口是 `fmt=TRANSPARENT`、`mViewVisibility=0x0`，连系统设置的搜索框也画不出键盘 | 先 `adb shell settings get secure default_input_method` 看当前是哪个；`adb shell ime enable/set com.baidu.input_huawei/.ImeService` 换一个即可区分，验完 `ime disable` 还原 |
+| 弹层里点输入框没键盘，`document.activeElement` 根本不是那个 `input` | 两层底部弹层叠着：`.sheet-mask` 都是 `inset:0` + 同一个 z-index，**DOM 靠后的那层收走了点击** | 一次只开一层（AGENTS 红线 18）。定位用 `document.elementFromPoint(x, y)` 看那一点到底命中了谁 |
+
 ## 数据与解析
 
 | 现象 | 原因 | 处理 |

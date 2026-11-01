@@ -267,12 +267,12 @@ P1 排在 P3 前面的理由：iOS 上每个"能不能"的问题（长按能不�
 
 1. **不许为了某个平台的显示效果改渲染文本**（删软连字符、内联注音、插节点）。offset 的语义是
    "当前渲染文本的第 N 个字符"，一改，所有历史标注/进度/书签订位整体错位且无法迁移。
-2. **不许用 `maxTouchPoints` 判触摸**，只有 `pointer: coarse`（AGENTS.md 5b）。
+2. **不许用 `maxTouchPoints` 判触摸**，只有 `pointer: coarse`（AGENTS.md 红线 11）。
 3. **不许开 `NSAllowsArbitraryLoads`**：本地模型用 `NSAllowsLocalNetworking` 就够，
    前者会在审核时被追问用途。
 4. **不许为 iOS 单独出一份 bundle**：一份 `web/dist` 进所有宿主，是成本可控的前提。
 5. **mock 不许进二进制**：验证完必须重新 `npm run build` + `sync-frontend-dist.js`。
-6. **不许把 `100vh` / `innerHeight` 直接当尺寸源**，只用 `readViewport()`（AGENTS.md 5e）。
+6. **不许把 `100vh` / `innerHeight` 直接当尺寸源**，只用 `readViewport()`（AGENTS.md 红线 15）。
 7. **不许为某个平台改 `Backend` 方法签名**：它是前端唯一的契约。
 
 ## 附录 A 证据索引
@@ -288,7 +288,7 @@ P1 排在 P3 前面的理由：iOS 上每个"能不能"的问题（长按能不�
 | iOS 页面 URL 是 `wails://localhost` | 同上 `pkg/application/webview_window_ios.m:506` |
 | Android 页面 URL 是 `https://wails.localhost` | 同上 `pkg/application/application_android.go:958` |
 | Android 宿主 = Wails 模板 + 定制 | `app/README-mobile.md` |
-| 触摸语义、分页不变量 | `AGENTS.md` 5b–5f；`docs/decisions.md` ADR-3 / ADR-18 / ADR-21 |
+| 触摸语义、分页不变量 | `AGENTS.md` 红线 11–16；`docs/decisions.md` ADR-3 / ADR-18 / ADR-21 |
 
 ## 附录 B 名词
 
