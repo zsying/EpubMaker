@@ -2102,3 +2102,66 @@ DOM 矩形互相换算的五个纯函数、贴着锚点定位浮层的 hook。�
 `tap-hold` 6/6、`scroll-tap` 7/7、`progress-hide` 4/4、`shelves` 54/54、`pull-mark` 26/26、
 `organize-mobile` 12/12、`listen-native` 16/16、`sentence-window` 4/4、`hyphen-hit` 10/10；
 `tsc` 与 `prettier --check` 干净。`Reader.tsx` 5719 → 5186 行。
+
+## ADR-47 听书会话搬进 `useListenSession.ts`：615 行，17 个参数，两个回写
+
+**问题。** ADR-46 之后 `Reader.tsx` 还有 5186 行，其中听书占 615：模块级常量与 `ttsLog`（48）、
+18 个 state/ref（46）、会话本体（429）、接线与三个 effect（92）。它们夹在章节加载和翻页手势之间，
+而这三件事的时间尺度完全不同——章节是一秒一次，手势是一帧一次，听书是一句一次。判读一个
+"换章之后 Voice 没跟上"的 bug，要先穿过两百行分页测量；而听书自己的 12 个 effect，没有一个是
+能单独读懂的。
+
+**决定。** 会话搬进 `web/src/useListenSession.ts`（773 行，含注释），设置面板搬进
+`components/ListenSettings.tsx`（87 行）。边界按"谁改变谁"划：
+
+| 归 hook | 留在 Reader |
+| --- | --- |
+| 队列位置、三种引擎、语速/音色/引擎偏好、跟随与暂停跟随、句子标记的几何、通知栏的命令分支、与桥的三条 effect | 章节 HTML、分页几何、`openChapter`、`setPageIndex`、`stopListen` 的按钮、`ListenBar` 与标记层的挂载、now-playing 的标题（那是书的事） |
+
+接口 17 个参数，全部是**当下这一帧的值**（`html`/`mode`/`pageIndex`/`fontSize`/`fontEpoch`/`theme`
+六个数进 effect 依赖，其余是 ref 与回调）。两个方向刻意不对称：
+
+- **Reader → hook**：开、停、跳句、两个跟随开关。手势那边只要一个 `pauseFollow`（`onTurnCommit`）。
+- **hook → Reader**：只有 `openChapter` 与 `setPageIndex`。它**移动**一页，不**排**一页——ADR-45
+  给手势画的同一条线。
+
+另有两个函数成对出现，因为"这一次滚动是谁发的"这件事两边都要问：`noteOwnScroll()`（恢复位置、
+预览落点：告诉会话这是我们自己滚的）与 `recentScrollWasOurs()`（scroll 监听：这次滚动算不算读者
+自己走开）。原来是 Reader 直接读写 `autoScrollAtRef`；现在这个 ref 只在 hook 里，两边各拿一个
+说人话的函数，700ms 这个窗口也只写一遍。
+
+**先写门禁，再动手。** 搬之前没有一条门禁覆盖"跟随"——`listen-native` 测的是通知栏契约，
+`sentence-window` 测的是断句。而这次要动的正是三处没有保护的行为：手动翻页后暂停跟随、标记层的
+几何、跳句带页。于是先写 `listen-follow.cjs`（16 条，在 HEAD 上跑绿），再搬：
+
+1. 会话开始，句子被标出来（1 个盒子）；
+2. 手动 swipe 翻页 → 页码 +1、标记清空、条形进入 `lb-away`；
+3. 读者离开时引擎报第 5 句开始 → 页码**不动**、不画标记；
+4. 点"回到朗读位置" → 计数显示 `5/76`、页码离开读者停的地方、6 个盒子回来；
+5. 回来之后引擎报第 9 句 → 页码跟着走、标记在；
+6. 退出 → 条形消失、不留标记。
+
+引擎用 `window.__epubTts`（`readAloud.ts` 给 Java 桥装的那个缝）驱动，所以每一步都是真 handler
+收到真 `TtsEvent`，不是 UI 捷径。
+
+**被否决的。**
+
+- *只抽纯函数（`spans`、队列推进）*：这些逻辑全是闭包——`pumpListen` 读 `listenRef`、`pushSpan`
+  读 `spansRef`，抽出去只能把状态一起搬，那就等于整块搬。
+- *连 `openChapter` / `setPageIndex` 一起搬*：hook 立刻变成 Reader 的副本，同一本书两处改。
+- *用 Context 传这 17 个参数*：调用方只有一个，多一层间接只会让"这个值从哪来"更难查
+  （ADR-45 已否决过一次）。
+- *把 `ListenBar` 也搬进来*：它已经是独立组件，props 全部直接来自 hook 的返回值，再包一层只是
+  给同一个接口换个名字。
+- *保留设置面板在 Reader 里*：它会 import `LISTEN_RATES`——一个纯 UI 事实，却逼着 hook 把内部
+  常量当 API 导出。抽成组件后档位只在一个地方定义（hook 导出、组件 import），Reader 一个都不碰。
+
+**已知代价。** 调用点 17 行参数要跟着改；`spansRef` 仍暴露给 now-playing（`canNext` 要句子总数，
+而句子总数只在会话里）。调试一个"第 9 句没跳页"的问题现在要看两个文件：Reader 给的分页函数对不对，
+以及 hook 有没有在 `follow` 为假时提前 return。
+
+**验收。** 门禁：`listen-follow` 16/16（新增，搬前搬后各一次）、`listen-native` 16/16、
+`verify` 19/19、`pageturn-chapter` 29/29、`pageturn-drag` 31/31、`turn-sensitivity` 28/28、
+`tap-hold` 6/6、`scroll-tap` 7/7、`progress-hide` 4/4、`mobile` 193/193、`annotate-note` 21/21、
+`cardplace` 14/14、`dictmiss` 12/12、`shelves` 54/54、`pull-mark` 26/26、`organize-mobile` 12/12；
+`tsc` 与 `prettier --check` 干净。`Reader.tsx` 5186 → 4551 行。真机听一章另记。

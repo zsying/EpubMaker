@@ -31,7 +31,7 @@
 | `app/internal/storage` | zip 内路径 ↔ 磁盘映射、回收站（软删除） |
 | `app/internal/db` | modernc.org/sqlite（纯 Go，无 cgo） |
 | `app/internal/{html,config,mime,webdav,opds}` | 字符串改写 / 配置 / MIME / WebDAV 客户端 / OPDS 目录解析 |
-| `web/src` | React 18 + Vite。`pages/` 每页一个文件，`api.ts` 是绑定的唯一封装层，`overlay.ts` 是浮层定位算法，`usePageTurns.ts` 是阅读器的触摸手势与翻页状态机（ADR-45），`useAnchoredOverlay.ts` 是浮层贴锚点定位，`textOffset.ts` 是字符偏移与 DOM 矩形互转，`tocNav.ts` + `components/Toc.tsx` 是目录的解析与渲染（ADR-46） |
+| `web/src` | React 18 + Vite。`pages/` 每页一个文件，`api.ts` 是绑定的唯一封装层，`overlay.ts` 是浮层定位算法，`usePageTurns.ts` 是阅读器的触摸手势与翻页状态机（ADR-45），`useAnchoredOverlay.ts` 是浮层贴锚点定位，`textOffset.ts` 是字符偏移与 DOM 矩形互转，`tocNav.ts` + `components/Toc.tsx` 是目录的解析与渲染（ADR-46），`useListenSession.ts` 是听书会话（ADR-47） |
 | `app/cmd/dictimport` | 命令行词库安装器，与界面按钮走同一条代码路径 |
 
 ## 红线（改代码别破坏）
@@ -168,16 +168,16 @@
     `app/cmd/mobile/build/android/app/src/main/java/com/wails/app/TtsBridge.java`
     （`@JavascriptInterface`，`MainActivity` 里 `addJavascriptInterface(..., "EpubMakerTts")`），
     事件从 `UtteranceProgressListener` 回到 `window.__epubTts`。改这里要连着 `styles.css` 的
-    `.listen-marks` / `Reader.tsx` 的 `pumpListen` 一起想：**熄屏后 JS 会冻结**，所以系统引擎
+    `.listen-marks` / `useListenSession.ts` 的 `pumpListen` 一起想：**熄屏后 JS 会冻结**，所以系统引擎
     一次把整章入队，靠 `start` 回调推进，`done` 不翻页。
 23. **听书会话的所有权在阅读器手上，不在引擎手上**（ADR-38）。三条：会话由
     `setNowPlaying({active,...})` 声明，**别把 `startSession()` 挪回 `speakNow()` 里**——在线音色
     （`TtsEdge` + `<audio>`）根本不经过原生 TTS，挪回去就熄屏即死；通知栏按钮只把
     `window.__epubListen('toggle'|'prev'|'next'|'stop')` 交回 JS（`TtsBridge.dispatchCommand`），
-    Java 不判断播放状态，加按钮 = 加 action 常量 + `Reader.tsx` 的 `onListenCommand` 分支；队列
+    Java 不判断播放状态，加按钮 = 加 action 常量 + `useListenSession.ts` 的 `onListenCommand` 分支；队列
     见底**不等于**会话结束，`finished()` 只排一个 90 秒 `drainGrace`（换章那几秒全靠它保护），只有
     没人再说话或 `clear()` 才真正收掉。通知只在看得见的变化上更新，别往 payload 里塞"第 n 句"。
-    门禁：`listen-native.cjs`（桌面跑桥的上下行）+ 真机 `listen-device.mjs`。
+    门禁：`listen-native.cjs`（桌面跑桥的上下行）、`listen-follow.cjs`（跟随 / 标记 / 跳句带页）+ 真机 `listen-device.mjs`。
 24. **Edge 音色的握手是 `Sec-MS-GEC` v2，别自己改算法**。`app/internal/app/edge_token.go` 是
     `edge-tts` 7.3.1 `drm.py` 的逐行移植，`tts_test.go` 钉着三组上游向量。403 了就照新版重新对照
     移植并重钉，不是"清理"成普通 SHA-256——旧算法早被拒了。私有接口，不在稳定承诺内。
@@ -212,10 +212,10 @@
   用系统 Edge（`channel: 'msedge'`，**必须 `--no-proxy-server`，地址用 `localhost` 而不是 127.0.0.1**）。
   桌面向：`verify` `esc` `drop` `shelf` `vocab-schedule`；触摸向：`mobile.cjs`（390×844，tap / swipe /
   长按选区）；按功能：`shelves`（多书架）、`pull-mark`（下拉贴标签）、`listen-native`（听书桥）、
-  `barfit`（听书条形不省略）。**动 `Reader.tsx`、`usePageTurns.ts`、`textOffset.ts` 或
-  `useAnchoredOverlay.ts` 就要桌面向与触摸向都跑一遍**（翻页与手势另加 `pageturn-chapter` /
-  `pageturn-drag` / `turn-sensitivity` / `tap-hold` / `scroll-tap` / `progress-hide`），具体条数与要
-  钉住的断言写在各条红线里。
+  `barfit`（听书条形不省略）、`listen-follow`（跟随 / 标记 / 跳句带页）。**动 `Reader.tsx`、
+  `usePageTurns.ts`、`textOffset.ts`、`useAnchoredOverlay.ts` 或 `useListenSession.ts` 就要桌面向与
+  触摸向都跑一遍**（翻页与手势另加 `pageturn-chapter` / `pageturn-drag` / `turn-sensitivity` /
+  `tap-hold` / `scroll-tap` / `progress-hide`），具体条数与要钉住的断言写在各条红线里。
 - **格式化前端只用 `npm run format`**（= `prettier --write web/src`，配置在仓库根的
   `.prettierrc.json`：单引号、`printWidth: 100`、LF；已对齐基线，幂等，跑完只动手写的那几行，
   `npm run format:check` 永远应该全绿）。**不要裸跑 `npx prettier --write`**：没有配置时 npx 会拉
