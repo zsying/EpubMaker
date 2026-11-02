@@ -75,6 +75,7 @@ import {
   countTocEntries,
   docKey,
   findTocPath,
+  groupKeys,
   hrefsInDoc,
   readTocView,
   TOC_VIEW_KEY,
@@ -1751,6 +1752,32 @@ export default function Reader() {
     const one = activeSection && hrefs.includes(activeSection) ? activeSection : hrefs[0];
     return new Set(one ? [one] : []);
   }, [navView, toc, activeDoc, activeSection]);
+
+  // A new outline arrives with every group open. For a book with parts that is
+  // a wall — 三体 draws 3 parts / 30 chapters / 80 sections in one column — and
+  // the rows a reader did not ask for are exactly the ones between him and the
+  // row he wants. Fold the lot when the book's outline lands; the effect below
+  // opens the one path that leads to where he is.
+  useEffect(() => {
+    setTocCollapsed(groupKeys(toc));
+  }, [toc]);
+
+  // Whatever the reader folds by hand, the chapter he is in stays reachable
+  // without unfolding anything: its ancestors open when it changes. That is
+  // also the one moment a hand-folded group should open again — he just asked
+  // to go in there. 定位 (locateCurrent) stays for the case where the path was
+  // folded after this ran.
+  useEffect(() => {
+    if (!activeDoc) return;
+    const path = findTocPath(toc, docKey(activeDoc));
+    if (!path.length) return;
+    setTocCollapsed((prev) => {
+      if (!path.some((k) => prev.has(k))) return prev;
+      const n = new Set(prev);
+      for (const k of path) n.delete(k);
+      return n;
+    });
+  }, [toc, activeDoc]);
 
   // Expand every ancestor group of the current chapter and (after render) scroll
   // the active node into view. If no TOC surface is showing, open the drawer.

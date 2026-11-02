@@ -109,3 +109,20 @@ export function findTocPath(es: TocEntry[], doc: string, base = ''): string[] {
   }
   return [];
 }
+
+/** Every key in the outline that has children — i.e. every row that can be
+ *  folded. Folded is the resting state of a nested outline: a book with parts
+ *  draws as a hundred rows once every group is open, and the rows a reader
+ *  never asked for push the ones he wants off the screen. */
+export function groupKeys(es: TocEntry[], base = ''): Set<string> {
+  const out = new Set<string>();
+  for (let i = 0; i < es.length; i++) {
+    const e = es[i];
+    const key = base === '' ? `/${i}` : `${base}/${i}`;
+    if (e.children && e.children.length) {
+      out.add(key);
+      for (const k of groupKeys(e.children, key)) out.add(k);
+    }
+  }
+  return out;
+}

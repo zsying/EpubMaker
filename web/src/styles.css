@@ -1004,8 +1004,13 @@ a {
   min-width: 0;
 }
 
+/* The fold control is aimed at, not read: 22px is the width of the chevron, not
+   of a thumb, and a near miss on it opens a chapter instead of folding a group.
+   The column is padding around the glyph, so widening it costs the label 8px of
+   text and buys a target that can be hit without looking. It spans the row
+   height on its own (the row is a flex box with align-items: stretch). */
 .toc-caret {
-  flex: 0 0 22px;
+  flex: 0 0 30px;
   align-self: stretch;
   display: flex;
   align-items: center;
@@ -1016,6 +1021,12 @@ a {
   color: var(--text-3);
   padding: 0;
   border-radius: 6px;
+}
+
+/* A finger needs more than a mouse: 40px is the widest the column can get
+   before the labels in a 300px drawer start wrapping for it. */
+.touch-primary .toc-caret {
+  flex-basis: 40px;
 }
 
 .toc-caret:hover {
