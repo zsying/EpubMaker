@@ -12,8 +12,11 @@ import {
   MODE_KEY,
   TURN_SENSITIVITY_KEY,
   TURN_SENSITIVITY_LEVELS,
+  TAP_TURN_KEY,
+  TAP_TURN_PCT,
   appTheme,
   applyAppTheme,
+  tapTurnEnabled,
   turnLevelPct,
   turnSensitivity,
   type AppTheme,
@@ -55,6 +58,8 @@ export default function Settings() {
   );
   const [theme, setTheme] = useState<AppTheme>(() => appTheme());
   const [turnSens, setTurnSens] = useState<TurnSensitivity>(turnSensitivity);
+  // Same switch as the Aa sheet; the reader reads the key on mount.
+  const [tapTurn, setTapTurn] = useState(tapTurnEnabled);
   // Default ON: without it an EPUB's own font-family beats the picked face.
   const [override, setOverride] = useState(() => localStorage.getItem(FONT_OVERRIDE_KEY) !== '0');
   // The diagnostic log's switch lives here; its entries are on their own page.
@@ -192,6 +197,30 @@ export default function Settings() {
                 滚动
               </button>
             </div>
+          </div>
+
+          {/* Tapping the page's edges instead of dragging them. Off is a real
+              option here, not a broken state: it is the one thing that makes a
+              stray thumb on the margin harmless. */}
+          <div className="st-row">
+            <span className="st-lb">
+              点两侧翻页
+              <small>左右各 {TAP_TURN_PCT}% 点一下翻页，关掉可防误触</small>
+            </span>
+            <button
+              type="button"
+              role="switch"
+              aria-checked={tapTurn}
+              aria-label="点两侧翻页"
+              className={`rd-switch${tapTurn ? ' on' : ''}`}
+              onClick={() => {
+                const next = !tapTurn;
+                localStorage.setItem(TAP_TURN_KEY, next ? '1' : '0');
+                setTapTurn(next);
+              }}
+            >
+              <span className="rd-switch-knob" />
+            </button>
           </div>
 
           {/* Same key and same levels as the reader's Aa sheet. The hint is a

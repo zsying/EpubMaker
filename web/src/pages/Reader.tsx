@@ -44,10 +44,13 @@ import {
   FONT_OVERRIDE_KEY,
   TURN_SENSITIVITY_KEY,
   TURN_SENSITIVITY_LEVELS,
+  TAP_TURN_KEY,
+  TAP_TURN_PCT,
   APP_THEMES,
   appTheme,
   applyAppTheme,
   fontOverrideEnabled,
+  tapTurnEnabled,
   turnSensitivity,
   turnThresholds,
   type AppTheme,
@@ -270,6 +273,11 @@ export default function Reader() {
   const [turnSens, setTurnSens] = useState<TurnSensitivity>(turnSensitivity);
   const turnSensRef = useRef(turnSens);
   turnSensRef.current = turnSens;
+
+  // 点两侧翻页. Live state so the Aa sheet answers a tap immediately: the tap
+  // router reads this value on every tap, so no listener has to be re-registered
+  // (which is why `turnSens` needs a ref and this does not).
+  const [tapTurn, setTapTurn] = useState<boolean>(tapTurnEnabled);
 
   // paged reading state
   const [pageIndex, setPageIndex] = useState(0);
@@ -720,6 +728,7 @@ export default function Reader() {
     [fontOverride],
   );
   useEffect(() => localStorage.setItem(TURN_SENSITIVITY_KEY, turnSens), [turnSens]);
+  useEffect(() => localStorage.setItem(TAP_TURN_KEY, tapTurn ? '1' : '0'), [tapTurn]);
 
   // Registers the selected reading font once per change and re-measures the
   // paged layout after the face is really loaded: a font swap changes every
@@ -1910,6 +1919,24 @@ export default function Reader() {
       }
       return;
     }
+    // 点两侧翻页, when the switch is on. Deliberately ABOVE the word lookup:
+    // the strip is a fifth of a page wide, so text lives inside it, and a lookup
+    // that won this race would leave the switch answering only on the blank
+    // outer margin — the 22px ADR-43 measured, which nobody hits on purpose.
+    // The cost is the one ADR-43 named, now a choice the reader makes by turning
+    // this on: a tap on a word inside the strip turns the page. A press still
+    // selects it, and selection is how this reader reads a word anyway.
+    //
+    // Paged mode only. In scroll mode there is no next page to turn towards and
+    // `turn()` would carry the reader into the next chapter, which is not what
+    // a tap on a margin means.
+    if (tapTurn && mode === 'paged' && !preview) {
+      const dir = tapTurnZoneAt(x);
+      if (dir !== 0) {
+        turn(dir);
+        return;
+      }
+    }
     if (scheduleWordLookup(x, y)) return;
     // The one rule the two modes do not share, and deliberately so. Paged mode
     // has no scrolling, so a tap is always aimed and any tap may open the
@@ -2023,27 +2050,38 @@ export default function Reader() {
     if (pageIndex > maxPageIndex) setPageIndex(maxPageIndex);
   }, [mode, pageCount, pagesPerView]);
 
-  // Which page-turn zone a viewport x sits in: -1 the covered pages to the left
-  // of the book, 0 the page itself, 1 the covered pages to the right.
+  // Which edge zone a viewport x sits in — -1 the covered pages to the left of
+  // the book, 0 the page itself, 1 the covered pages to the right — for a strip
+  // `band` wide measured from the book's own edge.
   //
   // The zones are measured from the BOOK, not from the window: on a wide screen
   // all the empty space flanking the book still turns pages, and on any screen
   // the book's own outer margin does too — that margin is the "stack of paper"
-  // the reader aims at. A proportional share of the window (18% each side) used
-  // to turn pages from inside the text column on small windows, which is where
-  // words are.
-  function turnZoneAt(clientX: number): -1 | 0 | 1 {
+  // the reader aims at. A proportional share of the window used to turn pages
+  // from inside the text column on small windows, which is where words are.
+  function edgeZoneAt(clientX: number, band: number): -1 | 0 | 1 {
     const spread = spreadRef.current;
     if (!spread) return 0;
     const r = spread.getBoundingClientRect();
     if (r.width <= 0) return 0;
-    // On touch the margin is only ~22px, so the band must stay well inside it —
-    // otherwise tapping the first character of a line turns the page instead of
-    // opening the dictionary card, which is the more common intent by far.
-    const band = touchPrimary ? 14 : Math.min(marginPx, 26);
     if (clientX < r.left + band) return -1;
     if (clientX > r.right - band) return 1;
     return 0;
+  }
+
+  // The paper's own margin: desktop clicks and the drag-to-turn gesture.
+  function turnZoneAt(clientX: number): -1 | 0 | 1 {
+    // On touch the margin is only ~22px, so the band must stay well inside it —
+    // otherwise tapping the first character of a line turns the page instead of
+    // opening the dictionary card, which is the more common intent by far.
+    return edgeZoneAt(clientX, touchPrimary ? 14 : Math.min(marginPx, 26));
+  }
+
+  // The strip 点两侧翻页 answers in: a share of ONE page on each side. Larger
+  // than `turnZoneAt`'s margin by design — a switch that has to be aimed at a
+  // 14px strip is not a feature, it is a puzzle.
+  function tapTurnZoneAt(clientX: number): -1 | 0 | 1 {
+    return edgeZoneAt(clientX, (sheetWidth * TAP_TURN_PCT) / 100);
   }
 
   function onStageClick(e: ReactMouseEvent) {
@@ -3664,6 +3702,26 @@ export default function Reader() {
                   滚动
                 </button>
               </div>
+            </div>
+            {/* Off is a legitimate choice, not a fallback: ADR-43 shipped "a
+                tap never turns the page" and a reader who liked it must be able
+                to keep it. Only paged mode answers — see `routeTap`. */}
+            <div className="rd-set-row">
+              <span className="rd-set-label">
+                点两侧翻页
+                <small className="rd-set-desc">
+                  左右各 {TAP_TURN_PCT}% 点一下翻页 · 仅翻页模式
+                </small>
+              </span>
+              <button
+                role="switch"
+                aria-checked={tapTurn}
+                aria-label="点两侧翻页"
+                className={`rd-switch${tapTurn ? ' on' : ''}`}
+                onClick={() => setTapTurn((v) => !v)}
+              >
+                <span className="rd-switch-knob" />
+              </button>
             </div>
             {/* How far a horizontal drag has to go. The number shown is the
                 one the gesture actually uses, measured against this spread, so

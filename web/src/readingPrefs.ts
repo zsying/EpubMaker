@@ -146,3 +146,37 @@ export function turnThresholds(
 export function fontOverrideEnabled(): boolean {
   return localStorage.getItem(FONT_OVERRIDE_KEY) !== '0';
 }
+
+/**
+ * Tapping the left or right edge of the page turns it (paged mode only).
+ *
+ * ADR-43 removed tap-to-turn because a zone wide enough to hit is a zone that
+ * eats the first characters of every line: the only honest geometry on a phone
+ * was the 22px text margin. That trade-off has not changed — what changed is
+ * who owns the decision. This is a switch, so a reader who turns it on has said
+ * "I would rather tap than drag", and the cost (a tap on a word inside the
+ * strip turns the page; a press still selects it) is his to accept.
+ *
+ * Off by default, and that is the whole point: `dictmiss` went red the moment
+ * this shipped on — it picks a word near the left margin, and the tap turned the
+ * page instead of opening the card. A reader who never asked for tap zones must
+ * not lose the edge of every line to them. The switch is on the Aa sheet's first
+ * screen and on Me→设置, so asking for it costs one tap, once.
+ */
+export const TAP_TURN_KEY = 'epubmaker.tapTurn';
+
+/**
+ * Share of ONE page's width on each side. Measured per page, not per spread,
+ * so a two-page view keeps the same physical target as a one-page view — the
+ * reader aims at the edge of the paper, not at a percentage of the window.
+ *
+ * 18% is 65px on a 360px phone: comfortably above the ~44px a thumb needs,
+ * and narrow enough that the middle 64% still opens the chrome. Wider (the
+ * quarter 微信读书 uses) starts swallowing whole lines of a 4-char-wide column.
+ */
+export const TAP_TURN_PCT = 18;
+
+/** Only '1' turns it on; absent means off, which is what a fresh install gets. */
+export function tapTurnEnabled(): boolean {
+  return localStorage.getItem(TAP_TURN_KEY) === '1';
+}
