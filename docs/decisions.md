@@ -2164,4 +2164,22 @@ DOM 矩形互相换算的五个纯函数、贴着锚点定位浮层的 hook。�
 `verify` 19/19、`pageturn-chapter` 29/29、`pageturn-drag` 31/31、`turn-sensitivity` 28/28、
 `tap-hold` 6/6、`scroll-tap` 7/7、`progress-hide` 4/4、`mobile` 193/193、`annotate-note` 21/21、
 `cardplace` 14/14、`dictmiss` 12/12、`shelves` 54/54、`pull-mark` 26/26、`organize-mobile` 12/12；
-`tsc` 与 `prettier --check` 干净。`Reader.tsx` 5186 → 4551 行。真机听一章另记。
+`tsc` 与 `prettier --check` 干净。`Reader.tsx` 5186 → 4549 行。
+
+**真机（JEF-AN00 / Android 12，系统 TTS 音色"云希"）。** 门禁跑在 Vite 的假引擎上，而这次搬走的
+正是"引擎替我们翻页"这件事，所以还得看一遍真的 WebView + 真的 Android TextToSpeech：
+
+- **换章续读。** 把《三体》第一部拖到末页（93/93）再开听书，队列落在最后一句 769/769；读完自动载入
+  下一章，队列从 1/691 重新起，页码 1/85、条形标题、顶部章节名三处同时变成"【危机纪元1-4年，程心】"。
+  也就是说 `openChapter` 这个回写在真引擎的 `onDone` 里是对的——假引擎最容易漏的就是这条。
+- **后台。** HOME 之后 15 秒，句子 3 → 7，`visibilityState` 已经是 `hidden`。原生 TTS 在页面不可见时
+  照样念，队列靠 `TtsEvent` 推进而不是靠 `setTimeout`，所以没有节流问题。
+- **灭屏。** 电源键灭屏 20 秒，7 → 10；亮屏回前台（`pid` 没变，验的是 resume 不是冷启）12/691，
+  页码 1 → 2——后台期间跨过页边界，回到前台时跟随把页补上了。
+- **手动翻页。** 听书中 swipe 一次：页码 +1、标记 3 → 0、`.lb-meta` 加上 `lb-away`、"回到朗读"；
+  点它回位：`lb-away` 消失、3 个标记回来、页码回到原处。三个数都对得上 `listen-follow` 的断言。
+- **退出。** `.listen-bar` 消失，页面不留标记。
+
+**方法学。** 灭屏测试里两个键容易记错：`keyevent 26` 灭屏、`keyevent 82` 只解解锁，**不给 app 前台**。
+亮屏后必须再 `monkey` 拉起一次，`visibilityState` 才会翻成 `visible`；否则看到的是"回来了但还 hidden"，
+会误判成跟随没恢复。（同一类坑见 `troubleshooting.md`：`am force-stop` 不投递 `visibilitychange`。）
