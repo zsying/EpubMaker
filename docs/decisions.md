@@ -2237,3 +2237,17 @@ scroll 模式点右侧既不翻页也不换章。回归全绿：`tap-hold` 6、`
 `turn-sensitivity` 28、`verify` 19、`pageturn-chapter` 29、`listen-follow` 16、`listen-native` 16、
 `progress-hide` 4、`annotate-note` 21、`cardplace` 14、`dictmiss` 12、`shelves` 54、`pull-mark` 26、
 `organize-mobile` 12、`sentence-window` 4、`hyphen-hit` 10、`mobile` 193；`tsc` 与 `prettier --check` 干净。
+
+**真机（JEF-AN00 / Android 12，宽 360 CSS px）。** 门禁跑在 Edge 的触摸模拟上，而这条改动抢的是
+`routeTap` 里的顺序——顺序错一格，门禁仍可能因为点击落在空白而绿。所以从 Aa 面板走一遍真界面：
+
+- 开关在 Aa 面板第一屏（"翻页"与"翻页灵敏度"之间），初始 `aria-checked=false`；打开后
+  `localStorage.epubmaker.tapTurn` 立刻是 `'1'`，reload 后仍然有效。
+- 关着时点右边缘：第 78 页 → 78 页，工具条开合（ADR-43 的老行为）。
+- 打开后点右边缘：78 → 79，**工具条不动**；点左边缘：79 → 78。
+- 点页脚空白：页码不动，工具条打开——中间带 64% 没有被吃掉。
+- 单页 360 px 时边带实测 65 px，与 18% 对得上。
+
+**方法学。** "翻页不弹工具条"只有在工具条**关着**时才读得出来。第一轮我在它开着的时候点的边缘，
+读数无法区分"这次点开的"还是"本来开着的"；收尾那次点 `top + 60` 又正好落在顶部条里的"上一章"上，
+把书翻到了第 1 章。两件事都说明：这套界面的边条会盖住自己脚下的区域，验边界前先确认条是收起的。
