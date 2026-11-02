@@ -114,7 +114,7 @@ export function findTocPath(es: TocEntry[], doc: string, base = ''): string[] {
  *  folded. Folded is the resting state of a nested outline: a book with parts
  *  draws as a hundred rows once every group is open, and the rows a reader
  *  never asked for push the ones he wants off the screen. */
-export function groupKeys(es: TocEntry[], base = ''): Set<string> {
+function groupKeys(es: TocEntry[], base = ''): Set<string> {
   const out = new Set<string>();
   for (let i = 0; i < es.length; i++) {
     const e = es[i];
@@ -125,4 +125,15 @@ export function groupKeys(es: TocEntry[], base = ''): Set<string> {
     }
   }
   return out;
+}
+
+/** The fold state an outline opens with: every group closed, except the path
+ *  down to `doc` — the chapter being read. Computed where the outline lands
+ *  rather than in an effect, so the first paint is already folded. A `doc` the
+ *  outline does not name (a book imported before hierarchy support, or a
+ *  document its nav skipped) folds everything. */
+export function initialTocFold(es: TocEntry[], doc: string | undefined): Set<string> {
+  const folded = groupKeys(es);
+  if (doc) for (const k of findTocPath(es, docKey(doc))) folded.delete(k);
+  return folded;
 }

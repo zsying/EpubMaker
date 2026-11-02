@@ -75,7 +75,7 @@ import {
   countTocEntries,
   docKey,
   findTocPath,
-  groupKeys,
+  initialTocFold,
   hrefsInDoc,
   readTocView,
   TOC_VIEW_KEY,
@@ -657,6 +657,10 @@ export default function Reader() {
           (prog && exists(prog.chapterId) && prog.chapterId) ||
           cs[0]?.id ||
           null;
+        // The fold is seeded here, not in an effect: an effect would paint the
+        // outline once with every group open and fold it a frame later, which
+        // on 三体 is a 200-row jump under the reader's eyes.
+        setTocCollapsed(initialTocFold(tocEntries ?? [], cs.find((c) => c.id === target)?.href));
         if (prog && prog.chapterId === target && prog.positionOffset > 0) {
           restoreOffsetRef.current = prog.positionOffset;
           restoreCidRef.current = target;
@@ -1753,20 +1757,11 @@ export default function Reader() {
     return new Set(one ? [one] : []);
   }, [navView, toc, activeDoc, activeSection]);
 
-  // A new outline arrives with every group open. For a book with parts that is
-  // a wall — 三体 draws 3 parts / 30 chapters / 80 sections in one column — and
-  // the rows a reader did not ask for are exactly the ones between him and the
-  // row he wants. Fold the lot when the book's outline lands; the effect below
-  // opens the one path that leads to where he is.
-  useEffect(() => {
-    setTocCollapsed(groupKeys(toc));
-  }, [toc]);
-
   // Whatever the reader folds by hand, the chapter he is in stays reachable
   // without unfolding anything: its ancestors open when it changes. That is
   // also the one moment a hand-folded group should open again — he just asked
-  // to go in there. 定位 (locateCurrent) stays for the case where the path was
-  // folded after this ran.
+  // to go in there. The first fold is seeded where the outline lands (see the
+  // load effect); 定位 (locateCurrent) stays for folding the path by hand.
   useEffect(() => {
     if (!activeDoc) return;
     const path = findTocPath(toc, docKey(activeDoc));
