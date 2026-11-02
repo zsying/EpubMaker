@@ -6076,6 +6076,80 @@ html[data-app-theme='midnight'] .turn-veil-band {
   opacity: 0.75;
 }
 
+/* One saved provider per row: the tap target is "use this one", the 编辑
+   button beside it is the only way into the four fields. Splitting the verbs
+   this way is what lets 新增/改名/删除 live inside the dialog — the row keeps
+   a single meaning, which is the rule ADR-43 set for the page itself. */
+.ai-prof-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  border-top: 1px solid var(--border);
+}
+.ai-prof-pick {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 0;
+  border: 0;
+  background: none;
+  cursor: pointer;
+  text-align: left;
+  /* A thumb, not a mouse: the row must clear 44px on a phone without the
+     padding having to be re-tuned per breakpoint. */
+  min-height: 44px;
+}
+.ai-prof-dot {
+  flex: 0 0 auto;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  border: 1.5px solid var(--border-strong);
+  background: var(--panel);
+}
+.ai-prof-row.on .ai-prof-dot {
+  border-color: var(--accent);
+  background: var(--accent);
+  box-shadow: inset 0 0 0 3px var(--panel);
+}
+.ai-prof-main {
+  flex: 1;
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+}
+.ai-prof-main b {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13.5px;
+  font-weight: 600;
+  color: var(--text);
+}
+.ai-prof-main small {
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--text-3);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ai-prof-on {
+  flex: 0 0 auto;
+  font-size: 11px;
+  font-weight: normal;
+  color: var(--accent);
+}
+.ai-prof-test {
+  align-self: flex-start;
+}
+.ai-prof-del {
+  align-self: flex-start;
+  color: var(--danger);
+}
+
 /* --------------------------- AI 底部面板（C 方案） --------------------------- */
 /* Above the word card (62) and the selection toolbar (60), below the privacy
    dialog (90): the dialog decides whether the panel opens at all. */

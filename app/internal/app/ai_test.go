@@ -456,19 +456,20 @@ func TestGetAIConfigMasksKey(t *testing.T) {
 	}
 }
 
-func TestSaveAIConfigValidatesAndKeepsKey(t *testing.T) {
+func TestSaveProfileValidatesAndKeepsKey(t *testing.T) {
 	resetAI(t)
 	b := &Backend{}
-	if err := b.SaveAIConfig("api.openai.com/v1", "k", "m", ""); err == nil {
+	if _, err := b.AISaveProfile("", "", "api.openai.com/v1", "k", "m"); err == nil {
 		t.Error("a URL without a scheme must be refused")
 	}
-	if err := b.SaveAIConfig("https://api.openai.com/v1", "sk-keep-me", "gpt-4o-mini", ""); err != nil {
-		t.Fatalf("SaveAIConfig: %v", err)
+	created, err := b.AISaveProfile("", "", "https://api.openai.com/v1", "sk-keep-me", "gpt-4o-mini")
+	if err != nil {
+		t.Fatalf("AISaveProfile: %v", err)
 	}
 	// The settings page never receives the key, so a model-only change sends
 	// a blank one back — the stored key must survive it.
-	if err := b.SaveAIConfig("https://api.openai.com/v1", "", "gpt-4o", ""); err != nil {
-		t.Fatalf("SaveAIConfig (model change): %v", err)
+	if _, err := b.AISaveProfile(created.ID, created.Name, "https://api.openai.com/v1", "", "gpt-4o"); err != nil {
+		t.Fatalf("AISaveProfile (model change): %v", err)
 	}
 	cfg, err := aiconfig.Load()
 	if err != nil {
@@ -480,42 +481,160 @@ func TestSaveAIConfigValidatesAndKeepsKey(t *testing.T) {
 	if cfg.Model != "gpt-4o" {
 		t.Errorf("model = %q, want gpt-4o", cfg.Model)
 	}
+	// Editing by id must not append a second row.
+	if v, _ := b.GetAIConfig(); len(v.Profiles) != 1 {
+		t.Errorf("profiles = %+v, want the edit to update in place", v.Profiles)
+	}
 }
 
-func TestAITestConnection(t *testing.T) {
+// Two profiles, one switch: what the page does with one tap must reach the
+// call path, and the outgoing profile must be intact when the reader comes
+// back to it.
+func TestProfilesSwitchWhatTheAppCalls(t *testing.T) {
 	resetAI(t)
-	saveAIConfig(t, ai.Config{BaseURL: "http://ai.test/v1", APIKey: "sk-test", Model: "m"})
+	b := &Backend{}
+	cheap, err := b.AISaveProfile("", "便宜", "http://ai.test/v1", "sk-cheap", "cheap")
+	if err != nil {
+		t.Fatalf("AISaveProfile: %v", err)
+	}
+	strong, err := b.AISaveProfile("", "贵", "http://ai.test/v1", "sk-strong", "strong")
+	if err != nil {
+		t.Fatalf("AISaveProfile: %v", err)
+	}
+	stubAI(t, func(system, user string) (string, error) {
+		return "连接正常", nil
+	})
+
+	var seen []ai.Config
+	inner := aiAsk
+	aiAsk = func(ctx context.Context, cfg ai.Config, system, user string) (ai.Reply, error) {
+		seen = append(seen, cfg)
+		return inner(ctx, cfg, system, user)
+	}
+	t.Cleanup(func() { aiAsk = inner })
+
+	v, err := b.GetAIConfig()
+	if err != nil {
+		t.Fatalf("GetAIConfig: %v", err)
+	}
+	if v.ActiveID != cheap.ID || v.Model != "cheap" {
+		t.Fatalf("view = %+v, want the first profile in force", v)
+	}
+	if len(v.Profiles) != 2 {
+		t.Fatalf("profiles = %+v, want both rows", v.Profiles)
+	}
+	if err := b.AIActivateProfile(strong.ID); err != nil {
+		t.Fatalf("AIActivateProfile: %v", err)
+	}
+	v, _ = b.GetAIConfig()
+	if v.Model != "strong" || v.KeyHint != "…rong" {
+		t.Errorf("view = %+v, want the switched profile", v)
+	}
+	// A blank key with an id is the page's own case: it never receives the
+	// key, so the test has to resolve it from the stored profile.
+	out, err := b.AITestProfile(v.ActiveID, v.BaseURL, "", v.Model)
+	if err != nil {
+		t.Fatalf("AITestProfile: %v", err)
+	}
+	if out["ok"] != true {
+		t.Fatalf("result = %v", out)
+	}
+	if len(seen) != 1 || seen[0].APIKey != "sk-strong" {
+		t.Fatalf("provider saw %+v, want the blank key resolved from the stored profile", seen)
+	}
+
+	// Deleting the one in force leaves the other answering.
+	if err := b.AIDeleteProfile(strong.ID); err != nil {
+		t.Fatalf("AIDeleteProfile: %v", err)
+	}
+	if cfg, _ := aiconfig.Load(); cfg.Model != "cheap" {
+		t.Errorf("model = %q, want the remaining profile in force", cfg.Model)
+	}
+}
+
+func TestAITestProfile(t *testing.T) {
+	resetAI(t)
 	stubAI(t, func(system, user string) (string, error) {
 		return "连接正常", nil
 	})
 	b := &Backend{}
-	out, err := b.AITestConnection()
+	out, err := b.AITestProfile("", "http://ai.test/v1", "sk-test", "m")
 	if err != nil {
-		t.Fatalf("AITestConnection: %v", err)
+		t.Fatalf("AITestProfile: %v", err)
 	}
 	if out["ok"] != true || out["reply"] != "连接正常" {
 		t.Fatalf("result = %v", out)
 	}
 }
 
+// A half-filled form is answered as a result, not an exception: the dialog
+// prints it under the button the reader just pressed.
+func TestAITestProfileRejectsIncompleteForm(t *testing.T) {
+	resetAI(t)
+	b := &Backend{}
+	out, err := b.AITestProfile("", "https://api.test/v1", "k", "")
+	if err != nil {
+		t.Fatalf("AITestProfile should report, not throw: %v", err)
+	}
+	if out["ok"] != false {
+		t.Fatalf("result = %v, want ok=false", out)
+	}
+	if msg, _ := out["error"].(string); !strings.Contains(msg, "模型") {
+		t.Errorf("error = %q, want it to name the missing model", msg)
+	}
+}
+
 // A failed test connection is a result, not an exception: the settings page
 // shows the provider's own message.
-func TestAITestConnectionReportsFailure(t *testing.T) {
+func TestAITestProfileReportsFailure(t *testing.T) {
 	resetAI(t)
 	saveAIConfig(t, ai.Config{BaseURL: "http://ai.test/v1", APIKey: "sk-bad", Model: "m"})
 	stubAI(t, func(system, user string) (string, error) {
 		return "", &ai.StatusError{Status: 401, Body: `{"error":{"message":"invalid key"}}`}
 	})
 	b := &Backend{}
-	out, err := b.AITestConnection()
+	out, err := b.AITestProfile("", "http://ai.test/v1", "sk-bad", "m")
 	if err != nil {
-		t.Fatalf("AITestConnection should report, not throw: %v", err)
+		t.Fatalf("AITestProfile should report, not throw: %v", err)
 	}
 	if out["ok"] != false {
 		t.Fatalf("result = %v, want ok=false", out)
 	}
 	if msg, _ := out["error"].(string); !strings.Contains(msg, "401") {
 		t.Errorf("error = %q, want the provider status in the message", msg)
+	}
+}
+
+// Switching models is a tap now, so the cache must not answer for a model it
+// was not asked. Same question, same profile, one model change: asked twice.
+func TestCacheIsPerModel(t *testing.T) {
+	resetAI(t)
+	b := &Backend{}
+	p, err := b.AISaveProfile("", "便宜", "http://ai.test/v1", "sk-test", "cheap")
+	if err != nil {
+		t.Fatalf("AISaveProfile: %v", err)
+	}
+	rec := stubAI(t, func(system, user string) (string, error) {
+		return `{"meaning":"光秃的","translation":"沙滩光秃秃的。"}`, nil
+	})
+	if _, err := b.ExplainInContext("bare", "The sand was bare."); err != nil {
+		t.Fatalf("ExplainInContext: %v", err)
+	}
+	if _, err := b.ExplainInContext("bare", "The sand was bare."); err != nil {
+		t.Fatalf("ExplainInContext: %v", err)
+	}
+	if rec.calls != 1 {
+		t.Fatalf("calls = %d, want the second ask served from cache", rec.calls)
+	}
+	// Same profile, better model: the answer must be asked of it, not replayed.
+	if _, err := b.AISaveProfile(p.ID, "便宜", "http://ai.test/v1", "", "strong"); err != nil {
+		t.Fatalf("AISaveProfile: %v", err)
+	}
+	if _, err := b.ExplainInContext("bare", "The sand was bare."); err != nil {
+		t.Fatalf("ExplainInContext: %v", err)
+	}
+	if rec.calls != 2 {
+		t.Errorf("calls = %d, want the new model to be asked", rec.calls)
 	}
 }
 

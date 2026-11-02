@@ -38,34 +38,69 @@ import (
 
 /* ------------------------------ configuration ------------------------------ */
 
-// GetAIConfig returns the AI settings for the settings page, with the key
-// masked: the frontend never receives it, so it can only show whether one is
-// stored, never leak it into a screenshot or a bug report.
+// GetAIConfig returns the AI settings for the settings page, with every key
+// masked: the frontend never receives one, so it can only show whether a key
+// is stored, never leak it into a screenshot or a bug report.
 func (b *Backend) GetAIConfig() (*aiconfig.View, error) {
-	cfg, err := aiconfig.Load()
+	s, err := aiconfig.LoadStore()
 	if err != nil {
 		return nil, err
 	}
-	v := aiconfig.NewView(cfg)
+	v := aiconfig.NewView(s)
 	return &v, nil
 }
 
-// SaveAIConfig stores the settings. A blank key keeps the stored one — the
-// settings page never receives the key, so a model-only change sends a blank
-// one back. chatSystem is the standing prompt for hand-made conversations; a
-// blank one restores the built-in default (ChatSystemFor resolves it).
-func (b *Backend) SaveAIConfig(baseURL, apiKey, model, chatSystem string) error {
-	err := aiconfig.Save(ai.Config{
-		BaseURL:    baseURL,
-		APIKey:     apiKey,
-		Model:      model,
-		ChatSystem: chatSystem,
+// AISaveProfile creates (blank id) or updates one provider configuration and
+// returns the stored row. Profiles are what make switching cheap: a reader who
+// keeps a local model for the commute and a hosted one at home edits neither
+// when he moves from the train to the desk.
+//
+// A blank key keeps the stored one — the page never receives it — and a blank
+// name resolves to the provider's name, so adding a second OpenAI key does not
+// become a naming exercise.
+func (b *Backend) AISaveProfile(id, name, baseURL, apiKey, model string) (*aiconfig.ProfileView, error) {
+	p, err := aiconfig.SaveProfile(aiconfig.Profile{
+		ID: id, Name: name, BaseURL: baseURL, APIKey: apiKey, Model: model,
 	})
 	if err != nil {
-		logx.Event(logx.LevelWarn, "ai", "设置保存失败", "error", err.Error())
+		logx.Event(logx.LevelWarn, "ai", "接口配置保存失败", "error", err.Error())
+		return nil, err
+	}
+	logx.Event(logx.LevelInfo, "ai", "接口配置已保存",
+		"id", p.ID, "name", p.Name, "baseUrl", p.BaseURL, "model", p.Model,
+		"key", keyNote(apiKey))
+	row := aiconfig.ProfileViewOf(p)
+	return &row, nil
+}
+
+// keyNote says what happened to the key without ever logging it.
+func keyNote(apiKey string) string {
+	if strings.TrimSpace(apiKey) == "" {
+		return "kept"
+	}
+	return "set"
+}
+
+// AIDeleteProfile removes one configuration; the active role moves to whatever
+// is left.
+func (b *Backend) AIDeleteProfile(id string) error {
+	if err := aiconfig.DeleteProfile(id); err != nil {
+		logx.Event(logx.LevelWarn, "ai", "删除接口配置失败", "id", id, "error", err.Error())
 		return err
 	}
-	logx.Event(logx.LevelInfo, "ai", "设置已保存", "baseUrl", baseURL, "model", model)
+	logx.Event(logx.LevelInfo, "ai", "接口配置已删除", "id", id)
+	return nil
+}
+
+// AIActivateProfile switches which configuration the app calls, now and for
+// every later request. The switch is the feature, so it is one call of its own
+// rather than a flag on a save.
+func (b *Backend) AIActivateProfile(id string) error {
+	if err := aiconfig.Activate(id); err != nil {
+		logx.Event(logx.LevelWarn, "ai", "切换接口配置失败", "id", id, "error", err.Error())
+		return err
+	}
+	logx.Event(logx.LevelInfo, "ai", "已切换接口配置", "id", id)
 	return nil
 }
 
@@ -87,28 +122,42 @@ func (b *Backend) AISaveChatSystem(chatSystem string) error {
 	return nil
 }
 
-// AITestConnection makes one tiny real call against the stored settings, so
-// the settings page can show whether they work before the reader relies on
-// them. It is the only AI call the app makes without the reader asking for
-// content — and it is still an explicit button press.
-func (b *Backend) AITestConnection() (map[string]any, error) {
-	cfg, err := aiconfig.Load()
-	if err != nil {
-		return nil, err
+// AITestProfile makes one tiny real call against the values in the form, so a
+// key can be tested before it is saved. It is the only AI call the app makes
+// without the reader asking for content — and it is still an explicit button
+// press.
+//
+// A blank key with an id falls back to that profile's stored key: the page
+// never receives the key, so "test what I typed" would otherwise fail for
+// every configuration that already has one.
+func (b *Backend) AITestProfile(id, baseURL, apiKey, model string) (map[string]any, error) {
+	cfg := ai.Config{
+		BaseURL: strings.TrimSpace(baseURL),
+		APIKey:  strings.TrimSpace(apiKey),
+		Model:   strings.TrimSpace(model),
 	}
-	if !cfg.Configured() {
-		logx.Event(logx.LevelWarn, "ai", "测试连接：未配置", "file", aiconfig.Path())
-		return map[string]any{"ok": false, "error": errAINotConfigured.Error()}, nil
+	if cfg.APIKey == "" && id != "" {
+		if s, err := aiconfig.LoadStore(); err == nil {
+			if p := s.Profile(id); p != nil {
+				cfg.APIKey = p.APIKey
+			}
+		}
+	}
+	if err := aiconfig.Validate(cfg); err != nil {
+		logx.Event(logx.LevelWarn, "ai", "测试连接：表单不完整", "error", err.Error())
+		return map[string]any{"ok": false, "error": err.Error()}, nil
 	}
 	reply, err := aiAsk(context.Background(), cfg,
 		"你是一个连接测试服务，只用于验证接口可用。",
 		"请回复：连接正常")
 	if err != nil {
-		logx.Event(logx.LevelWarn, "ai", "测试连接失败", "error", err.Error())
+		logx.Event(logx.LevelWarn, "ai", "测试连接失败",
+			"baseUrl", cfg.BaseURL, "model", cfg.Model, "error", err.Error())
 		return map[string]any{"ok": false, "error": "AI 请求失败：" + err.Error()}, nil
 	}
 	if strings.TrimSpace(reply.Content) == "" {
 		logx.Event(logx.LevelWarn, "ai", "测试连接：空回答",
+			"model", cfg.Model,
 			"finish", reply.Finish,
 			"reasoningChars", itoa(len([]rune(reply.Reasoning))))
 		return map[string]any{"ok": false, "error": "接口返回了空内容，请检查模型名称"}, nil
@@ -180,15 +229,31 @@ func badReplyError(a aiAnswer) error {
 	return errAIBadReply
 }
 
+// cacheKey composes the ai_cache key for one ask: capability, model, prompt.
+//
+// Every reader and writer of the cache goes through here. Three call sites
+// building the string by hand is how the word card's cached read fell out of
+// step with what the ask wrote the moment the key grew a model field, and the
+// symptom (a card that never shows a stored explanation) points at the cache
+// rather than at the key format.
+func cacheKey(kind, system, user string) string {
+	model := ""
+	if cfg, err := aiconfig.Load(); err == nil {
+		model = cfg.Model
+	}
+	return aicache.Key(kind, model+"\n"+system+"\n"+user)
+}
+
 // askCached answers from ai_cache when possible and otherwise calls the
 // provider, storing the answer. Only non-empty answers are stored: an empty
 // reply is a soft failure the reader can retry, and a network or HTTP error is
 // not an answer at all. Caching either would make the retry button a lie.
 func askCached(ctx context.Context, kind, system, user string) (aiAnswer, error) {
-	// The key covers the exact prompt: an improved prompt invalidates the
-	// cache by itself, which is what should happen when the questions get
-	// better.
-	key := aicache.Key(kind, system+"\n"+user)
+	// The key covers the exact prompt AND the model (cacheKey): an improved
+	// prompt invalidates the cache by itself, and switching to a stronger model
+	// because an answer was bad must not hand that same bad answer back — with
+	// switching one tap away, a shared cache would make it look broken.
+	key := cacheKey(kind, system, user)
 	if e, err := aicache.Get(key); err == nil && e != nil && e.Response != "" {
 		logx.Event(logx.LevelDebug, "ai", "命中缓存",
 			"kind", kind, "chars", itoa(len([]rune(e.Response))))

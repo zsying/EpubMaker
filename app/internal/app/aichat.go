@@ -68,7 +68,7 @@ func chatSystemFor(promptID string, cfg ai.Config) string {
 // returned — a conversation row that failed to write must not fail the answer
 // the reader is already looking at.
 func recordConversation(origin, title, kind, system, user, answer string) string {
-	key := aicache.Key(kind, system+"\n"+user)
+	key := cacheKey(kind, system, user)
 	if c, err := aichat.ByCacheKey(key); err == nil && c != nil {
 		return c.ID
 	}
@@ -308,7 +308,7 @@ func (b *Backend) AIExplainCached(word, sentence string) (*ExplainResult, error)
 		return nil, nil
 	}
 	system, user := explainPrompt(word, sentence)
-	key := aicache.Key("explain", system+"\n"+user)
+	key := cacheKey("explain", system, user)
 	e, err := aicache.Get(key)
 	if err != nil || e == nil || e.Response == "" {
 		return nil, nil

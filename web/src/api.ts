@@ -132,11 +132,25 @@ export interface AIPreset {
   note?: string;
 }
 
+/** One saved provider configuration — a row of the settings list. */
+export interface AIProfileView {
+  id: string;
+  name: string;
+  baseUrl: string;
+  model: string;
+  /** Whether a key is stored for this one (it is never sent to the page). */
+  keySet: boolean;
+  /** Last four characters of its key, e.g. "…9f2a". */
+  keyHint: string;
+}
+
 /**
  * The AI settings as the settings page sees them. The key is never sent to
  * the frontend — only whether one is stored and its last four characters.
  */
 export interface AIConfigView {
+  /** The active profile's address, denormalised for callers that only ask
+   *  "what is in force" (the reader's guide, the 我的 row). */
   baseUrl: string;
   model: string;
   keySet: boolean;
@@ -145,6 +159,10 @@ export interface AIConfigView {
   /** Whether a call can be made at all (address + model filled in). */
   configured: boolean;
   presets: AIPreset[];
+  /** Every saved configuration, in its own order. */
+  profiles: AIProfileView[];
+  /** The one in force; '' when none is. */
+  activeId: string;
   /** The reader's standing prompt for hand-made chats; '' means the default. */
   chatSystem: string;
   /** The built-in default, for the placeholder and the 恢复默认 button. */
@@ -1105,16 +1123,32 @@ export const api = {
 
   /* ---------------- AI (0.4): BYOK provider, three grounded abilities ---------------- */
 
-  /** The AI settings with the key masked. Throws when the settings file is unreadable. */
+  /** The AI settings with every key masked. Throws when the settings file is unreadable. */
   aiConfig: () => call<AIConfigView>('GetAIConfig'),
 
-  /** Stores the settings. A blank key keeps the stored one (model-only change);
-   *  a blank chatSystem restores the built-in default prompt. */
-  saveAIConfig: (baseUrl: string, apiKey: string, model: string, chatSystem: string) =>
-    call<boolean>('SaveAIConfig', baseUrl, apiKey, model, chatSystem),
+  /** Creates (blank id) or updates one provider configuration, returning the
+   *  stored row. A blank key keeps the stored one; a blank name resolves to the
+   *  provider's name. */
+  aiSaveProfile: (id: string, name: string, baseUrl: string, apiKey: string, model: string) =>
+    call<AIProfileView>('AISaveProfile', id, name, baseUrl, apiKey, model),
 
-  /** One tiny real call against the stored settings; reports, never throws. */
-  aiTestConnection: () => call<{ ok: boolean; reply?: string; error?: string }>('AITestConnection'),
+  /** Removes one configuration; the active role moves to whatever is left. */
+  aiDeleteProfile: (id: string) => call<boolean>('AIDeleteProfile', id),
+
+  /** Makes this configuration the one every AI call uses. */
+  aiActivateProfile: (id: string) => call<boolean>('AIActivateProfile', id),
+
+  /** One tiny real call against the values in the form, so a key can be
+   *  tested before it is saved. A blank key falls back to that profile's
+   *  stored one. Reports, never throws. */
+  aiTestProfile: (id: string, baseUrl: string, apiKey: string, model: string) =>
+    call<{ ok: boolean; reply?: string; error?: string }>(
+      'AITestProfile',
+      id,
+      baseUrl,
+      apiKey,
+      model,
+    ),
 
   /** Stores the standing prompt for hand-made chats. A blank text restores
    *  the built-in default. */
