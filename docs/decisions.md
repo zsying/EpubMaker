@@ -2394,3 +2394,63 @@ scroll 模式点右侧既不翻页也不换章。回归全绿：`tap-hold` 6、`
 
 **一条早已存在的红。** `ai.cjs` 的「no unexpected 404s」是**改动前就红的**：用改动前的构建复跑确认过，
 读者页会回退请求一次 `/wails/runtime.js`（两次）。与本批无关，记在这里免得下次被误判成回归。
+
+## ADR-51 先把"静默丢数据"那几条堵上
+
+**问题。** 一次外部 review 加我的复核挑出一批问题，其中三条的共性是**不报错、只是内容没了**：
+它们不会崩溃、不会弹提示，用户只会在几周后发现书少了正文或者导出打不开。这类缺陷的代价远高于
+一个会崩的 bug——崩了至少知道去哪儿查。
+
+**决定。**
+
+1. **`db.Tx` 同一个时刻只跑一个事务，panic 也回滚。** 池只有一条连接（`SetMaxOpenConns(1)`），而
+   BEGIN/COMMIT 是连接级状态：第二个调用者的 BEGIN 落在第一个事务里，直接 `cannot start a transaction
+   within a transaction`。这不是理论上的并发——导入在执行事务时，AI 回复或书架操作随时可能开始另一
+   个。第二个缺陷更隐蔽：`fn` panic 后没有 ROLLBACK，事务挂在唯一那条连接上，之后**每一次写入都失败**，
+   程序看起来还活着。做法是进程级 `txMu` + `defer` 回滚，并在 BEGIN 失败时先清一次悬挂事务再重试
+   （自愈，代价是一次额外的 `ROLLBACK` 语句，只在异常路径上）。
+   **不改成 `sql.Tx`**：红线 3 要求手写 BEGIN/COMMIT，而且 `sql.Tx` 会让 `db.Open()` 在同一事务里
+   拿到另一条连接，反而破坏"事务里看到自己刚写的行"这个前提。
+
+2. **`BuildEpub` 的 `zip.Writer.Close` 错误必须返回。** 中心目录是 `Close` 写的，`defer zw.Close()`
+   把它丢了——磁盘满时导出的文件是截断的，而界面说"导出成功"。同时 asset 的 `io.Closer` 改为统一
+   在 defer 里关：它们由调用者**已经打开**后交进来，中途失败时后面那些既不读也不关，Windows 上会一直
+   占着书目录。真正的降峰值（惰性打开）属于"导出改落盘"，单独做。
+
+3. **`MergeChapters` 读不到就整体中止。** 原来的判断是 `if part, err := ...; err == nil`，读失败的
+   那份**当空内容跳过**，随后把合并结果写进目标章、再删掉所有源章——一次读失败毁两章。根因其实在
+   `GetChapterSource`：它把 `ReadContentText` 的错误吞成空串，于是"文件不存在"和"这一章真的是空的"
+   无法区分。改成让错误冒出来，三个调用点（编辑器、AI 导读、合并）都是 `return err`，符合各自的语义：
+   打不开就说打不开，比给一个空白编辑器然后在保存时写空更好。
+
+4. **`<a>` 的 href 不再是资源，而是目的地。** `urlAttrRe` 把 `href` 和 `src` 一视同仁，于是跨文档链接
+   被内联成 `data:application/xhtml+xml;base64,…`。两重错：没有东西能显示一个 XHTML data URL；而正文
+   要过 DOMPurify，`DATA_URI_TAGS` 里没有 `a`，属性会被**整个删掉**，于是每一本书的每一个脚注、每一条
+   跨章链接都变成点不动的文字。现在 `href` 从 `urlAttrRe` 移除（`<a>` 之外的 `href` 属于 SVG，仍是资源，
+   必须继续内联），改由 `DocLinksToData` 写成 `data-doc-href="<书内路径>#<锚点>"`，前端自己解析并跳转。
+   **不保留原始 href**：那会让 WebView 真的导航到 `../text/ch2.xhtml`，React 状态全丢——把"点不动"
+   换成"点了跑飞"。外部 URL 保留原值但不跟随，点一下给一句"无法在应用内打开"，因为什么都不做读起来
+   就是坏了。
+
+**踩到的三个坑（都写进了代码注释）。**
+
+- `DocLinksToData` 不能直接拿 `ResolveHref` 的返回值：它经 `NormalizeHref` 会**去掉 fragment**，而
+  `notes.xhtml#fn3` 的终点正是那个 `#fn3`。要先拆再拼。
+- scroll 模式的锚点 effect 原来用 `takeAnchorOffset(current)`。跨章跳转时第一次 pass 的 DOM 还是**上一
+  章**，查不到锚点却已经把 pending jump 消费掉，于是永远不跳。measure 那条路径一直用的是
+  `htmlChapterRef.current`（"DOM 里实际是哪一章"），scroll 这条没有——现在两边一致。
+- 同章跳转时 `safeHtml` 不变，effect 不会重跑，跳转请求躺在 ref 里没人消费。加一个 `anchorNonce`
+  计数器作为依赖。这也是目录里点"本节"（同一文档内的条目）曾经跳不动的原因。
+
+**验收。** 新门禁 `doclink.cjs` 10/10：链接有下划线与 pointer 光标；跨章链接切章并落到 `data-anc` 上
+（`top=281`，即 `scrollTextTo` 的 `clientHeight/3`）；同章链接不换章但会移动；外链给提示且不换章；
+真实触摸 tap（paged、`routeTap` 路径）同样跟随。Go 侧新增 26 条：`tx_test.go` 4 条（panic 不污染连接、
+第二个 Tx 阻塞而非失败、失败回滚并释放、悬挂事务自愈）、`build_test.go` 3 条（中心目录失败必须返回、
+失败时全部 asset 关闭、成功时也关闭）、`merge_test.go` 3 条（正常合并、源章读不到中止、目标章读不到
+中止）、`doclink_test.go` 8 条 + `render_link_test.go` 2 条。
+
+**一条测试基础设施的坑。** `tx_test.go` 一开始只用 `t.Setenv("EPUBMAKER_HOME", …)`，没调
+`config.Load(true)`。`config.Get()` 是进程单例，单独 `-run` 这几个用例时缓存还是初始值，于是测试把
+`a`/`b`/`next` 这些书架**写进了 `~/.epubmaker` 的真实库**。已清理（只留 `default`），并在 helper 里
+强制重读配置 + 结束后恢复环境。**同一份 `db_test.go` 里的迁移测试现在也有这个隐患**，只是它们总与
+其他用例一起跑才没暴露——下次动那里时要一起修。

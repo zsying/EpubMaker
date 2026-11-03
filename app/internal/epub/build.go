@@ -207,9 +207,33 @@ func ternary(cond bool, a, b string) string {
 // uncompressed (red line), then the container, document chapters, assets, and
 // the regenerated nav/ncx/opf. Assets are streamed from their readers so large
 // images are not held in memory.
-func BuildEpub(in BuildInput, w io.Writer) error {
+func BuildEpub(in BuildInput, w io.Writer) (err error) {
 	zw := zip.NewWriter(w)
-	defer zw.Close()
+	// Close writes the archive's central directory. Dropping its error, as a
+	// bare `defer zw.Close()` did, turned a full disk into an export that was
+	// reported as successful while the file was truncated — the reader then
+	// showed a book missing chapters.
+	defer func() {
+		if cerr := zw.Close(); cerr != nil && err == nil {
+			err = cerr
+		}
+	}()
+
+	// Assets arrive already opened, and ownership passes to us: the ones a
+	// failure in the middle never reaches would otherwise leak their *os.File
+	// and keep the book directory locked on Windows until the app exits.
+	var closers []io.Closer
+	for _, a := range in.Assets {
+		if rc, ok := a.Content.(io.Closer); ok {
+			closers = append(closers, rc)
+		}
+	}
+	defer func() {
+		for _, c := range closers {
+			_ = c.Close()
+		}
+	}()
+
 	zw.RegisterCompressor(zip.Deflate, func(out io.Writer) (io.WriteCloser, error) {
 		return flate.NewWriter(out, 6)
 	})
@@ -271,9 +295,6 @@ func BuildEpub(in BuildInput, w io.Writer) error {
 		}
 		if _, e := io.Copy(fw, a.Content); e != nil {
 			return e
-		}
-		if rc, ok := a.Content.(io.Closer); ok {
-			_ = rc.Close()
 		}
 	}
 

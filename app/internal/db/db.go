@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	_ "modernc.org/sqlite"
@@ -438,19 +439,57 @@ func Close() error {
 	return err
 }
 
-// Tx runs fn inside a BEGIN/COMMIT transaction, rolling back on error.
+// txMu serialises transactions. BEGIN/COMMIT are connection state, but the
+// pool hands one connection out per statement, so with MaxOpenConns(1) a second
+// caller's BEGIN landed inside the first transaction and failed with "cannot
+// start a transaction within a transaction". Importing a book while an AI reply
+// or a shelf edit writes is enough to hit it. No caller nests Tx inside Tx, so
+// a plain mutex is enough — it must not be made re-entrant without revisiting
+// that assumption.
+var txMu sync.Mutex
+
+// Tx runs fn inside a BEGIN/COMMIT transaction, rolling back on error or panic.
 func Tx(fn func() error) error {
 	d, err := Open()
 	if err != nil {
 		return err
 	}
-	if _, err := d.Exec("BEGIN"); err != nil {
+
+	txMu.Lock()
+	defer txMu.Unlock()
+
+	if err := begin(d); err != nil {
 		return err
 	}
+	// Roll back on every path that does not reach COMMIT, including a panic:
+	// the deferred call runs while the panic unwinds and then lets it continue.
+	committed := false
+	defer func() {
+		if !committed {
+			_, _ = d.Exec("ROLLBACK")
+		}
+	}()
 	if err := fn(); err != nil {
-		_, _ = d.Exec("ROLLBACK")
 		return err
 	}
-	_, err = d.Exec("COMMIT")
+	if _, err := d.Exec("COMMIT"); err != nil {
+		return err
+	}
+	committed = true
+	return nil
+}
+
+// begin starts a transaction, first clearing one that an earlier panic left
+// open. A panic that somehow escaped the rollback would otherwise make the app
+// silently unwritable until the next launch.
+func begin(d *sql.DB) error {
+	_, err := d.Exec("BEGIN")
+	if err == nil {
+		return nil
+	}
+	if _, cleanup := d.Exec("ROLLBACK"); cleanup != nil {
+		return err
+	}
+	_, err = d.Exec("BEGIN")
 	return err
 }

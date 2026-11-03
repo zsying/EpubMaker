@@ -20,10 +20,21 @@ var hRe = regexp.MustCompile(`(?is)<h[1-3][^>]*>(.*?)</h[1-3]>`)
 var svgHrefRe = regexp.MustCompile(`(?i)xlink:href\s*=\s*["']([^"']+)["']`)
 var cssUrlRe = regexp.MustCompile(`(?i)url\(\s*['"]?([^'"()]+?)['"]?\s*\)`)
 
-// urlAttrRe matches src/href/poster/data attributes. RE2 has no backreferences
-// so we capture both quotes as separate groups and require them to match
-// (q1 == q2) in the calling code before rewriting.
-var urlAttrRe = regexp.MustCompile(`(\s(?:src|href|poster|data)\s*=\s*)(["'])([^"']*?)(["'])`)
+// urlAttrRe matches the attributes that point at a resource the reader has to
+// inline as a data URL: src, poster, and the plain `data` attribute some epub3
+// widgets use. `href` is deliberately absent — it is a destination, not a
+// resource; see DocLinksToData. RE2 has no backreferences so we capture both
+// quotes as separate groups and require them to match (q1 == q2) in the calling
+// code before rewriting.
+var urlAttrRe = regexp.MustCompile(`(\s(?:src|poster|data)\s*=\s*)(["'])([^"']*?)(["'])`)
+
+// anchorTagRe matches a whole <a …> start tag. Link rewriting is scoped to it
+// because `href` also appears on SVG <image>/<use>, where it really is a
+// resource reference and must keep being inlined.
+var anchorTagRe = regexp.MustCompile(`(?is)<a\b[^>]*>`)
+
+// hrefAttrRe matches the href attribute inside one <a> tag.
+var hrefAttrRe = regexp.MustCompile(`(\shref\s*=\s*)(["'])([^"']*?)(["'])`)
 
 // ExtractBody returns the content of <body>…</body>, or the whole input if no
 // body element is present.
@@ -213,6 +224,51 @@ func IdsToAnchors(s string) string {
 	}
 	b.WriteString(s[last:])
 	return b.String()
+}
+
+// DocLinksToData turns every <a href> into data-doc-href, resolving the target
+// to a path inside the book (fragments kept as-is).
+//
+// Why not leave href alone: the old resource rewriter treated href like src and
+// inlined the whole pointed-at document as a data URL. Nothing can display an
+// XHTML data URL, and the reader purifies chapter HTML with DOMPurify, whose
+// DATA_URI_TAGS does not include `a` — so the attribute was stripped and every
+// footnote and cross-chapter link in every book became plain text. Keeping the
+// original relative href would be worse, not better: a tap would navigate the
+// WebView away from the app and throw away the React state.
+//
+// The reader owns navigation, so it gets a destination it can resolve: a path
+// relative to the book root, or an absolute URL it will refuse to follow.
+func DocLinksToData(s, fromFile string) string {
+	return anchorTagRe.ReplaceAllStringFunc(s, func(tag string) string {
+		var b strings.Builder
+		last := 0
+		for _, idx := range hrefAttrRe.FindAllStringSubmatchIndex(tag, -1) {
+			q1, q2 := tag[idx[4]:idx[5]], tag[idx[8]:idx[9]]
+			if q1 != q2 {
+				continue
+			}
+			val := tag[idx[6]:idx[7]]
+			// ResolveHref normalizes away the fragment, but for a document link
+			// the fragment *is* the destination ("notes.xhtml#fn3" is a
+			// footnote, not page one). Split it off and put it back.
+			target, frag := val, ""
+			if i := strings.IndexByte(val, '#'); i >= 0 {
+				target, frag = val[:i], val[i:]
+			}
+			if target != "" {
+				target = ResolveHref(fromFile, target)
+			}
+			b.WriteString(tag[last:idx[0]])
+			b.WriteString(` data-doc-href=` + q1 + target + frag + q1)
+			last = idx[1]
+		}
+		if last == 0 {
+			return tag
+		}
+		b.WriteString(tag[last:])
+		return b.String()
+	})
 }
 
 // CollectReferences returns the set of internal resource paths referenced by

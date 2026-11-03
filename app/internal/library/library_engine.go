@@ -62,6 +62,10 @@ func RenderChapter(bookID, chapterID string) (*ChapterRender, error) {
 	// this, every TOC entry that points inside a document (rather than at its
 	// first page) lands on the top of that document.
 	out = html.IdsToAnchors(out)
+	// Links become destinations the reader resolves itself, not data URLs. The
+	// purifier strips data: from <a>, so inlining them left every footnote and
+	// cross-chapter link dead; see html.DocLinksToData.
+	out = html.DocLinksToData(out, ch.Href)
 	return &ChapterRender{Title: ch.Title, HTML: out}, nil
 }
 

@@ -797,7 +797,10 @@ func GetChapterSource(bookID, chapterID string) (*ChapterSource, error) {
 	}
 	raw, err := storage.ReadContentText(bookID, ch.Href)
 	if err != nil {
-		raw = ""
+		// Reporting an unreadable file as an empty chapter is what let a merge
+		// write that emptiness over the target and then delete its sources. A
+		// chapter that cannot be read is an error, not an empty chapter.
+		return nil, fmt.Errorf("读取章节「%s」失败: %w", ch.Title, err)
 	}
 	return &ChapterSource{Title: ch.Title, HTML: strings.TrimSpace(html.ExtractBody(raw))}, nil
 }
@@ -1024,14 +1027,24 @@ func MergeChapters(bookID, targetID string, sourceIDs []string) ([]ChapterDTO, e
 	if len(sources) == 0 {
 		return chapters, nil
 	}
+	// Every part is read before anything is written. A source that disappears
+	// between the listing and the read must fail the merge: skipping it wrote a
+	// short target and then deleted that source, losing the text for good.
 	merged := ""
-	if t, err := GetChapterSource(bookID, targetID); err == nil && t != nil {
+	if t, err := GetChapterSource(bookID, targetID); err != nil {
+		return nil, err
+	} else if t != nil {
 		merged = t.HTML
 	}
 	for _, s := range sources {
-		if part, err := GetChapterSource(bookID, s.ID); err == nil && part != nil {
-			merged += "\n<hr class=\"epubmaker-merge\"/>\n" + part.HTML
+		part, err := GetChapterSource(bookID, s.ID)
+		if err != nil {
+			return nil, err
 		}
+		if part == nil {
+			return nil, fmt.Errorf("章节「%s」已不存在", s.Title)
+		}
+		merged += "\n<hr class=\"epubmaker-merge\"/>\n" + part.HTML
 	}
 	if _, err := UpdateChapter(bookID, targetID, ChapterPatch{HTML: &merged}); err != nil {
 		return nil, err

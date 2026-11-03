@@ -1169,6 +1169,18 @@ a {
   margin: 2em 0;
 }
 
+/* Links carry data-doc-href instead of href (the backend rewrites them, see
+   followDocLink): without an href the browser gives <a> neither link colour nor
+   a pointer cursor, so a footnote looks exactly like the text around it. The
+   colour has to come from the theme — the reader ships a sepia and a dark one,
+   and a hard-coded blue is unreadable on both. */
+.reader-content a[data-doc-href] {
+  color: var(--accent);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  cursor: pointer;
+}
+
 .reader-nav {
   display: flex;
   justify-content: space-between;

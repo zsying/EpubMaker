@@ -583,6 +583,12 @@ export default function Reader() {
   // text offset by the first measure pass / scroll restore that holds that
   // chapter, because the element only exists once the HTML is in the DOM.
   const anchorJumpRef = useRef<{ cid: string; anchor: string } | null>(null);
+  // Bumped by every anchor jump. The scroll effect below is keyed on safeHtml,
+  // which does not change when the destination is in the chapter already on
+  // screen — a footnote that points further down the same document. Without a
+  // counter the effect never runs and the reader stays where it was, with the
+  // pending jump sitting unconsumed in the ref.
+  const [anchorNonce, setAnchorNonce] = useState(0);
   // The chapter whose html was last handed to setHtml. setCurrent immediately
   // re-runs the render effect (the annotation list changed) while the DOM
   // still holds the PREVIOUS chapter, and that pass can beat the
@@ -827,7 +833,12 @@ export default function Reader() {
   useEffect(() => {
     if (mode !== 'scroll' || !anchorJumpRef.current) return;
     if (!contentRef.current) return;
-    const off = takeAnchorOffset(current);
+    // Ask about the chapter the DOM actually holds, not the one that was just
+    // selected: on a cross-chapter jump the first pass runs while the body is
+    // still the previous chapter, and a lookup against the new id would find no
+    // anchor, consume the pending jump anyway and drop it. The measure pass has
+    // always done it this way; the scroll path did not.
+    const off = takeAnchorOffset(htmlChapterRef.current);
     if (off === null) return;
     const after = scrollTextTo(off);
     if (!after) return;
@@ -841,7 +852,7 @@ export default function Reader() {
     const timer = window.setTimeout(() => setFlash(null), 1400);
     return () => window.clearTimeout(timer);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [safeHtml, mode]);
+  }, [safeHtml, mode, anchorNonce]);
 
   // The word a 生词本 jump points at stays lit for as long as you are on the
   // page — the highlight marks the spot; no menus are raised by themselves.
@@ -1847,7 +1858,37 @@ export default function Reader() {
     anchorJumpRef.current = null;
     const anchor = href ? anchorIdOf(href) : '';
     openChapter(cid, { type: 'first' });
-    if (anchor) anchorJumpRef.current = { cid, anchor };
+    if (anchor) {
+      anchorJumpRef.current = { cid, anchor };
+      setAnchorNonce((n) => n + 1);
+    }
+  }
+
+  /** Follow a `<a data-doc-href>` from the chapter body. The backend rewrites
+   *  every link's href into that attribute: a real href would navigate the
+   *  webview out of the app and lose the reader's state, and a data: href is
+   *  stripped by the purifier (so the link silently stopped working). The
+   *  destination is a path from the book root plus an optional fragment.
+   *  Returns true when the tap belonged to a link. */
+  function followDocLink(a: HTMLElement): boolean {
+    const dest = a.dataset.docHref;
+    if (!dest) return false;
+    // Another site cannot be rendered as a chapter, and navigating the webview
+    // to it would throw the reader's state away. Say so instead of doing
+    // nothing, which reads as a broken tap.
+    if (/^[a-z][a-z0-9+.-]*:/i.test(dest) || dest.startsWith('//')) {
+      toast('外部链接无法在应用内打开');
+      return true;
+    }
+    const path = docKey(dest);
+    const anchor = anchorIdOf(dest);
+    let cid: string | null = current;
+    if (path) {
+      cid = chapters.find((c) => docKey(c.href) === path)?.id ?? null;
+    }
+    if (!cid) return false;
+    pickToc(cid, anchor ? `#${anchor}` : undefined);
+    return true;
   }
 
   // The width of one spread: what the band travels across during a turn, and
@@ -1941,6 +1982,12 @@ export default function Reader() {
       }
       return;
     }
+    // A footnote or cross-chapter link, above the page-turn zones: the link is
+    // a specific target the author put there, the zone is a strip the reader
+    // switched on, and a footnote number often sits inside that strip. Above
+    // the word lookup for the same reason — a link's text is words too.
+    const link = el?.closest('a[data-doc-href]') as HTMLElement | null;
+    if (link && followDocLink(link)) return;
     // 点两侧翻页, when the switch is on. Deliberately ABOVE the word lookup:
     // the strip is a fifth of a page wide, so text lives inside it, and a lookup
     // that won this race would leave the switch answering only on the blank
@@ -2109,8 +2156,14 @@ export default function Reader() {
   function onStageClick(e: ReactMouseEvent) {
     // Ignore clicks on interactive content and active text selections.
     const target = e.target as HTMLElement;
+    // A link in the chapter body: the reader navigates, not the webview.
+    const link = target.closest('a') as HTMLElement | null;
+    if (link) {
+      e.preventDefault();
+      followDocLink(link);
+      return;
+    }
     if (
-      target.closest('a') ||
       target.closest('button') ||
       target.closest('mark.hl') ||
       target.closest('input') ||
@@ -2721,12 +2774,13 @@ export default function Reader() {
       // click against the page-turn zones; scrolling has none, so the lookup
       // happens here.
       if (mode !== 'scroll') return;
-      if (
-        target.closest('a') ||
-        target.closest('button') ||
-        target.closest('input') ||
-        target.closest('textarea')
-      ) {
+      const link = target.closest('a') as HTMLElement | null;
+      if (link) {
+        e.preventDefault();
+        followDocLink(link);
+        return;
+      }
+      if (target.closest('button') || target.closest('input') || target.closest('textarea')) {
         return;
       }
       const selection = window.getSelection();
