@@ -1,9 +1,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import DOMPurify from 'dompurify';
-import { api, Book, Chapter, ImageAsset, TocEntry, downloadDataUrl } from '../api';
+import { api, Book, Chapter, ImageAsset, TocEntry } from '../api';
 import { buildTocItems, visibleTocItems } from '../tocLayout';
 import { Caret } from '../Caret';
+import { exportBookToHost } from '../exportEpub';
 import { toast, toastError } from '../toast';
 import SubHeader from '../components/SubHeader';
 
@@ -256,12 +257,7 @@ export default function Editor() {
   const safePreview = useMemo(() => DOMPurify.sanitize(chHtml), [chHtml]);
 
   async function exportBook() {
-    try {
-      const { filename, dataUrl } = await api.exportBook(id);
-      downloadDataUrl(filename, dataUrl);
-    } catch (e) {
-      toastError(e);
-    }
+    await exportBookToHost(id);
   }
 
   if (loading) return <div className="loading">加载中…</div>;

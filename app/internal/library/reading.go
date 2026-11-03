@@ -66,12 +66,18 @@ func ListProgress() ([]BookProgress, error) {
 	if err != nil {
 		return nil, err
 	}
+	// Same rule as the bookmark and annotation lists: a cross-book view does
+	// not show a locked shelf. This one used to join straight through and hand
+	// back a book id plus its percentage — on a shelf of one, that is the book.
+	frag, fargs := notLockedSQL("b.shelf_id")
 	rows, err := d.Query(`
 		SELECT rp.book_id, c.idx,
 		       (SELECT COUNT(*) FROM chapters c2 WHERE c2.book_id = rp.book_id),
 		       rp.updated_at
 		FROM reading_progress rp
-		JOIN chapters c ON c.id = rp.chapter_id`)
+		JOIN chapters c ON c.id = rp.chapter_id
+		JOIN books b ON b.id = rp.book_id
+		WHERE b.deleted_at IS NULL`+frag, fargs...)
 	if err != nil {
 		return nil, err
 	}
@@ -98,6 +104,10 @@ func ListProgress() ([]BookProgress, error) {
 }
 
 func GetProgress(bookID string) (*ReadingProgress, error) {
+	// Where a locked book was left off is the locked book's data too.
+	if err := requireUnlocked(bookID); err != nil {
+		return nil, err
+	}
 	d, err := db.Open()
 	if err != nil {
 		return nil, err
@@ -116,6 +126,9 @@ func GetProgress(bookID string) (*ReadingProgress, error) {
 }
 
 func SaveProgress(bookID, chapterID string, positionOffset, pageCount int) (*ReadingProgress, error) {
+	if err := requireUnlocked(bookID); err != nil {
+		return nil, err
+	}
 	if positionOffset < 0 {
 		positionOffset = 0
 	}
@@ -145,6 +158,10 @@ func SaveProgress(bookID, chapterID string, positionOffset, pageCount int) (*Rea
 /* ----------------------------- bookmarks ----------------------------- */
 
 func ListBookmarks(bookID string) ([]Bookmark, error) {
+	// Labels and anchors describe the text a locked shelf is hiding.
+	if err := requireUnlocked(bookID); err != nil {
+		return nil, err
+	}
 	d, err := db.Open()
 	if err != nil {
 		return nil, err
@@ -174,6 +191,9 @@ func ListBookmarks(bookID string) ([]Bookmark, error) {
 // after a request the frontend lost track of) is therefore idempotent without
 // having to ask first, and without a check-then-insert window between them.
 func AddBookmark(bookID, chapterID string, anchor int, label string) (*Bookmark, error) {
+	if err := requireUnlocked(bookID); err != nil {
+		return nil, err
+	}
 	d, err := db.Open()
 	if err != nil {
 		return nil, err
@@ -211,6 +231,10 @@ func bookmarkAt(d *sql.DB, bookID, chapterID string, anchor int) (*Bookmark, err
 }
 
 func DeleteBookmark(id string) error {
+	// Addressed by its own id, but it writes into the shelf it belongs to.
+	if err := requireUnlockedRow("bookmarks", id); err != nil {
+		return err
+	}
 	d, err := db.Open()
 	if err != nil {
 		return err
@@ -222,6 +246,10 @@ func DeleteBookmark(id string) error {
 /* ----------------------------- annotations ----------------------------- */
 
 func ListAnnotations(bookID string) ([]Annotation, error) {
+	// Highlighted text is a quote of what the shelf is hiding.
+	if err := requireUnlocked(bookID); err != nil {
+		return nil, err
+	}
 	d, err := db.Open()
 	if err != nil {
 		return nil, err
@@ -246,6 +274,9 @@ func ListAnnotations(bookID string) ([]Annotation, error) {
 }
 
 func AddAnnotation(bookID, chapterID string, startOffset, endOffset, pageIndex int, text, color, note string) (*Annotation, error) {
+	if err := requireUnlocked(bookID); err != nil {
+		return nil, err
+	}
 	d, err := db.Open()
 	if err != nil {
 		return nil, err
@@ -276,6 +307,9 @@ func AddAnnotation(bookID, chapterID string, startOffset, endOffset, pageIndex i
 }
 
 func GetAnnotation(id string) (*Annotation, error) {
+	if err := requireUnlockedRow("annotations", id); err != nil {
+		return nil, err
+	}
 	d, err := db.Open()
 	if err != nil {
 		return nil, err
@@ -292,6 +326,9 @@ func GetAnnotation(id string) (*Annotation, error) {
 }
 
 func UpdateAnnotation(id, color, note string) (*Annotation, error) {
+	if err := requireUnlockedRow("annotations", id); err != nil {
+		return nil, err
+	}
 	if color == "" {
 		color = "yellow"
 	}
@@ -309,6 +346,9 @@ func UpdateAnnotation(id, color, note string) (*Annotation, error) {
 }
 
 func DeleteAnnotation(id string) error {
+	if err := requireUnlockedRow("annotations", id); err != nil {
+		return err
+	}
 	d, err := db.Open()
 	if err != nil {
 		return err

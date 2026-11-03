@@ -798,20 +798,12 @@ export async function pickDictFile(): Promise<string | null> {
   return path || null;
 }
 
-export function downloadDataUrl(filename: string, dataUrl: string): void {
-  const a = document.createElement('a');
-  a.href = dataUrl;
-  a.download = filename;
-  document.body.appendChild(a);
-  a.click();
-  a.remove();
-}
-
 /**
  * Whether this host can hand a file to the Android share sheet: only the
  * Android runtime injects EpubMakerNative (the v3 runtime owns window.wails,
- * so the export surface got its own name). A desktop or a plain browser
- * preview has no such object and keeps the download flow.
+ * so the export surface got its own name). A desktop has no such object and
+ * takes the native save dialog instead — an ACTION_SEND intent needs a real
+ * file behind a FileProvider, which is why the phone cannot use it.
  */
 export function canShareEpubFile(): boolean {
   return typeof (window as any).EpubMakerNative?.shareExport === 'function';
@@ -988,8 +980,11 @@ export const api = {
     deleteSource: boolean,
   ) => call<Book[]>('SplitBook', bookId, parts, deleteSource),
 
-  /** Builds the EPUB and returns it inline as { filename, dataUrl }. */
-  exportBook: (bookId: string) => call<{ filename: string; dataUrl: string }>('ExportBook', bookId),
+  /** Asks for a destination with the native save dialog and builds the EPUB
+   * straight into it. `cancelled` is an answer, not an error — the reader
+   * closed the dialog and there is nothing to report. */
+  exportBookTo: (bookId: string) =>
+    callApp<{ path?: string; filename?: string; cancelled?: boolean }>('ExportBookTo', bookId),
 
   /** Builds the EPUB into the app's export staging dir and answers with the
    * absolute path plus its file name — the phone's share sheet needs a real

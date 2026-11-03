@@ -102,9 +102,24 @@ func TestThumbnailKeepsTheColoursWhereTheyWere(t *testing.T) {
 	}
 }
 
-// The whole point: a shelf-sized answer. A full cover is ~400 KB of base64;
-// the preview has to be an order of magnitude smaller or nothing improved.
-func TestThumbnailIsAnOrderOfMagnitudeSmaller(t *testing.T) {
+// The whole point: a shelf-sized answer. A full cover is ~400 KB of base64, so
+// the preview has to be small in absolute terms or nothing improved.
+//
+// This used to assert `len(thumb) < len(cover)/8`, which is a statement about
+// PNG's compressor rather than about the thumbnail. The cover built above is two
+// flat colours, which PNG encodes to 10163 bytes on go1.26 and 40510 on go1.27 —
+// the same 3246-byte thumbnail passed on one toolchain and failed on the other.
+// A real jacket is a photograph, where the ratio is nearer 1/50 anyway.
+//
+// Two assertions for two different regressions: the byte cap catches "someone
+// raised the quality or swapped the encoder", the pixel cap below catches
+// "someone dropped the downscale call" — and the pixel cap is the one that does
+// not care how well the source happens to compress.
+func TestThumbnailFitsTheShelfBudget(t *testing.T) {
+	// Twenty cards on one screen at the cap below is ~1.3 MB of data URLs; the
+	// same twenty full covers were 16 MB, which is what this change is about.
+	const budget = 64 << 10
+
 	cover := bigCover(t)
 	start := time.Now()
 	thumb, err := writeThumb("book-thumb-test", "covers/cover.png", cover)
@@ -112,14 +127,15 @@ func TestThumbnailIsAnOrderOfMagnitudeSmaller(t *testing.T) {
 	if err != nil {
 		t.Fatalf("writeThumb: %v", err)
 	}
-	if len(thumb) >= len(cover)/8 {
-		t.Errorf("thumbnail is %d bytes against a %d byte cover — not a thumbnail", len(thumb), len(cover))
+	if len(thumb) > budget {
+		t.Errorf("thumbnail is %d bytes, over the %d KiB budget", len(thumb), budget>>10)
 	}
 	if b := decodeJPEG(t, thumb).Bounds(); b.Dx() > thumbMaxW || b.Dy() > thumbMaxH {
 		t.Errorf("stored thumbnail is %dx%d, above the cap", b.Dx(), b.Dy())
 	}
 	// Reported, not asserted: this runs once per book, at import time.
-	t.Logf("1200x1800 cover → %d byte thumbnail in %v", len(thumb), elapsed.Round(time.Millisecond))
+	t.Logf("1200x1800 cover (%d bytes) → %d byte thumbnail in %v",
+		len(cover), len(thumb), elapsed.Round(time.Millisecond))
 }
 
 // Reading it back must not re-encode: the second call is served from disk.

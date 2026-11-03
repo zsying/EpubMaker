@@ -8,19 +8,9 @@ import {
 } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { useBackClose } from '../backNav';
-import {
-  api,
-  Book,
-  canShareEpubFile,
-  DictStatus,
-  downloadDataUrl,
-  isDesktopHost,
-  pickEpubFiles,
-  pickImageFile,
-  shareEpubFile,
-  Shelf,
-} from '../api';
+import { api, Book, DictStatus, isDesktopHost, pickEpubFiles, pickImageFile, Shelf } from '../api';
 import { isTouchPrimary, prefersReducedMotion } from '../device';
+import { exportBookToHost } from '../exportEpub';
 import { canResolveDropPaths, onDroppedFiles } from '../filedrop';
 import { currentShelfId as readShelfId, DEFAULT_SHELF_ID, rememberShelfId } from '../shelfState';
 import { toast, toastError } from '../toast';
@@ -640,22 +630,10 @@ export default function Library() {
   const isFileDrag = (e: ReactDragEvent) =>
     Array.from(e.dataTransfer?.types ?? []).includes('Files');
 
-  // Desktop: build inline and let the browser download. Phone: there is no
-  // download to trigger, so the built file goes to the system share sheet and
-  // the reader sends it wherever they like.
+  // The host decides where the file goes: the share sheet on the phone, the
+  // native save dialog on the desktop. See exportEpub.ts.
   async function exportBook(book: Book) {
-    try {
-      if (canShareEpubFile()) {
-        toast('正在生成 EPUB…');
-        const { path, filename } = await api.exportBookFile(book.id);
-        shareEpubFile(path, filename);
-        return;
-      }
-      const { filename, dataUrl } = await api.exportBook(book.id);
-      downloadDataUrl(filename, dataUrl);
-    } catch (e) {
-      toastError(e);
-    }
+    await exportBookToHost(book.id);
   }
 
   // Opens the native csv picker and builds the local dictionary. This blocks

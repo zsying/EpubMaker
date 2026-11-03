@@ -5,20 +5,69 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"testing"
 
 	"epubmaker-desktop/internal/config"
 )
 
+// isolateHome points the config singleton at a throwaway home for one test and
+// returns the database path inside it.
+//
+// t.Setenv alone is not enough. config caches the first path it resolved for the
+// whole test binary, so a test that runs after any other config.Get() keeps
+// writing to the earlier database — and which database that is depends on which
+// test asked first. An earlier version of tx_test.go used only t.Setenv and left
+// six test shelves in a developer's real ~/.epubmaker library. The reload below
+// is what makes the answer independent of ordering.
+func isolateHome(t *testing.T) string {
+	t.Helper()
+	Close() // the shared handle must not keep pointing at the previous home
+
+	prev, had := os.LookupEnv("EPUBMAKER_HOME")
+	os.Setenv("EPUBMAKER_HOME", t.TempDir())
+	if _, err := config.Load(true); err != nil {
+		t.Fatalf("config: %v", err)
+	}
+	t.Cleanup(func() {
+		Close()
+		if had {
+			os.Setenv("EPUBMAKER_HOME", prev)
+		} else {
+			os.Unsetenv("EPUBMAKER_HOME")
+		}
+		_, _ = config.Load(true)
+	})
+	return config.Get().Paths.DbFile
+}
+
+// The guard for the bug isolateHome exists for: coming in after the cache is
+// already warm must still land in a temp directory, never in the real home.
+func TestIsolateHomeOverridesACachedConfig(t *testing.T) {
+	// Warm the cache the way any earlier test would: whatever this process is
+	// currently pointed at, which is the real home when the suite runs unfiltered.
+	before, err := config.Load(true)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	got := isolateHome(t)
+	if got == before.Paths.DbFile {
+		t.Fatalf("isolateHome kept the cached database %s", got)
+	}
+	home := os.Getenv("EPUBMAKER_HOME")
+	if !strings.HasPrefix(got, home+string(os.PathSeparator)) {
+		t.Errorf("database %s is not under the temp home %s", got, home)
+	}
+}
+
 // A notebook created before scheduling existed must gain the SRS columns on the
 // next open, with defaults that make every old word due immediately rather than
 // silently dropping it out of the queue.
 func TestMigrateAddsSchedulingToOldNotebook(t *testing.T) {
-	t.Setenv("EPUBMAKER_HOME", t.TempDir())
-
 	// Build the table as it looked before `reviews` even existed, then let Open
 	// run the whole ALTER chain over it.
-	path := config.Get().Paths.DbFile
+	path := isolateHome(t)
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -69,9 +118,7 @@ func TestMigrateAddsSchedulingToOldNotebook(t *testing.T) {
 // existing database must not start with an empty history page: the migration
 // seeds it from the pending-lookup counters and the notebook itself.
 func TestMigrateSeedsLookupHistory(t *testing.T) {
-	t.Setenv("EPUBMAKER_HOME", t.TempDir())
-
-	path := config.Get().Paths.DbFile
+	path := isolateHome(t)
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -152,9 +199,7 @@ func TestMigrateSeedsLookupHistory(t *testing.T) {
 // index over a table that already holds copies would fail and take the whole
 // open with it.
 func TestMigrateCollapsesDuplicateBookmarks(t *testing.T) {
-	t.Setenv("EPUBMAKER_HOME", t.TempDir())
-
-	path := config.Get().Paths.DbFile
+	path := isolateHome(t)
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -162,8 +207,9 @@ func TestMigrateCollapsesDuplicateBookmarks(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// config.Get() is cached for the whole test binary, so this file may be one
-	// an earlier test already migrated. Start from the shape the bug left behind.
+	// The DROPs are belt and braces: isolateHome gives this test a fresh file, so
+	// the tables are absent already, but starting from the shape the bug left
+	// behind should not depend on that.
 	if _, err := old.Exec(`
 		DROP TABLE IF EXISTS bookmarks;
 		DROP TABLE IF EXISTS books;
@@ -226,7 +272,7 @@ func TestMigrateCollapsesDuplicateBookmarks(t *testing.T) {
 }
 
 func TestOpenAndMigrate(t *testing.T) {
-	t.Setenv("EPUBMAKER_HOME", t.TempDir())
+	isolateHome(t)
 
 	d, err := Open()
 	if err != nil {

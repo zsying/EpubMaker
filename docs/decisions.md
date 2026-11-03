@@ -2454,3 +2454,67 @@ scroll 模式点右侧既不翻页也不换章。回归全绿：`tap-hold` 6、`
 `a`/`b`/`next` 这些书架**写进了 `~/.epubmaker` 的真实库**。已清理（只留 `default`），并在 helper 里
 强制重读配置 + 结束后恢复环境。**同一份 `db_test.go` 里的迁移测试现在也有这个隐患**，只是它们总与
 其他用例一起跑才没暴露——下次动那里时要一起修。
+
+## ADR-52 规则写在两个地方，就等于没写
+
+**问题。** 三件事，一个毛病：规矩写在了**某个**调用点上，而不是它该在的那一层。
+
+1. **ADR-51 结尾自己留的作业**：`db_test.go` 的三个迁移用例只 `t.Setenv("EPUBMAKER_HOME", …)`。
+   `config.Get()` 是进程单例，**第一次**调用就把路径定死了，后面的 `Setenv` 全是空操作。整套测试
+   一起跑时第一个用例恰好赢，所以一直没暴露；单独 `-run` 某个用例、而它又不是第一个碰
+   `config.Get()` 的人时，它写的是 `~/.epubmaker` 的真实库。上一批在 `tx_test.go` 里修过一次，
+   同一份文件里的迁移用例没跟上——**在 ADR 里写"下次一起修"，就是承认这次没修**。
+2. **书架锁只守在两个出口**：`GetBook` 和 `GetChapterRow`。导出、拆分、改名、换封面、目录（每一条
+   章节标题）、`ListAssets`（每个 href）、`AssetFilePath`（直接给出磁盘路径）、阅读位置、书签、
+   批注——全部裸奔。锁买到的是"这个书架不该被打开"，而上面每一个入口拿到的都是同样的东西。
+3. **导出要路过 WebView**：整本 EPUB 建进 `bytes.Buffer`，base64，交给 JS，由浏览器下载。一本
+   300 页的书同时在内存里有三份（buffer、base64、JS 字符串），而桌面端能做的只有"存到默认下载
+   目录"——读者点"导出"想要的通常是**另存到某处**。
+
+**决定。**
+
+1. **测试隔离收敛到一个 helper。** `internal/db/db_test.go` 新增 `isolateHome(t) string`：
+   `Close()`（丢掉指向旧库的句柄）→ 设 `EPUBMAKER_HOME` → `config.Load(true)` 强制重读 → 注册
+   cleanup 恢复环境并再重读一次。`tx_test.go` 的 `openForTest` 改成调它，两处不再各写一份。
+   配一条 `TestIsolateHomeOverridesACachedConfig`：先 `config.Load(true)` 把缓存烤热（全量跑时那
+   就是真实 home），再断言 `isolateHome` 给的路径在临时目录下、且不等于刚才那个。
+2. **锁下沉到 `GetBookRow`，其余入口一行 `requireUnlocked`。** `GetBookRow` 是"按 id 取书"的共同
+   上游——导出、拆分、改名、换封面、目录、编辑器全都过它，所以守卫放这里，新调用者**继承**而不是
+   需要记得。`GetChapterRow` 管正文。剩下那些直接查 `chapters` / `assets` / `reading_progress` /
+   `bookmarks` / `annotations` 的（`ListChapters`、`ListAssets`、`GetProgress`、`SaveProgress`、
+   `AddBookmark`、`AddAnnotation`、`AssetFilePath` …）各加一行 `requireUnlocked(bookID)`；按自身 id
+   寻址的（书签、批注）用 `requireUnlockedRow(table, id)` 先查出 `book_id` 再判断。
+   **不选**在 SQL 层拼 `shelf_id NOT IN (…)`：chapters/assets 都是 `book_id` 外键，要写成子查询，
+   而拼串的漏点比函数调用更难数。
+3. **枚举式测试是这条规则的执行者。** `TestLockedShelfRefusesEveryExit` 把**每一个**以 book id
+   取数的导出函数列成表（33 条），逐条断言 `ErrShelfLocked`；`TestUnlockingRestoresEveryExit` 断言
+   解锁后全部恢复。新增入口忘了守卫，红的是这张表——这是唯一真正守住了的机制。
+4. **导出直接写目标文件。** `library.ExportBookToFile(bookID, dst)` 把 `ExportBook` 的字节流打进同
+   目录的临时文件，成功后再 rename；`App.ExportBookTo` 用原生保存对话框拿路径，取消返回
+   `{"cancelled": true}`（不是错误）。`Backend.ExportBook`（base64 那条）和前端 `downloadDataUrl`
+   一起删掉，桌面端不再有第二条导出路径。手机保持 `ExportBookFile` + 分享。
+5. **`go.mod` 钉 `toolchain go1.27.0`。**
+
+**三个假绿，都是这次才发现的。**
+
+- **`UpdateBook` 先写库、最后调 `GetBook` 拿返回值。** 守卫放在 `GetBook` 时它照样 `UPDATE` 成功，
+  然后带着 `ErrShelfLocked` 返回——测试看到正确的错误，数据已经改了。所以枚举之外另加
+  `assertShelfUntouched`：书的标题、章节数、资源数、阅读位置、书签数、批注颜色全部逐项核对。
+  **"返回了正确的错误"和"什么都没做"是两件事。**
+- **`len(thumb) < len(cover)/8` 测的是 PNG 编码器，不是缩略图。** 那张基准封面是两色平涂，PNG 在
+  go1.26 下编出 10163 字节、go1.27 下 40510——同一个 3246 字节的缩略图在一台机器上绿、另一台上红。
+  改成绝对预算 64 KiB（一屏二十本约 1.3 MB，正是这次改动的目标），并保留像素上限断言：**字节预算
+  抓"谁把质量调高了"，像素上限抓"谁删掉了 downscale"**，后者不受源图压缩率影响。
+- **`ListTrash` 用了 `GetBookRow`。** 守卫一下沉，回收站列表会把 `ErrShelfLocked` 当致命错误抛出去，
+  整个回收站打不开。改成把拒绝本身当作"跳过这一条"的信号。
+
+**手机上的导出其实不在编辑页。** `Editor` 是 `DesktopOnly`，390px 下点进去只有一句"整理功能只在
+桌面端提供"；手机导出的入口是长按封面弹出的 sheet。所以虽然 `exportBookToHost` 的判断在编辑页永远
+走桌面分支，它仍然是必需的——UI 的可见性和能力的可用性不是一回事，而两者都会变。
+
+**验收。** `export-file.cjs` 8/8（桌面调一次 `ExportBookTo`、不碰 `ExportBookFile`、有提示；取消
+时一条 toast 都不出；手机走长按菜单 → `ExportBookFile` → 分享，且**从不**打开保存对话框）。
+Go 侧新增 24 条：`lock_guard_test.go` 2 条（33 个出口 + 解锁恢复）、`export_test.go` 4 条（真的
+能打开、能覆盖、失败不留半截、锁定书架拒绝导出）、`db_test.go` 1 条隔离守卫、其余为既有用例适配。
+`go test ./...`、`go vet`、`gofmt`、`tsc`、`prettier` 干净；`shelves` 54、`verify` 19、`mobile` 193
+回归全绿。

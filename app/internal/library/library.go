@@ -10,6 +10,7 @@ import (
 	"database/sql"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -316,6 +317,14 @@ func toChapterDTO(c ChapterRow) ChapterDTO {
 /* ----------------------------- queries ----------------------------- */
 
 func GetBookRow(id string) (*BookRow, error) {
+	// The gate every path that reaches a book by id passes through: the editor,
+	// the export, the split, the cover swap, the outline, the outline's titles.
+	// The lock used to be checked in GetBook and GetChapterRow only, which left
+	// all of those open; putting it here means a new caller inherits the guard
+	// instead of having to remember it.
+	if err := requireUnlocked(id); err != nil {
+		return nil, err
+	}
 	d, err := db.Open()
 	if err != nil {
 		return nil, err
@@ -419,11 +428,8 @@ func warmMissingThumbs(books []BookRow) {
 }
 
 func GetBook(id string) (*BookDTO, error) {
-	// A locked shelf's books are not openable, and the guard belongs here
+	// A locked shelf's books are not openable, and the guard sits in GetBookRow
 	// rather than in the shelf page: /books/:id/read is one typed URL away.
-	if bookShelfLocked(id) {
-		return nil, ErrShelfLocked
-	}
 	row, err := GetBookRow(id)
 	if err != nil {
 		return nil, err
@@ -465,6 +471,11 @@ func GetBookTOC(bookID string) ([]epub.TOCEntry, error) {
 }
 
 func ListChapters(bookID string) ([]ChapterDTO, error) {
+	// The outline carries every chapter title, which is most of what a shelf
+	// page would have been hiding.
+	if err := requireUnlocked(bookID); err != nil {
+		return nil, err
+	}
 	d, err := db.Open()
 	if err != nil {
 		return nil, err
@@ -508,6 +519,11 @@ func GetChapterRow(bookID, chapterID string) (*ChapterRow, error) {
 }
 
 func ListAssets(bookID string) ([]AssetRow, error) {
+	// Asset hrefs name the chapter files themselves: "chapters/03.xhtml" plus a
+	// size is already a table of contents.
+	if err := requireUnlocked(bookID); err != nil {
+		return nil, err
+	}
 	d, err := db.Open()
 	if err != nil {
 		return nil, err
@@ -671,13 +687,14 @@ func ListTrash() ([]TrashItem, error) {
 			id = e.Name()
 		}
 		row, err := GetBookRow(id)
+		// A locked shelf's books stay out of the trash list too: "deleted" must
+		// not become the way to read the titles the shelf is hiding. GetBookRow
+		// refuses them now, so the refusal itself is the signal to skip.
+		if errors.Is(err, ErrShelfLocked) {
+			continue
+		}
 		if err != nil {
 			return nil, err
-		}
-		// A locked shelf's books stay out of the trash list too: "deleted" must
-		// not become the way to read the titles the shelf is hiding.
-		if row != nil && shelfLocked(row.ShelfID.String) {
-			continue
 		}
 		if row != nil {
 			items = append(items, TrashItem{
@@ -1061,6 +1078,11 @@ func MergeChapters(bookID, targetID string, sourceIDs []string) ([]ChapterDTO, e
 
 // AssetFilePath returns the absolute disk path for a content href.
 func AssetFilePath(bookID, href string) (string, error) {
+	// The shortest route to a locked shelf's text: no query, no guard, just a
+	// path on disk. Whatever serves this to the WebView is now behind the lock.
+	if err := requireUnlocked(bookID); err != nil {
+		return "", err
+	}
 	return storage.ContentPath(bookID, href)
 }
 

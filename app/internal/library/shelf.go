@@ -202,6 +202,44 @@ func bookShelfLocked(bookID string) bool {
 	return shelfLocked(shelfID)
 }
 
+// requireUnlocked is the guard every entry point that reaches a book's data has
+// to start with. It exists as one function rather than an `if` copied per call
+// site so that the rule reads the same everywhere and so the set of guarded
+// exits can be found by searching for one name.
+//
+// The list is enforced by TestLockedShelfRefusesEveryExit: a new entry point
+// that forgets this call fails there, which is the only mechanism that has
+// actually held. Guarding "the one place content is read" did not — the export,
+// the split and the cover swap all reach the disk without going through it.
+func requireUnlocked(bookID string) error {
+	if bookShelfLocked(bookID) {
+		return ErrShelfLocked
+	}
+	return nil
+}
+
+// requireUnlockedRow is the same guard for a row that names its book rather than
+// taking one — a bookmark or an annotation, addressed by its own id. Writing
+// through one of those is a write into the shelf just as much as passing the
+// book id would be.
+//
+// table is always a literal from this package; it is never user input.
+func requireUnlockedRow(table, id string) error {
+	d, err := db.Open()
+	if err != nil {
+		return err
+	}
+	var bookID string
+	err = d.QueryRow(`SELECT COALESCE(book_id, '') FROM `+table+` WHERE id = ?`, id).Scan(&bookID)
+	if err == sql.ErrNoRows {
+		return nil // nothing to protect; the caller's own lookup answers
+	}
+	if err != nil {
+		return err
+	}
+	return requireUnlocked(bookID)
+}
+
 /* ------------------------------- passwords ------------------------------- */
 
 // hashPassword returns pbkdf2-sha256$<iterations>$<salt>$<hash>. PBKDF2 with a

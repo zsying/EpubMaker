@@ -409,6 +409,36 @@ func ExportBookFileName(bookID string) (string, error) {
 	return storage.SanitizeFileName(row.Title) + ".epub", nil
 }
 
+// ExportBookToFile builds the book's EPUB at dst.
+//
+// The build streams into a sibling temp file and is renamed into place at the
+// end, so a full disk or a failure halfway through never leaves a truncated
+// .epub where the reader expects a book — the same failure BuildEpub's zip
+// close now reports instead of swallowing. Renaming over an existing file works
+// on Windows because os.Rename uses MOVEFILE_REPLACE_EXISTING.
+func ExportBookToFile(bookID, dst string) error {
+	dir := filepath.Dir(dst)
+	tmp, err := os.CreateTemp(dir, ".export-*")
+	if err != nil {
+		return err
+	}
+	tmpPath := tmp.Name()
+	_, buildErr := ExportBook(bookID, tmp)
+	closeErr := tmp.Close()
+	if buildErr != nil || closeErr != nil {
+		_ = os.Remove(tmpPath)
+		if buildErr != nil {
+			return buildErr
+		}
+		return closeErr
+	}
+	if err := os.Rename(tmpPath, dst); err != nil {
+		_ = os.Remove(tmpPath)
+		return err
+	}
+	return nil
+}
+
 /* ----------------------------- cover ----------------------------- */
 
 // UploadedCover is the result of storing a new cover image.

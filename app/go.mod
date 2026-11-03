@@ -2,6 +2,12 @@ module epubmaker-desktop
 
 go 1.26.4
 
+// Pinned so every build of the app uses the same compiler. Without this line the
+// toolchain floats with whatever is installed, and the standard library's PNG
+// encoder already differs enough between 1.26 and 1.27 to change test outcomes
+// (a 1200x1800 two-colour cover is 10163 bytes on 1.26 and 40510 on 1.27).
+toolchain go1.27.0
+
 require (
 	github.com/wailsapp/wails/v3 v3.0.0
 	modernc.org/sqlite v1.56.0

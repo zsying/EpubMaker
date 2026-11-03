@@ -2,39 +2,18 @@ package db
 
 import (
 	"errors"
-	"os"
 	"strings"
 	"testing"
 	"time"
-
-	"epubmaker-desktop/internal/config"
 )
 
 // openForTest makes sure the shared handle is open on a throwaway database and
 // closes it afterwards. Tx always goes through Open(), so these cases cannot use
-// the detached openTemp() helper that the schema tests use — and a plain
-// t.Setenv is not enough on its own, because config caches the first path it
-// resolved. Without the forced reload a `-run` of just these tests used to open
-// the real ~/.epubmaker database and leave test shelves in it.
+// the detached openTemp() helper that the schema tests use — see isolateHome for
+// why a plain t.Setenv would not be enough.
 func openForTest(t *testing.T) {
 	t.Helper()
-	Close()
-
-	prev, had := os.LookupEnv("EPUBMAKER_HOME")
-	os.Setenv("EPUBMAKER_HOME", t.TempDir())
-	if _, err := config.Load(true); err != nil {
-		t.Fatalf("config: %v", err)
-	}
-	t.Cleanup(func() {
-		Close()
-		if had {
-			os.Setenv("EPUBMAKER_HOME", prev)
-		} else {
-			os.Unsetenv("EPUBMAKER_HOME")
-		}
-		_, _ = config.Load(true)
-	})
-
+	isolateHome(t)
 	if _, err := Open(); err != nil {
 		t.Fatalf("open: %v", err)
 	}

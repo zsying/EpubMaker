@@ -14,7 +14,6 @@
 package app
 
 import (
-	"bytes"
 	"errors"
 	"fmt"
 	"os"
@@ -317,18 +316,6 @@ func (b *Backend) SplitBook(bookID string, parts []library.SplitPart, deleteSour
 
 // ExportBook builds the book's EPUB and returns it inline as a base64 data URL
 // so the frontend can trigger a download without an HTTP endpoint.
-func (b *Backend) ExportBook(bookID string) (map[string]any, error) {
-	var buf bytes.Buffer
-	fn, err := library.ExportBook(bookID, &buf)
-	if err != nil {
-		return nil, err
-	}
-	return map[string]any{
-		"filename": fn,
-		"dataUrl":  library.DataURL("application/epub+zip", buf.Bytes()),
-	}, nil
-}
-
 /* ----------------------------- trash ----------------------------- */
 
 func (b *Backend) ListTrash() ([]library.TrashItem, error) {

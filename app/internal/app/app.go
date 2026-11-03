@@ -117,3 +117,41 @@ func (a *App) SelectDictFile() string {
 	}
 	return path
 }
+
+// ExportBookTo asks for a destination with the native save dialog and builds the
+// book's EPUB straight into it.
+//
+// This replaces the round trip the desktop used to make: BuildEpub into a
+// bytes.Buffer, base64 that, hand it to the WebView, let the browser download
+// it. Three copies of the book in memory at once, and nowhere for the result to
+// go except the download folder — no 另存为, which is what a reader exporting a
+// book usually wants. Now the bytes go from the builder to the file.
+//
+// A cancelled dialog is an answer, not an error: {"cancelled": true}, so the UI
+// says nothing rather than showing a toast about a thing the reader chose to
+// stop. The phone has no save dialog; it keeps using ExportBookFile + the share
+// sheet, where a real file on disk is what the intent needs.
+func (a *App) ExportBookTo(bookID string) (map[string]any, error) {
+	name, err := library.ExportBookFileName(bookID)
+	if err != nil {
+		return nil, err
+	}
+	if a.wails == nil {
+		return map[string]any{"cancelled": true}, nil
+	}
+	path, err := a.wails.Dialog.SaveFileWithOptions(&application.SaveFileDialogOptions{
+		Title:    "导出 EPUB",
+		Filename: name,
+		Filters:  []application.FileFilter{{DisplayName: "EPUB 电子书", Pattern: "*.epub"}},
+	}).PromptForSingleSelection()
+	if err != nil {
+		return nil, err
+	}
+	if path == "" {
+		return map[string]any{"cancelled": true}, nil
+	}
+	if err := library.ExportBookToFile(bookID, path); err != nil {
+		return nil, err
+	}
+	return map[string]any{"path": path, "filename": filepath.Base(path)}, nil
+}
