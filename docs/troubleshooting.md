@@ -58,6 +58,8 @@
 | `regexp: invalid escape sequence: \2` | Go 的 RE2 不支持反向引用 | `html.go` 的 `urlAttrRe` 把闭合引号也捕获成独立分组，代码里用 `q1==q2` 校验 |
 | 拆分后每卷封面都一样 | `BuildExportInput` 没读 `part.coverHref` | 拆分时把每卷 coverHref 透传给导出 |
 | 拆分页左右两栏一起滚 | Grid 行高按内容撑开、页面高度不确定 | flex 分栏 + `min-height:0` + `overflow-y:auto`，页面高度用确定值（如 `calc(100vh - 56px)`） |
+| 单独 `-run` 某个 db 测试后，真实书架里多出 `a`/`b`/`next` | `config.Get()` 是进程单例，路径在**第一次**调用时就定死了，之后的 `t.Setenv` 是空操作 | 用 `db` 包的 `isolateHome(t)`（`Close` + `config.Load(true)` + cleanup 恢复并重读），不要裸 `t.Setenv` |
+| 锁守卫的测试绿了，但书名/阅读进度其实被改了 | `UpdateBook` 先写库、最后调 `GetBook` 拿返回值才报 `ErrShelfLocked`——返回对的错误 ≠ 什么都没做 | 断言副作用本身：`assertShelfUntouched` 逐项核对，别只看 `errors.Is` |
 
 ## 词库与生词本
 

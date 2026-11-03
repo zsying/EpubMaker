@@ -142,15 +142,25 @@
     `books.tags`（多对多、纯字符串）**正交**：别拿标签当书架——标签挂不了密码、也表达不了唯一归属。
     - **迁移只改一行 `shelf_id`**，别改成"按书架分目录存放"（会把一次 `UPDATE` 变成搬文件 + 断掉
       所有相对引用）。
-    - **过滤必须在 SQL 层**：`ListBooks`、`GetBook`、`GetChapterRow`、`ListAllBookmarks`、
+    - **过滤必须在数据层，不在界面**：`ListBooks`、`GetBookRow`（导出 / 拆分 / 改名 / 换封面 /
+      目录的共同上游）、`GetChapterRow`、`ListChapters`、`ListAssets`、`AssetFilePath`、
+      `GetProgress`、`SaveProgress`、`AddBookmark`、`AddAnnotation`、`ListAllBookmarks`、
       `ListAllAnnotations`、`ListTrash`。前端过滤只是化妆。锁状态只在 `library` 包内存里、不落库。
+    - **新增一个以 book id 取数的入口，就要加一行 `requireUnlocked`**（按自身 id 寻址的书签/批注用
+      `requireUnlockedRow`）。守卫本身在 `GetBookRow` 里，新调用者会继承；`TestLockedShelfRefusesEveryExit`
+      枚举全部出口，漏一个就红（ADR-52）。别在 SQL 里拼 `shelf_id NOT IN (…)`——子查询的漏点更难数。
+    - 加锁只断言 `ErrShelfLocked` 还不够：`UpdateBook` 是**先写库再拿 `GetBook` 的返回值报错**的，
+      测试要同时核对数据没动（`assertShelfUntouched`）。
     - **解锁只对这一次访问有效**：离开书架（`applyShelf` 切走）必须 `LockShelf(旧 id)`，`leaveLockRef`
       存着这次的 promise，`pickShelf` 切换前先 `await` 它。否则表现成"密码要重启才生效"。
     - 锁定书架**也不能写**；前端的 `locked` 可能是上一次会话的，判断前先 `loadShelves()`。
     - 系统分享 / Wi-Fi 分享一律落默认书架（`resolveImportShelf` 兜空、未知、锁定 id）。
     - 忘记密码**没有自助恢复**：逃生口是 `UPDATE shelves SET pw_hash='' WHERE id='…'`（不放进界面）。
     - `shelfCache` 必须按 `shelfId` 键控，否则切书架会先闪出上一个书架的书——那是泄密。
-    - 门禁：`D:\tmp\epub-verify\shelves.cjs`（54 项）+ `app/internal/library/shelves_test.go`（9 个）。
+    - 门禁：`D:\tmp\epub-verify\shelves.cjs`（54 项）+ `app/internal/library/shelves_test.go`（9 个）
+      + `app/internal/library/lock_guard_test.go`（33 个出口）。导出必须离开 WebView：桌面走原生保存
+      对话框（`App.ExportBookTo`），手机走 staging 文件 + 分享面板，判断集中在 `web/src/exportEpub.ts`；
+      门禁 `export-file.cjs`（8 项）。
 
 ### Android
 
